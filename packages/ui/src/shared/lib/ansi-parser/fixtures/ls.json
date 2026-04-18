@@ -1,0 +1,10 @@
+{
+  "description": "ls --color=always. Directory (blue bold), executable (green), regular file (no color). Each entry is terminated by a real SGR reset.",
+  "input": "\u001b[01;34msrc\u001b[0m  \u001b[01;32mrun.sh\u001b[0m  README.md\n",
+  "spans": [
+    { "text": "src", "bold": true, "fg": { "kind": "named", "index": 4 } },
+    { "text": "  " },
+    { "text": "run.sh", "bold": true, "fg": { "kind": "named", "index": 2 } },
+    { "text": "  README.md\n" }
+  ]
+}

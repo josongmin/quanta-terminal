@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "read.py", line 4, in read_file
+    open("does-not-exist.txt")
+FileNotFoundError: [Errno 2] No such file or directory: 'does-not-exist.txt'

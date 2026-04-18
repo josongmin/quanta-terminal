@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "TypeError: callback is not a function",
+    "path": "/repo/src/lib.js",
+    "line": 22,
+    "column": 5,
+    "symbol": "Object.apply [as run]"
+  }
+]

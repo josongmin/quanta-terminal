@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "app.py", line 50, in main
+    result = compute(
+        data,
+        flag=True,
+    )
+  File "comp.py", line 99, in compute
+    raise ValueError("compute failure")
+ValueError: compute failure

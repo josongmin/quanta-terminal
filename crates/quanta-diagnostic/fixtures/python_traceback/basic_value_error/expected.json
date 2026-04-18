@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "ValueError: bad thing",
+    "path": "app.py",
+    "line": 7,
+    "symbol": "<module>"
+  }
+]

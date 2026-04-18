@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS7006] Parameter 'x' implicitly has an 'any' type.",
+    "path": "src/util.ts",
+    "line": 8,
+    "column": 12
+  }
+]

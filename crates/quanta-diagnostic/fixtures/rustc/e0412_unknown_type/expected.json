@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0412] cannot find type `MyType` in this scope",
+    "path": "src/lib.rs",
+    "line": 8,
+    "column": 16
+  }
+]

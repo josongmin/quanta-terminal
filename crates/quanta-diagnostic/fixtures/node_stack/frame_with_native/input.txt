@@ -1,0 +1,3 @@
+Error: fail
+    at Array.forEach (<anonymous>)
+    at run (/repo/src/run.js:5:3)

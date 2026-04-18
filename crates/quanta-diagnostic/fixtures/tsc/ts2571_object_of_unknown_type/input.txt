@@ -1,0 +1,1 @@
+src/catcher.ts(12,7): error TS2571: Object is of type 'unknown'.

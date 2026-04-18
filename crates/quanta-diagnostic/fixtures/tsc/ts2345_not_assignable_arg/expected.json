@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2345] Argument of type 'number' is not assignable to parameter of type 'string'.",
+    "path": "src/api.ts",
+    "line": 42,
+    "column": 22
+  }
+]

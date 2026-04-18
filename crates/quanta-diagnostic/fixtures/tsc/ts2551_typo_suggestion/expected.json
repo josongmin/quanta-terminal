@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2551] Property 'lenght' does not exist on type 'string'. Did you mean 'length'?",
+    "path": "src/app.ts",
+    "line": 5,
+    "column": 9
+  }
+]

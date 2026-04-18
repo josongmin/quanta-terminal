@@ -818,3 +818,168 @@ async fn tui_enter_exit_churn_body(pairs: usize, deadline: Duration) {
 async fn tui_enter_exit_churn_emits_paired_events() {
     tui_enter_exit_churn_body(200, Duration::from_secs(10)).await;
 }
+
+/// Regression: a `CommandDone` (OSC 133 D) received BEFORE any
+/// `PromptStart` still flips `shell_integration_status` to `Installed` and
+/// emits a `SessionShellIntegrationStatus` event. Before the Round 3 fix
+/// only `PromptStart` flipped the flag, so a shell whose first observed
+/// marker was `D` (e.g. the engine connected mid-session) would keep
+/// reporting `Missing` even though OSC 133 is clearly installed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_done_alone_flips_shell_integration_status_to_installed() {
+    let sink = MockSink::new();
+    let sink_trait: Arc<dyn EventSink> = sink.clone();
+    let (_port_noop, controller) = MockPtyPort::new();
+    let closed = Arc::new(Notify::new());
+    let is_closed = Arc::new(tokio::sync::Mutex::new(false));
+    let port: Arc<dyn PtyPort> = Arc::new(ControlledPort::new(&controller, closed, is_closed));
+    let cfg = SessionConfig {
+        shell: "/bin/sh".into(),
+        args: Vec::new(),
+        cwd: PathBuf::from("/tmp"),
+        cols: 80,
+        rows: 24,
+    };
+    let (actor, _sid) = SessionActor::spawn(port, sink_trait, cfg).await.unwrap();
+
+    let _bid = actor
+        .submit_input(InputSubmission {
+            text: "make test".into(),
+            kind: InputKind::Shell,
+            submit: true,
+        })
+        .await
+        .expect("submit_input")
+        .expect("block id");
+
+    // OSC 133 D (CommandDone with exit code 0). No prior PromptStart.
+    controller.feed(b"\x1b]133;D;0\x1b\\");
+
+    // Wait for the status event.
+    let saw_status = sink
+        .wait_until(
+            |evs| {
+                evs.iter().any(|e| {
+                    matches!(
+                        e.payload,
+                        Event::SessionShellIntegrationStatus(ref s)
+                            if matches!(s.status, quanta_proto::events::ShellIntegrationStatus::Installed)
+                    )
+                })
+            },
+            Duration::from_secs(5),
+        )
+        .await;
+    assert!(
+        saw_status,
+        "CommandDone must mark shell integration as installed even without PromptStart"
+    );
+
+    // Sanity: the status event is emitted at most once (first-flip semantics).
+    // Feed another CommandDone — the counter must not increase.
+    controller.feed(b"\x1b]133;D;0\x1b\\");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let envs = sink.snapshot().await;
+    let status_count = envs
+        .iter()
+        .filter(|e| matches!(e.payload, Event::SessionShellIntegrationStatus(_)))
+        .count();
+    assert_eq!(
+        status_count, 1,
+        "status must be emitted only on first flip; got {status_count}",
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), actor.close())
+        .await
+        .expect("close exceeded 10s")
+        .expect("close errored");
+}
+
+/// Regression: `BlockTuiExited.bytes_written` must reflect bytes that
+/// arrived DURING the alt-screen session, including chunks that did not
+/// carry any boundary events.
+///
+/// Before the Round 3 fix the TUI byte counter was only updated inside
+/// `handle_boundary`, which is called at most once per boundary event. A
+/// steady stream of pure-payload chunks (the common case during `vim`,
+/// `htop`, etc.) never contributed to the counter — the exit event then
+/// reported an artificially low (or zero) byte count. This test exercises
+/// that exact shape: one AltScreenEntered, many non-boundary chunks, one
+/// AltScreenExited; asserts `bytes_written` is at least the observed
+/// payload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tui_bytes_accumulate_across_non_boundary_chunks() {
+    let sink = MockSink::new();
+    let sink_trait: Arc<dyn EventSink> = sink.clone();
+    let (_port_noop, controller) = MockPtyPort::new();
+    let closed = Arc::new(Notify::new());
+    let is_closed = Arc::new(tokio::sync::Mutex::new(false));
+    let port: Arc<dyn PtyPort> = Arc::new(ControlledPort::new(&controller, closed, is_closed));
+    let cfg = SessionConfig {
+        shell: "/bin/sh".into(),
+        args: Vec::new(),
+        cwd: PathBuf::from("/tmp"),
+        cols: 80,
+        rows: 24,
+    };
+    let (actor, _sid) = SessionActor::spawn(port, sink_trait, cfg).await.unwrap();
+
+    let _bid = actor
+        .submit_input(InputSubmission {
+            text: "vim".into(),
+            kind: InputKind::Shell,
+            submit: true,
+        })
+        .await
+        .expect("submit_input")
+        .expect("block id");
+
+    // Enter alt screen.
+    controller.feed(b"\x1b[?1049h");
+    // Pump a series of pure-payload chunks — no boundary events are embedded.
+    // Each chunk carries a distinct byte pattern so there's no dedupe.
+    let payload_bytes = 8 * 1024;
+    let chunk = vec![b'X'; 512];
+    let mut sent: u64 = 0;
+    while sent < payload_bytes {
+        controller.feed(&chunk);
+        sent += chunk.len() as u64;
+    }
+    // Exit alt screen.
+    controller.feed(b"\x1b[?1049l");
+
+    // Wait until BlockTuiExited appears.
+    let saw_exit = sink
+        .wait_until(
+            |evs| {
+                evs.iter()
+                    .any(|e| matches!(e.payload, Event::BlockTuiExited(_)))
+            },
+            Duration::from_secs(5),
+        )
+        .await;
+    assert!(saw_exit, "no BlockTuiExited within 5s");
+
+    let envs = sink.snapshot().await;
+    let exit = envs
+        .iter()
+        .find_map(|e| {
+            if let Event::BlockTuiExited(x) = &e.payload {
+                Some(x)
+            } else {
+                None
+            }
+        })
+        .expect("BlockTuiExited must be present");
+    assert!(
+        exit.bytes_written >= payload_bytes,
+        "bytes_written={} must be >= payload {} — non-boundary chunks not counted",
+        exit.bytes_written,
+        payload_bytes,
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), actor.close())
+        .await
+        .expect("close exceeded 10s")
+        .expect("close errored");
+}

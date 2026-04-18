@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS18046] 'err' is of type 'unknown'.",
+    "path": "src/util.ts",
+    "line": 14,
+    "column": 19
+  }
+]

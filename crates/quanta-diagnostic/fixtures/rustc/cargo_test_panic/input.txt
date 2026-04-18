@@ -1,0 +1,16 @@
+running 1 test
+test tests::add_works ... FAILED
+
+failures:
+
+---- tests::add_works stdout ----
+thread 'tests::add_works' panicked at src/lib.rs:18:9:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    tests::add_works
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored

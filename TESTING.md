@@ -49,10 +49,13 @@ Scenarios in `tests/integration/tests/end_to_end.rs`:
 - `submit_to_missing_session_returns_clean_error` — error code `no_such_session` on bad input.
 - `cancel_block_for_missing_session_is_noop_ok` — cancel on an unknown session is tolerated.
 - `list_sessions_reflects_create_close` — session registry round-trip through RPC.
-- `socket_event_flow_echo_integration_ok` — full `SessionCreated → BlockCompleted(0)` chain on the event plane. **Currently `#[ignore]`d** — see "Known gaps" below.
-- `socket_cancel_long_running_emits_block_canceled` — cancel path observed through events. **Currently `#[ignore]`d.**
+- `socket_event_flow_echo_integration_ok` — full `SessionCreated → BlockCompleted(0)` chain on the event plane.
+- `socket_cancel_long_running_emits_block_canceled` — cancel path observed through events.
+- `socket_event_flow_emits_diagnostic_for_rustc_error` — a canned rustc error crosses the socket and arrives at the host as a `DiagnosticDetected` envelope (Phase-3 diagnostic pipeline; the in-process pipeline itself is pinned separately in `crates/quanta-session/tests/diagnostics.rs`).
 
-Run ignored tests explicitly with `cargo test -p quanta-integration-tests -- --ignored`.
+A companion test lives in `tests/integration/tests/resume_cursor.rs`: two hosts share a `quanta-core` lifetime; the second connects carrying `resume_cursors` and verifies only events above the mid-stream seq are replayed (ADR 0011).
+
+The socket-plane event flow scenarios (`socket_event_flow_echo_integration_ok`, `socket_cancel_long_running_emits_block_canceled`) were previously `#[ignore]`d pending the fanout between the session actor's event feed and the socket adapter's broadcast channel. Phase 2 landed `FanoutSink` (`crates/quanta-core/src/adapters/fanout.rs`), so these scenarios are no longer ignored.
 
 ### 3. TypeScript tests (vitest)
 
@@ -112,11 +115,41 @@ Exit code 0 if no ADR reports `fail`; exit 1 otherwise. `skip` lines are intenti
 
 ## Known gaps (Phase-1 intentional non-goals)
 
-- **Socket event pump not fed by engine.** `ControlRegistry::next_event()` pops from an in-memory queue that is never populated by `Engine::create_session` or the session actor's event log sink. Until that wiring lands, the socket event-plane scenarios in `tests/integration/` are `#[ignore]`d. Walking-skeleton coverage for the same events lives in `crates/quanta-core/tests/walking_skeleton.rs` using the in-process replay path.
 - **Secret redaction (ADR 0006)** is a Phase-1 placeholder. The compliance tool emits `skip` for ADR-0006. The integration suite does not yet carry a secret-leak regression (logged as TODO).
 - **Diagnostic parsers (ADR 0007)** ship zero adapters in Phase 1. The `quanta-diagnostic` crate is expected to exist as a stub (`Cargo.toml` + `src/lib.rs`); the compliance tool reports `fail` if it does not.
 - **Classifier (ADR 0009)** is a Phase-1 non-goal; `InputKind::Shell` and `InputKind::Intent` variants are the only mechanical guarantee.
-- **History search (ADR 0013)** is a Phase-1 non-goal; the compliance tool emits `skip`.
+- **History search (ADR 0013)** is a Phase-1 non-goal; the compliance tool emits `skip`. Phase 4 ships a front-end-only, in-memory history surface (`packages/ui/src/widgets/history-search`) over the multi-session block collection; this is deliberately NOT the sidecar-backed, persisted-and-ranked store the ADR describes. ADR 0013 remains `skip` until that store lands.
+
+## End-to-end smoke walkthroughs
+
+Two manual smoke paths exercise the full UI → bridge → shell stack end-to-end. Both are expected to complete in well under a minute; they are the "does the app actually boot" checks a reviewer runs on a release candidate. Each step names the file that owns the behavior so a failure is triaged without `grep`.
+
+### Path A — Mock bridge (browser dev, no Tauri)
+
+Use case: UI work against a browser. No Rust toolchain needed.
+
+1. **Start the Vite dev server in isolation.** `pnpm --filter @quanta/host-tauri dev:vite` boots Vite on `http://localhost:1420`. Open it in a regular browser (Chrome, Safari). The `hasTauriRuntime()` probe in `packages/host-tauri/src/mock-bridge.ts` returns `false`, so `createHostBridge()` returns the mock.
+2. **The mock greets the user.** A banner line `"▌ Quanta Terminal — browser dev mode"` + prompt `$ ` appears in the first block. The banner text is authored in `packages/host-tauri/src/mock-bridge.ts`; the prompt glyph is the shared `MOCK_PROMPT_STRING` from `@quanta/host-common/mock-protocol`.
+3. **Type a command and press Enter.** The mock echoes it back and emits a fresh `$` prompt. The block router in `packages/ui/src/features/command` closes the active block on prompt detection and stages the next one.
+4. **Click a path that looks like a diagnostic.** The mock has no diagnostic parser (that's a Rust-only surface), so to exercise `openInEditor` type `echo src/main.rs:3:5` — the renderer (`packages/ui/src/shared/lib/path-detect`) finds the path and makes it clickable. A click dispatches `features/navigation/open-in-editor`, which calls `bridge.openInEditor`. The mock implementation `console.info`s `[mock] would open src/main.rs 3 5` — check the devtools console for that line. The UI does not surface a visible toast for the success path in the mock.
+
+### Path B — Tauri real-bridge (`embedded-shell` feature)
+
+Use case: end-to-end validation on the full desktop stack.
+
+1. **Launch the app.** `pnpm dev` (alias for `pnpm --filter @quanta/host-tauri dev`) starts Vite AND `tauri dev`. The Tauri runtime is built with the default feature set `["embedded-shell"]` (`packages/host-tauri/src-tauri/Cargo.toml`), so a real PTY-backed shell is available.
+2. **The Tauri webview loads, runtime is detected.** `hasTauriRuntime()` sees `window.__TAURI_INTERNALS__`; `createHostBridge()` returns the Tauri bridge. The bridge calls `invoke('quanta_ready')` then `invoke('quanta_spawn_session', …)` — see `packages/host-tauri/src/bridge.ts`. The Rust command `quanta_spawn_session` (in `packages/host-tauri/src-tauri/src/ipc.rs`) hands off to `EmbeddedShell::spawn`, which opens a PTY pair and spawns `$SHELL` / `/bin/zsh` / `/bin/bash` as appropriate.
+3. **Output flows over `quanta://pty-data`.** The Rust data-pump thread base64-encodes chunks and emits them via `AppHandle::emit(EVENT_PTY_DATA, …)`. The TS bridge's `listen<QuantaDataEventPayload>('quanta://pty-data', …)` translates them to `HostEvent { kind: 'pty_data' }` and fans out to subscribers. **Topic names use hyphens, not dots** — Tauri 2 warns (and in some setups rejects) `.` in event names. Both sides are pinned on `quanta://pty-data` / `quanta://pty-exit`.
+4. **Type a command.** The composer widget writes it via `bridge.write` → `invoke('quanta_write', …)` → `SpawnedSession::write` → the PTY's stdin. The shell runs the command and emits output over the data channel.
+5. **Run something that prints a path.** e.g. `cargo build` in a Rust repo, or `printf 'err src/main.rs:3:5\n'`. The renderer detects `src/main.rs:3:5` and underlines it.
+6. **Click the path.** The UI calls `bridge.openInEditor({ path, line, column })`. The TS wrapper `invoke('quanta_open_in_editor', { args })` reaches the Rust `quanta_open_in_editor` (see `packages/host-tauri/src-tauri/src/ipc.rs`), which:
+   - runs `validate_editor_path` (rejects NUL, newlines, control chars — defense in depth over the TS-side filter),
+   - rejects relative paths (the TS layer is supposed to resolve them against the session cwd first),
+   - resolves an editor from `resolve_editor()`: `code` → `cursor` → `subl` → `$VISUAL` → `$EDITOR`,
+   - spawns the editor with `Command::new(editor).arg("-g").arg(format!("{path}:{line}:{column}"))`. **No `sh -c`, ever.** User strings never reach a shell interpreter.
+7. **VS Code (or whichever editor resolved) opens at the right line/column.** If no editor is found on `PATH`, the Tauri command rejects; the TS bridge converts the rejection to an `Error`; the UI surfaces the reason.
+
+Security invariants for Path B are pinned in unit tests: `validate_editor_path` tests live in `packages/host-tauri/src-tauri/src/ipc.rs` (`mod tests`), and TS-side path validation + cwd resolution in `packages/ui/src/features/navigation/__tests__/open-in-editor.test.ts`.
 
 ## Running everything locally
 

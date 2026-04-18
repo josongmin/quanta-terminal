@@ -1,0 +1,11 @@
+{
+  "description": "Representative rustc error: bold red 'error' tag, then file:line:col, then a caret line. Shortened for fixture readability.",
+  "input": "\u001b[1m\u001b[31merror[E0308]\u001b[0m\u001b[1m: mismatched types\u001b[0m\n \u001b[1m\u001b[34m-->\u001b[0m src/main.rs:4:5\n",
+  "spans": [
+    { "text": "error[E0308]", "bold": true, "fg": { "kind": "named", "index": 1 } },
+    { "text": ": mismatched types", "bold": true },
+    { "text": "\n " },
+    { "text": "-->", "bold": true, "fg": { "kind": "named", "index": 4 } },
+    { "text": " src/main.rs:4:5\n" }
+  ]
+}

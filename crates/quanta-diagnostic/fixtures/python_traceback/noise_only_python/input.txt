@@ -1,0 +1,4 @@
+hello world
+File "NotATraceback", line 1, in stuff
+  File "indented_outside_context.py", line 2, in x
+All good.

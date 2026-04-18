@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "AggregateError: All promises were rejected",
+    "path": "<anonymous>",
+    "line": 1,
+    "column": 1,
+    "symbol": "Promise.any"
+  }
+]

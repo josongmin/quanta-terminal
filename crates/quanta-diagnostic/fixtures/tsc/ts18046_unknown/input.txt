@@ -1,0 +1,1 @@
+src/util.ts(14,19): error TS18046: 'err' is of type 'unknown'.

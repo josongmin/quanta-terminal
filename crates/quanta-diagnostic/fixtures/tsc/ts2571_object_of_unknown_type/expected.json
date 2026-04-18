@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2571] Object is of type 'unknown'.",
+    "path": "src/catcher.ts",
+    "line": 12,
+    "column": 7
+  }
+]

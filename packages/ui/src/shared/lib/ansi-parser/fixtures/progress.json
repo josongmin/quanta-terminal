@@ -1,0 +1,7 @@
+{
+  "description": "Progress bar that overwrites with \\r. The parser preserves CR; the renderer decides whether to collapse (carriageReturnRewrites prop). No SGR escapes in this sample so it reads as a single span.",
+  "input": "[====      ] 40%\r[======    ] 60%\r[==========] 100%\n",
+  "spans": [
+    { "text": "[====      ] 40%\r[======    ] 60%\r[==========] 100%\n" }
+  ]
+}

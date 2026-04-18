@@ -85,6 +85,59 @@ export function runHostBridgeConformance(name: string, factory: BridgeFactory): 
       await bridge.resize(sid, 80, 24).catch(() => {});
       await bridge.close(sid).catch(() => {});
     });
+
+    it('ready() returns a Promise', async () => {
+      const bridge = await factory();
+      const r = bridge.ready();
+      expect(typeof (r as { then?: unknown }).then).toBe('function');
+      await r.catch(() => {});
+    });
+
+    it('openInEditor is implemented and returns a Promise', async () => {
+      // Phase-3 navigation contract: every HostBridge exposes `openInEditor`.
+      // The UI never type-narrows before calling it, so an adapter that omits
+      // the method or returns a non-thenable breaks click-to-open navigation.
+      // Each adapter picks its own policy for paths it can't open; we only
+      // pin that the call returns a Promise. Rejection is acceptable (e.g.
+      // the mock bridge resolves; the Tauri bridge may reject with the
+      // Rust-side validation error string).
+      const bridge = await factory();
+      expect(typeof bridge.openInEditor).toBe('function');
+      const p = bridge.openInEditor({ path: '/tmp/__conformance__.txt', line: 1, column: 1 });
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
+
+    it('installShellIntegration is implemented and returns a Promise', async () => {
+      // Phase-5 onboarding contract: every HostBridge exposes
+      // `installShellIntegration`. A preview-mode call (`confirm: false`)
+      // MUST NOT mutate the dotfile; rejection with a host-specific reason
+      // (e.g. "unsupported host") is acceptable for stub adapters. We only
+      // pin that the call returns a Promise and accepts the documented
+      // argument shape.
+      const bridge = await factory();
+      expect(typeof bridge.installShellIntegration).toBe('function');
+      const p = bridge.installShellIntegration({ shell: 'bash', confirm: false });
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
+
+    it('aiSuggest is implemented and returns a Promise', async () => {
+      // Phase-5 AI-suggestion contract (ADR 0012): every HostBridge exposes
+      // `aiSuggest`. The UI's `useSuggest` hook depends on the call returning
+      // a Promise regardless of outcome — a non-thenable would mean the hook
+      // runs a `.then` on `undefined` and throws on the next keystroke.
+      //
+      // Rejection is acceptable (the mock bridge resolves; the real Tauri
+      // bridge may reject with the Rust-side invalid-prompt string for an
+      // empty prompt). We only pin the Promise-returning surface and the
+      // documented argument shape.
+      const bridge = await factory();
+      expect(typeof bridge.aiSuggest).toBe('function');
+      const p = bridge.aiSuggest({ prompt: 'list files' });
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
   });
 }
 

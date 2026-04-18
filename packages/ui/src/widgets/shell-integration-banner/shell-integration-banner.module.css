@@ -1,0 +1,30 @@
+/* ShellIntegrationBanner — a thin inline row with an Install button. Mirrors
+   BannerHost's visual tokens so the two surfaces coexist cleanly when both
+   a general banner and this one are present (BannerHost already filters by
+   ADR-0010 precedence; this widget is a standalone affordance inside the
+   banner-host stack when callers opt in). */
+
+.host {
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.slide {
+  min-height: var(--q-banner-height);
+  animation: q-si-banner-slide var(--q-dur-med) var(--q-ease-standard);
+}
+
+@keyframes q-si-banner-slide {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide { animation: none; }
+}

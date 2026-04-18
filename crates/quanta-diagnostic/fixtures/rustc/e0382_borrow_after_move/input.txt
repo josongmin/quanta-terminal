@@ -1,0 +1,9 @@
+error[E0382]: borrow of moved value: `s`
+  --> src/main.rs:5:20
+   |
+3  |     let s = String::from("hi");
+   |         - move occurs because `s` has type `String`
+4  |     drop(s);
+   |          - value moved here
+5  |     println!("{}", s);
+   |                    ^ value borrowed here after move

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0432] unresolved import `std::collection::HashMap`",
+    "path": "src/main.rs",
+    "line": 1,
+    "column": 5
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "Error: esm throw",
+    "path": "file:///repo/src/x.mjs",
+    "line": 9,
+    "column": 3
+  }
+]

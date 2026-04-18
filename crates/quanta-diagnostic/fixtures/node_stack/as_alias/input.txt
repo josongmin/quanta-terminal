@@ -1,0 +1,2 @@
+TypeError: callback is not a function
+    at Object.apply [as run] (/repo/src/lib.js:22:5)

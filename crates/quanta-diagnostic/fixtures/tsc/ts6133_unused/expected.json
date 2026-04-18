@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "warning",
+    "message": "[TS6133] 'x' is declared but its value is never read.",
+    "path": "src/main.ts",
+    "line": 1,
+    "column": 7
+  }
+]

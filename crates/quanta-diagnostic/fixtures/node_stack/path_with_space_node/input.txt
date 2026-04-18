@@ -1,0 +1,2 @@
+Error: space
+    at run (/Users/me/My App/index.js:9:3)

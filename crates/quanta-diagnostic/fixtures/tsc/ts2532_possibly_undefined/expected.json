@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2532] Object is possibly 'undefined'.",
+    "path": "src/app.ts",
+    "line": 22,
+    "column": 5
+  }
+]

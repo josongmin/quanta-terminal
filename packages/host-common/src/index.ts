@@ -6,6 +6,13 @@ export type {
   SpawnSessionResult,
   EditorBridge,
   EditorOpenLocation,
+  OpenInEditorOptions,
+  ShellKind,
+  InstallShellIntegrationOptions,
+  InstallShellIntegrationReply,
+  AiSuggestOptions,
+  AiSuggestion,
+  AiRiskTier,
 } from './bridge.js';
 export { NULL_EDITOR_BRIDGE } from './bridge.js';
 
@@ -45,3 +52,5 @@ export type {
   InputSubmittedEvent,
 } from './events.js';
 export { isEventOfKind } from './events.js';
+
+export { MOCK_PROMPT_STRING, MOCK_PROMPT_BYTES } from './mock-protocol.js';

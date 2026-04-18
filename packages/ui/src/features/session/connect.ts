@@ -24,12 +24,30 @@
  * subscription is switched live, so the store always has a valid session id
  * when an event arrives. Events for unknown sessions are dropped with a
  * logger.debug trace.
+ *
+ * Multi-session (Phase 4)
+ * -----------------------
+ * Every spawn writes to the MULTI-session collection (`useSessionsStore`).
+ * That collection's `addSession` auto-adopts the new entity as active when
+ * it is the first session; otherwise the caller (`features/session-tabs`)
+ * flips active explicitly after `connectSession` resolves. The legacy
+ * singular `useSessionStore` mirrors whichever session is active, so
+ * existing call sites that read from it keep working transparently.
  */
 
 import type { HostBridge, HostEvent, SessionId, Subscription } from '@quanta/host-common';
 import { isEventOfKind } from '@quanta/host-common';
-import { useSessionStore } from '../../entities/session/index.js';
+import { useSessionsStore } from '../../entities/session/index.js';
 import { createLogger } from '../../shared/lib/logger.js';
+// Cross-slice (production): the session feature hands PTY bytes + exit to the
+// command router so the block entity gets appended. The inverse direction is
+// also documented in the integration test comment; see
+// `features/command/__tests__/session-integration.test.ts`.
+import {
+  appendToActiveBlock,
+  finalizeActiveBlock,
+  installCommandRouter,
+} from '../command/route-output.js'; // FIXME(fsd-layer-skip): session hands pty bytes + exit to command router per documented cross-slice handoff; see also the integration test comment for the inverse direction.
 
 const log = createLogger('session.connect');
 
@@ -60,6 +78,7 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   const preBuffer: HostEvent[] = [];
   let sessionId: SessionId | undefined;
   let closed = false;
+  let routerDispose: (() => void) | undefined;
 
   const subscription = bridge.subscribe((event) => {
     if (closed) return;
@@ -80,7 +99,18 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   }
   sessionId = spawn.sessionId;
 
-  useSessionStore.getState().setSession({
+  // Install the command router BEFORE draining the pre-buffer: pty_data that
+  // arrived synchronously during spawn() needs a live router to land on the
+  // active block. The disposer is scoped to this session id so a sibling
+  // session's router is untouched on close().
+  routerDispose = installCommandRouter(sessionId).dispose;
+
+  // Seed the entity in the collection. `addSession` is a no-op if the id is
+  // already known, so double-mount or late replay stays idempotent. We
+  // deliberately pass `health: 'ready'` — the spawn has returned, the PTY is
+  // live. Phase-1–3 callers relied on the singular mirror to see this
+  // transition; they still do, via the mirror subscription.
+  useSessionsStore.getState().addSession({
     id: sessionId,
     shell: spawn.shell,
     cwd: spawn.cwd,
@@ -114,6 +144,10 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       if (closed) return;
       closed = true;
       subscription.unsubscribe();
+      if (routerDispose) {
+        routerDispose();
+        routerDispose = undefined;
+      }
       try {
         await bridge.close(sessionId);
       } catch (err) {
@@ -126,10 +160,24 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
 
   function dispatchEvent(event: HostEvent): void {
     if (isEventOfKind(event, 'pty_data')) {
+      if (sessionId !== undefined) {
+        // Dual-fanout: the xterm fallback path (onData callback) must see
+        // the raw base64 so alt-screen / TUI rendering keeps working, AND
+        // the command router must see the same bytes so the active block
+        // accrues output. Order: router first, so TUI detection observes
+        // the chunk before the xterm surface writes (alt-screen flip).
+        appendToActiveBlock(sessionId, event.bytesB64);
+      }
       onData(event.bytesB64);
       return;
     }
     if (isEventOfKind(event, 'pty_exit')) {
+      // Finalize the active block AND cancel stragglers via the router
+      // before we touch the session store. The router is idempotent when
+      // no router is installed (dead-letter safety).
+      if (sessionId !== undefined) {
+        finalizeActiveBlock(sessionId, event.exitCode, event.signal);
+      }
       // A signal-caused exit (`exitCode === null && signal !== null`) is a
       // crash from the user's point of view. Surface it as `error` health so
       // the banner detector raises the crash banner — otherwise the exit
@@ -137,36 +185,48 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       const isCrash =
         (event.exitCode === null && event.signal !== null) ||
         (event.exitCode !== null && event.exitCode > 128);
-      if (isCrash) {
-        useSessionStore.getState().setSession({
-          health: 'error',
-          exitCode: event.exitCode,
-        });
-      } else {
-        useSessionStore.getState().markExited(event.exitCode);
+      if (sessionId !== undefined) {
+        if (isCrash) {
+          useSessionsStore.getState().patchSession(sessionId, {
+            health: 'error',
+            exitCode: event.exitCode,
+          });
+        } else {
+          useSessionsStore.getState().markExited(sessionId, event.exitCode);
+        }
       }
       return;
     }
     if (isEventOfKind(event, 'session_cwd_changed')) {
-      useSessionStore.getState().setSession({
-        cwd: event.cwd,
-        cwdSource: event.source,
-      });
+      if (sessionId !== undefined) {
+        useSessionsStore.getState().patchSession(sessionId, {
+          cwd: event.cwd,
+          cwdSource: event.source,
+        });
+      }
       return;
     }
     if (isEventOfKind(event, 'session_shell_integration_status')) {
-      useSessionStore.getState().setSession({ shellIntegration: event.status });
+      if (sessionId !== undefined) {
+        useSessionsStore.getState().patchSession(sessionId, {
+          shellIntegration: event.status,
+        });
+      }
       return;
     }
     if (isEventOfKind(event, 'session_created')) {
-      useSessionStore.getState().setSession({
-        shell: event.shell,
-        cwd: event.launchCwd,
-      });
+      if (sessionId !== undefined) {
+        useSessionsStore.getState().patchSession(sessionId, {
+          shell: event.shell,
+          cwd: event.launchCwd,
+        });
+      }
       return;
     }
     if (isEventOfKind(event, 'session_ended')) {
-      useSessionStore.getState().markExited(null);
+      if (sessionId !== undefined) {
+        useSessionsStore.getState().markExited(sessionId, null);
+      }
       return;
     }
     // input_submitted is a client-originated event echoed back; ignored at the

@@ -12,9 +12,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  AiSuggestion,
+  AiSuggestOptions,
   HostBridge,
   HostEvent,
   HostEventListener,
+  InstallShellIntegrationOptions,
+  InstallShellIntegrationReply,
+  OpenInEditorOptions,
   SessionId,
   SpawnSessionOptions,
   SpawnSessionResult,
@@ -50,6 +55,45 @@ interface QuantaExitEventPayload {
   signal: string | null;
 }
 
+interface QuantaOpenInEditorArgs {
+  path: string;
+  line: number | null;
+  column: number | null;
+}
+
+/* Shell integration install command — mirrors
+   `shell_integration::InstallArgs` in the Rust crate. */
+interface QuantaInstallShellIntegrationArgs {
+  shell: 'bash' | 'zsh' | 'fish';
+  confirm: boolean;
+  target_path: string | null;
+}
+
+interface QuantaInstallShellIntegrationReply {
+  target_path: string;
+  snippet: string;
+  already_installed: boolean;
+  mutated: boolean;
+  line_count: number;
+}
+
+/* AI suggestion command — mirrors `quanta_ai::SuggestionResponse` +
+   `ClassifiedCommand` flattened for transport. Snake_case follows the Rust
+   serde convention; the bridge remaps to the camelCase TS shape. */
+interface QuantaAiSuggestArgs {
+  prompt: string;
+  cwd: string | null;
+}
+
+interface QuantaAiSuggestReply {
+  id: string;
+  command: string;
+  tier: 'safe' | 'caution' | 'destructive' | 'blocked';
+  modifiers: string[];
+  ruleset_version: number;
+  rationale: string | null;
+}
+
 export async function createTauriHostBridge(): Promise<HostBridge> {
   const listeners = new Set<HostEventListener>();
 
@@ -57,8 +101,10 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
 
   // The Tauri topic string is a transport detail; the in-process `HostEvent`
   // discriminator follows the Rust `Event` serde convention (snake_case).
+  // Tauri 2 rejects `.` in event names — we use the hyphenated form pinned
+  // on the Rust side (`packages/host-tauri/src-tauri/src/ipc.rs`).
   unlistens.push(
-    await listen<QuantaDataEventPayload>('quanta://pty.data', (ev) => {
+    await listen<QuantaDataEventPayload>('quanta://pty-data', (ev) => {
       const p = ev.payload;
       const hostEvent: HostEvent = {
         kind: 'pty_data',
@@ -71,7 +117,7 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
   );
 
   unlistens.push(
-    await listen<QuantaExitEventPayload>('quanta://pty.exit', (ev) => {
+    await listen<QuantaExitEventPayload>('quanta://pty-exit', (ev) => {
       const p = ev.payload;
       const hostEvent: HostEvent = {
         kind: 'pty_exit',
@@ -99,7 +145,12 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
     capabilities: {
       nativeWindowChrome: true,
       systemNotifications: false,
-      editorIntegration: false,
+      // The Tauri host resolves an editor on PATH (code → cursor → subl →
+      // $VISUAL/$EDITOR) on every `openInEditor` call. We set this to `true`
+      // so the UI does not gate the click-to-open affordance; if the
+      // resolution chain fails at runtime the command rejects and the UI
+      // surfaces the reason in a toast.
+      editorIntegration: true,
       windowsShellParity: false,
       embeddedDevShell: true,
     },
@@ -134,6 +185,71 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
 
     async close(sessionId: SessionId): Promise<void> {
       await invoke('quanta_close', { sessionId });
+    },
+
+    async openInEditor(options: OpenInEditorOptions): Promise<void> {
+      // The command returns `Result<(), String>` on the Rust side; Tauri maps
+      // `Err(String)` to a rejected invoke promise. Surface the Rust string
+      // as the Error message so the UI can toast it verbatim.
+      const args: QuantaOpenInEditorArgs = {
+        path: options.path,
+        line: options.line ?? null,
+        column: options.column ?? null,
+      };
+      try {
+        await invoke('quanta_open_in_editor', { args });
+      } catch (err) {
+        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        throw new Error(msg);
+      }
+    },
+
+    async installShellIntegration(
+      options: InstallShellIntegrationOptions,
+    ): Promise<InstallShellIntegrationReply> {
+      const args: QuantaInstallShellIntegrationArgs = {
+        shell: options.shell,
+        confirm: options.confirm ?? false,
+        target_path: null,
+      };
+      try {
+        const reply = await invoke<QuantaInstallShellIntegrationReply>(
+          'quanta_install_shell_integration',
+          { args },
+        );
+        return {
+          targetPath: reply.target_path,
+          snippet: reply.snippet,
+          alreadyInstalled: reply.already_installed,
+          mutated: reply.mutated,
+          lineCount: reply.line_count,
+        };
+      } catch (err) {
+        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        throw new Error(msg);
+      }
+    },
+
+    async aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {
+      const args: QuantaAiSuggestArgs = {
+        prompt: options.prompt,
+        cwd: options.cwd ?? null,
+      };
+      try {
+        const reply = await invoke<QuantaAiSuggestReply>('quanta_ai_suggest', { args });
+        const result: AiSuggestion = {
+          id: reply.id,
+          command: reply.command,
+          tier: reply.tier,
+          modifiers: reply.modifiers,
+          rulesetVersion: reply.ruleset_version,
+          ...(reply.rationale !== null ? { rationale: reply.rationale } : {}),
+        };
+        return result;
+      } catch (err) {
+        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        throw new Error(msg);
+      }
     },
 
     subscribe(listener: HostEventListener): Subscription {

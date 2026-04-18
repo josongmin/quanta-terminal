@@ -1,0 +1,4 @@
+> running tests
+PASS src/a.test.ts
+PASS src/b.test.ts
+Ran all tests.

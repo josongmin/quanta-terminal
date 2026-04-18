@@ -63,20 +63,51 @@ the system buttons and exposes the remainder as a drag region
 
 Commands (Tauri `invoke`):
 
-| Command                | Payload                                    | Returns                      |
-| ---------------------- | ------------------------------------------ | ---------------------------- |
-| `quanta_ready`         | —                                          | `()`                         |
-| `quanta_spawn_session` | `{ args: { shell, cwd, cols, rows, env }}` | `{ session_id, shell, cwd }` |
-| `quanta_write`         | `{ sessionId, data }`                      | `()`                         |
-| `quanta_resize`        | `{ sessionId, cols, rows }`                | `()`                         |
-| `quanta_close`         | `{ sessionId }`                            | `()`                         |
+| Command                  | Payload                                         | Returns                      |
+| ------------------------ | ----------------------------------------------- | ---------------------------- |
+| `quanta_ready`           | —                                               | `()`                         |
+| `quanta_spawn_session`   | `{ args: { shell, cwd, cols, rows, env }}`      | `{ session_id, shell, cwd }` |
+| `quanta_write`           | `{ sessionId, data }`                           | `()`                         |
+| `quanta_resize`          | `{ sessionId, cols, rows }`                     | `()`                         |
+| `quanta_close`           | `{ sessionId }`                                 | `()`                         |
+| `quanta_open_in_editor`  | `{ args: { path, line, column }}`               | `()` / `Err(String)`         |
 
 Events (Tauri `listen`):
 
-| Topic               | Payload                             |
-| ------------------- | ----------------------------------- |
-| `quanta://pty.data` | `{ session_id, seq, bytes_b64 }`    |
-| `quanta://pty.exit` | `{ session_id, exit_code, signal }` |
+| Topic                | Payload                             |
+| -------------------- | ----------------------------------- |
+| `quanta://pty-data`  | `{ session_id, seq, bytes_b64 }`    |
+| `quanta://pty-exit`  | `{ session_id, exit_code, signal }` |
+
+**Event-name convention**: topics use a hyphen in the trailing segment
+(`quanta://pty-data`, not `quanta://pty.data`). Tauri 2 warns on `.` in event
+names; both the TS listener and the Rust emitter are pinned on the hyphenated
+form via `ipc::EVENT_PTY_DATA` / `EVENT_PTY_EXIT` constants.
 
 The TypeScript bridge in `src/bridge.ts` is the only code that depends on this
 surface. If you change a command or topic, that is the file you update.
+
+### `quanta_open_in_editor` behavior
+
+Resolves an editor from a hardcoded chain on every call:
+
+1. `code` (VS Code) on `PATH`
+2. `cursor` on `PATH`
+3. `subl` (Sublime) on `PATH`
+4. `$VISUAL` / `$EDITOR` — only the first token is honored, only when it is a
+   bare binary name that resolves via `PATH`. Absolute paths, shell pipelines,
+   and multi-token values are rejected to close the `EDITOR="sh -c …"` vector.
+
+The command always spawns with `Command::new(editor).arg(…)` — **never
+`sh -c`**. User strings never cross into a shell interpreter. `validate_editor_path`
+rejects empty input, control characters, `\n`/`\r`, and NUL before we touch
+the spawn path; `is_absolute()` enforces that only fully-resolved paths reach
+the command line (the TS layer is responsible for resolving relative paths
+against the session cwd first — see `features/navigation/open-in-editor`).
+
+## End-to-end smoke walkthroughs
+
+See the "End-to-end smoke walkthroughs" section in the repo-root
+[`TESTING.md`](../../TESTING.md#end-to-end-smoke-walkthroughs) for the
+mock-bridge (browser dev, no Tauri) and Tauri real-bridge (`embedded-shell`
+feature) walkthroughs.

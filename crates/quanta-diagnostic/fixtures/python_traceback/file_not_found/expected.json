@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "FileNotFoundError: [Errno 2] No such file or directory: 'does-not-exist.txt'",
+    "path": "read.py",
+    "line": 4,
+    "symbol": "read_file"
+  }
+]

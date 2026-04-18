@@ -1,0 +1,2 @@
+Error: esm throw
+    at file:///repo/src/x.mjs:9:3

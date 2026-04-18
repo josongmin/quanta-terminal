@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "RangeError: Maximum call stack size exceeded",
+    "path": "/w/r.js",
+    "line": 2,
+    "column": 5,
+    "symbol": "recurse"
+  }
+]

@@ -36,6 +36,26 @@ function makeInMemoryBridge(): ProbeBridge {
     async write() {},
     async resize() {},
     async close() {},
+    async openInEditor() {},
+    async installShellIntegration(options) {
+      return {
+        targetPath: `/tmp/mock-${options.shell}rc`,
+        snippet: '# >>> quanta shell integration >>>\n# <<< quanta shell integration <<<\n',
+        alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async aiSuggest(options) {
+      return {
+        id: `mock-${options.prompt}`,
+        command: 'ls -la',
+        tier: 'safe',
+        modifiers: ['allowlist_match'],
+        rulesetVersion: 1,
+        rationale: 'Mocked: list files.',
+      };
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return {

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "Error: boom",
+    "path": "/app/bin/start.js",
+    "line": 12,
+    "column": 3
+  }
+]

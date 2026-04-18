@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "RuntimeError: oops",
+    "path": "run.py",
+    "line": 19,
+    "symbol": "<module>"
+  }
+]

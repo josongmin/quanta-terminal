@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "sys.py", line 5, in run_it
+    os.kill(pid, 9)
+OSError: [Errno 3] No such process

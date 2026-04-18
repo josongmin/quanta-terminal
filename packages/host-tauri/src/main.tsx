@@ -1,10 +1,11 @@
 /**
- * Tauri TS entry point. Creates the host bridge, then hands it to
- * `@quanta/ui` to boot the React tree.
+ * Tauri TS entry point. Resolves a concrete `HostBridge` via the factory
+ * (auto-detection picks Tauri when the webview injects `__TAURI_INTERNALS__`,
+ * mock otherwise) and hands it to `@quanta/ui` to boot the React tree.
  */
 
 import { bootstrapUi } from '@quanta/ui';
-import { createTauriHostBridge } from './bridge.js';
+import { createHostBridge } from './bridge-factory.js';
 
 async function main() {
   const root = document.getElementById('quanta-root');
@@ -16,11 +17,11 @@ async function main() {
   }
   let bridge;
   try {
-    bridge = await createTauriHostBridge();
+    bridge = await createHostBridge();
   } catch (err) {
     const cause = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `host-tauri.main: createTauriHostBridge() rejected — Tauri IPC unavailable. Cause: ${cause}`,
+      `host-tauri.main: createHostBridge() rejected — bridge construction failed. Cause: ${cause}`,
       { cause: err },
     );
   }

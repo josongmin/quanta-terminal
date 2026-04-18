@@ -29,7 +29,6 @@ use quanta_events::{EventLogError, EventSink};
 use quanta_proto::envelope::Envelope;
 use quanta_proto::events::Event;
 use tokio::sync::broadcast;
-use tracing::debug;
 
 /// Capacity of the broadcast channel. Sized so that a short stall on the
 /// socket consumer (e.g. a slow host read) does not affect the durable
@@ -73,9 +72,20 @@ impl EventSink for FanoutSink {
         self.downstream.append(envelope.clone()).await?;
         // A send error means there are no subscribers. Fine during early
         // boot or a host disconnect; the durable log is still written. Log
-        // at debug to keep signal low.
+        // at trace to keep signal low — an idle socket is the common case
+        // and we never want the fanout to produce log storms.
+        let session_id = envelope.session_id;
+        let seq = envelope.monotonic_seq;
         if self.tx.send(envelope).is_err() {
-            debug!("fanout: no broadcast subscribers; envelope logged but not published");
+            // `trace!` rather than `debug!`: per-envelope calls are in the
+            // hot path and this state is "normal during disconnect".
+            tracing::trace!(
+                %session_id,
+                seq,
+                "core.fanout: no broadcast subscribers; envelope logged but not published"
+            );
+        } else {
+            debug_assert!(seq > 0, "monotonic_seq must be assigned before fanout");
         }
         Ok(())
     }

@@ -1,0 +1,59 @@
+/*
+ * BlockList — virtualized scroll surface for command blocks.
+ *
+ * The outer .scroll element is the scroll container @tanstack/react-virtual
+ * measures. A .inner element of computed total height hosts absolutely-
+ * positioned .row wrappers; each row's transform: translateY() keeps it
+ * aligned with the virtualizer's offset math.
+ */
+
+.scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--q-space-4);
+  background: var(--q-bg);
+  scroll-behavior: smooth;
+}
+/* Preserve responsiveness when the user prefers reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .scroll { scroll-behavior: auto; }
+}
+
+.inner {
+  position: relative;
+  width: 100%;
+}
+
+.row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding-bottom: var(--q-space-3); /* 12px gap between cards */
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--q-space-2);
+  height: 100%;
+  padding: var(--q-space-6);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  text-align: center;
+}
+
+.emptyHint {
+  color: var(--q-fg-faint);
+  font-size: var(--q-font-size-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

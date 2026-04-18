@@ -1,0 +1,10 @@
+running 1 test
+test tests::eq_check ... FAILED
+
+failures:
+
+---- tests::eq_check stdout ----
+thread 'tests::eq_check' panicked at tests/it.rs:5:5:
+assertion `left == right` failed
+  left: "alpha"
+ right: "beta"

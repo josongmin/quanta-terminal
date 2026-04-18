@@ -1,0 +1,9 @@
+warning: unused variable: `x`
+  --> src/lib.rs:10:9
+   |
+10 |     let x = 1;
+   |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: `demo` (lib) generated 1 warning

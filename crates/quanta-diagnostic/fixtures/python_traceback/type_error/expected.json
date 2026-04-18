@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "TypeError: unsupported operand type(s) for +: 'int' and 'str'",
+    "path": "util.py",
+    "line": 11,
+    "symbol": "add"
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS1005] ',' expected.",
+    "path": "src/broken.ts",
+    "line": 5,
+    "column": 14
+  }
+]

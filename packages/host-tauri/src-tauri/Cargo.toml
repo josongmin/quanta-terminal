@@ -23,6 +23,7 @@ tauri-plugin-shell = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
 anyhow = "1"
 thiserror = "2"
 base64 = "0.22"
@@ -31,17 +32,29 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 parking_lot = "0.12"
 
+# Phase-5 AI suggestion flow (ADR 0012). Path-depped so the host-tauri crate
+# — which lives outside the main workspace — picks up the in-repo source.
+quanta-ai = { path = "../../../crates/quanta-ai" }
+
 # Phase-1 dev stub only — remove when the real `quanta-core` sidecar ships
 # per ADR 0001 / ADR 0004. The `embedded-shell` feature gates this path.
 portable-pty = { version = "0.8", optional = true }
 bytes = { version = "1", optional = true }
 
+# Sidecar path per ADR 0004: Tauri auto-spawns `quanta-core` and speaks the
+# real MessagePack+JSON protocol over a Unix socket. These deps are OFF by
+# default so `pnpm dev` keeps the lighter `embedded-shell` compile path.
+quanta-protocol = { path = "../../../crates/quanta-protocol", optional = true }
+quanta-proto = { path = "../../../crates/quanta-proto", optional = true }
+
 [features]
 # Default enables the embedded dev shell so `pnpm dev` works end-to-end before
-# the real engine binary is wired in. Disable this feature once the sidecar is
-# available.
+# the real engine binary is wired in. Opt-in to the sidecar with
+# `--features sidecar` (you should disable `embedded-shell` at the same time
+# so we never accidentally double-spawn a PTY).
 default = ["embedded-shell"]
 embedded-shell = ["dep:portable-pty", "dep:bytes"]
+sidecar = ["dep:quanta-protocol", "dep:quanta-proto"]
 
 [[bin]]
 name = "quanta-host-tauri"

@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "AssertionError: [ERR_ASSERTION]: 1 == 2",
+    "path": "/spec/a.test.js",
+    "line": 4,
+    "column": 3,
+    "symbol": "Object.<anonymous>"
+  }
+]

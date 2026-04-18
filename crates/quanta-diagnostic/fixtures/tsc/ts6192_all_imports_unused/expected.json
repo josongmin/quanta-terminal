@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "warning",
+    "message": "[TS6192] All imports in import declaration are unused.",
+    "path": "src/dead.ts",
+    "line": 1,
+    "column": 1
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "ReferenceError: foo is not defined",
+    "path": "/repo/src/app.js",
+    "line": 4,
+    "column": 1,
+    "symbol": "Object.<anonymous>"
+  }
+]

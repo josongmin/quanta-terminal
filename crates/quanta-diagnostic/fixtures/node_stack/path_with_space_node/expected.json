@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "Error: space",
+    "path": "/Users/me/My App/index.js",
+    "line": 9,
+    "column": 3,
+    "symbol": "run"
+  }
+]

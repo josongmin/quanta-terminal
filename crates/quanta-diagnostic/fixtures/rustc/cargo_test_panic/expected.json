@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "test",
+    "severity": "error",
+    "message": "panicked",
+    "path": "src/lib.rs",
+    "line": 18,
+    "column": 9,
+    "symbol": "tests::add_works"
+  }
+]

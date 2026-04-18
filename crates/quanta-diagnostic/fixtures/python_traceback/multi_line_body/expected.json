@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "ValueError: compute failure",
+    "path": "comp.py",
+    "line": 99,
+    "symbol": "compute"
+  }
+]

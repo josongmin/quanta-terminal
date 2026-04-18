@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0061] this function takes 2 arguments but 1 argument was supplied",
+    "path": "src/main.rs",
+    "line": 4,
+    "column": 5
+  }
+]

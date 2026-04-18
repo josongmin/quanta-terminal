@@ -30,16 +30,18 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use quanta_block::{BoundaryEvent, VteBoundaryDetector};
+use quanta_diagnostic::{Category, DiagnosticPipeline, Severity};
 use quanta_events::{EventLogError, EventSink};
 use quanta_output::OutputStore;
 use quanta_proto::envelope::{Envelope, Producer, SchemaVersion};
 use quanta_proto::events::{
     BlockCanceled, BlockCompleted, BlockCreated, BlockStarted, BlockTuiEntered, BlockTuiExited,
-    BoundaryConfidence, BoundarySignal, CwdSource, Event, InputSubmitted, OutputChunk,
-    OutputStream, SessionCreated, SessionCwdChanged, SessionEndReason, SessionEnded,
-    SessionShellIntegrationStatus, ShellIntegrationStatus,
+    BoundaryConfidence, BoundarySignal, CwdSource, DiagnosticCategory, DiagnosticDetected,
+    DiagnosticSeverity, Event, InputSubmitted, OutputChunk, OutputStream, SessionCreated,
+    SessionCwdChanged, SessionEndReason, SessionEnded, SessionShellIntegrationStatus,
+    ShellIntegrationStatus,
 };
-use quanta_proto::ids::{BlockId, EventId, SessionId};
+use quanta_proto::ids::{BlockId, DiagnosticId, EventId, SessionId};
 use quanta_pty::{PtyHandle, PtyPort, PtySize, PtySpec};
 use quanta_security::{DefaultDetector, SecretDetector};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -283,6 +285,7 @@ impl SessionActor {
         let input_pty = pty.clone();
         let input_write_pending = write_pending.clone();
         let input_write_ready = write_ready.clone();
+        let input_session_id = session_id;
         let input_task: JoinHandle<()> = tokio::spawn(async move {
             input_loop(
                 input_rx,
@@ -290,6 +293,7 @@ impl SessionActor {
                 input_stop_rx,
                 input_write_pending,
                 input_write_ready,
+                input_session_id,
             )
             .await;
         });
@@ -581,12 +585,37 @@ fn block_id_for_event(ev: &Event) -> Option<BlockId> {
         Event::BlockTuiEntered(b) => Some(b.block_id),
         Event::BlockTuiExited(b) => Some(b.block_id),
         Event::OutputChunk(o) => Some(o.block_id),
+        Event::DiagnosticDetected(d) => Some(d.block_id),
         _ => None,
     }
 }
 
 fn is_compound(text: &str) -> bool {
     text.contains("&&") || text.contains("||") || text.contains(';') || text.contains('|')
+}
+
+/// Map the diagnostic domain's category into the proto wire enum. The domain
+/// already re-exports the proto type under a shorter alias (`Category`), but
+/// we map here explicitly so a future domain-local category variant can be
+/// folded in without touching the proto wire shape.
+fn map_category(c: Category) -> DiagnosticCategory {
+    match c {
+        Category::Compiler => DiagnosticCategory::Compiler,
+        Category::Linter => DiagnosticCategory::Linter,
+        Category::Runtime => DiagnosticCategory::Runtime,
+        Category::Test => DiagnosticCategory::Test,
+        Category::Infra => DiagnosticCategory::Infra,
+        Category::Shell => DiagnosticCategory::Shell,
+        Category::Unknown => DiagnosticCategory::Unknown,
+    }
+}
+
+fn map_severity(s: Severity) -> DiagnosticSeverity {
+    match s {
+        Severity::Error => DiagnosticSeverity::Error,
+        Severity::Warning => DiagnosticSeverity::Warning,
+        Severity::Info => DiagnosticSeverity::Info,
+    }
 }
 
 /// Drop any `(key, value)` pair whose key matches the secret detector's env
@@ -615,7 +644,18 @@ async fn emitter_loop(
     session_id: SessionId,
     mut shutdown: oneshot::Receiver<()>,
 ) {
+    // Start at 1 and saturate on overflow. Wrapping past u64::MAX would break
+    // the strict-monotonic contract ADR 0011 §Durable Commit Ordering relies
+    // on; we prefer to pin the ceiling so downstream dedupe treats later
+    // records as duplicates rather than seeing a younger sequence number
+    // declared as older. A session that mints 1.8e19 events is astronomically
+    // unlikely, but the invariant is cheaper to preserve than to debug.
     let mut next_seq: u64 = 1;
+    let assign_seq = |seq: &mut u64| -> u64 {
+        let cur = *seq;
+        *seq = seq.saturating_add(1);
+        cur
+    };
     loop {
         tokio::select! {
             // biased: always drain pending emits before shutting down so we
@@ -623,8 +663,7 @@ async fn emitter_loop(
             biased;
             maybe_req = rx.recv() => {
                 let Some(req) = maybe_req else { break; };
-                let seq = next_seq;
-                next_seq += 1;
+                let seq = assign_seq(&mut next_seq);
                 let mut env = Envelope::new(
                     session_id,
                     seq,
@@ -641,14 +680,18 @@ async fn emitter_loop(
                 } else if let Err(ref err) = result {
                     // Fire-and-forget emits (output chunks, boundary events):
                     // surface failures at debug level; the session survives.
-                    debug!(?err, "event sink append failed");
+                    debug!(
+                        session_id = %session_id,
+                        seq,
+                        ?err,
+                        "session.actor.emitter: event sink append failed"
+                    );
                 }
             }
             _ = &mut shutdown => {
                 // Drain any already-queued requests so we don't lose them.
                 while let Ok(req) = rx.try_recv() {
-                    let seq = next_seq;
-                    next_seq += 1;
+                    let seq = assign_seq(&mut next_seq);
                     let mut env = Envelope::new(
                         session_id,
                         seq,
@@ -662,6 +705,13 @@ async fn emitter_loop(
                     let result = sink.append(env).await;
                     if let Some(ack) = req.ack {
                         let _ = ack.send(result);
+                    } else if let Err(ref err) = result {
+                        debug!(
+                            session_id = %session_id,
+                            seq,
+                            ?err,
+                            "session.actor.emitter: event sink append failed during drain"
+                        );
                     }
                 }
                 break;
@@ -670,7 +720,11 @@ async fn emitter_loop(
     }
     // Ensure the sink is flushed on shutdown — fsync contract per ADR 0011 §4.
     if let Err(err) = sink.flush().await {
-        debug!(?err, "event sink flush on shutdown failed");
+        debug!(
+            session_id = %session_id,
+            ?err,
+            "session.actor.emitter: event sink flush on shutdown failed"
+        );
     }
 }
 
@@ -686,11 +740,35 @@ async fn read_loop(
     write_pending: Arc<AtomicBool>,
     write_ready: Arc<Notify>,
 ) {
+    let session_id_for_log = {
+        let st = state.lock().await;
+        st.session_id
+    };
     let mut detector = VteBoundaryDetector::new();
     let mut buf = vec![0u8; PTY_READ_CHUNK_BYTES];
     // Reusable base64 encode target to avoid per-chunk String allocations.
     // Capacity chosen to fit `encoded_len(PTY_READ_CHUNK_BYTES)` without realloc.
     let mut b64_scratch: Vec<u8> = Vec::with_capacity(PTY_READ_CHUNK_BYTES.div_ceil(3) * 4 + 4);
+    // Reusable boundary-event sink. VteBoundaryDetector::feed appends into this;
+    // we drain it after each chunk and clear() for the next iteration. This
+    // replaces a per-chunk Vec::new() in the hot path — every 8 KiB read pays
+    // only amortized zero-alloc bookkeeping after the first allocation grows
+    // the vec to its steady-state size.
+    let mut boundary_events: Vec<BoundaryEvent> = Vec::with_capacity(16);
+    // Tier-1 diagnostic pipeline (ADR 0007). Lives on the reader task; fed
+    // with UTF-8-decoded copies of the PTY bytes. Reset per block so a
+    // diagnostic from block N cannot be misattributed to block N+1.
+    //
+    // NOTE: parsers are regex-based and cheap, so they run synchronously
+    // on the reader. If a parser becomes expensive in a later phase, the
+    // right move is to push the pipeline into its own worker task with a
+    // bounded channel and a drop-on-overflow policy — diagnostic extraction
+    // must never block PTY drain (ADR 0002).
+    let mut diagnostics = DiagnosticPipeline::new();
+    // Active block id tracked by the reader itself so we can detect
+    // block-change transitions and reset the pipeline without racing on
+    // SharedState.active_block.
+    let mut diag_block: Option<BlockId> = None;
     loop {
         // Write-priority gate: if a write is pending, wait for it to complete
         // before we re-acquire the pty lock. Without this, a blocking read
@@ -729,7 +807,11 @@ async fn read_loop(
                     break;
                 }
                 Err(err) => {
-                    debug!(?err, "pty read error");
+                    debug!(
+                        session_id = %session_id_for_log,
+                        ?err,
+                        "session.actor.reader: pty read failed"
+                    );
                     break;
                 }
             }
@@ -745,16 +827,26 @@ async fn read_loop(
         // partial UTF-8 codepoints must survive downstream (base64 payload).
         let bytes = &buf[..n];
 
-        // Record output and emit OutputChunk.
-        let active_block: Option<BlockId> = {
-            let st = state.lock().await;
-            st.active_block.as_ref().map(|a| a.block_id)
+        // Record output and emit OutputChunk. One `state.lock` folds in three
+        // reads (active_block, in_tui accumulate) and the output append so
+        // the reader pays a single critical section on the hot path per chunk.
+        // Previously these were two acquisitions + the TUI accumulation was
+        // only performed inside `handle_boundary`, which meant pure-output
+        // chunks never contributed to `tui_bytes` and `BlockTuiExited` under-
+        // reported.
+        let chunk_len_u64 = u64::try_from(n).unwrap_or(u64::MAX);
+        let (active_block, outcome): (Option<BlockId>, Option<_>) = {
+            let mut st = state.lock().await;
+            if st.in_tui {
+                st.tui_bytes = st.tui_bytes.saturating_add(chunk_len_u64);
+            }
+            let active = st.active_block.as_ref().map(|a| a.block_id);
+            let outcome = active
+                .map(|bid| st.output_store.append(bid, OutputStream::Stdout, bytes))
+                .unwrap_or(None);
+            (active, outcome)
         };
         if let Some(active) = active_block {
-            let outcome = {
-                let mut st = state.lock().await;
-                st.output_store.append(active, OutputStream::Stdout, bytes)
-            };
             if let Some(outcome) = outcome {
                 let b64 = encode_b64_reuse(bytes, &mut b64_scratch);
                 if let Err(err) = emit_nowait(
@@ -772,7 +864,12 @@ async fn read_loop(
                 )
                 .await
                 {
-                    warn!(?err, "append OutputChunk failed");
+                    warn!(
+                        session_id = %session_id_for_log,
+                        block_id = %active,
+                        ?err,
+                        "session.actor.reader: OutputChunk append failed"
+                    );
                     // Emitter is gone. Nothing more we can do; let the loop
                     // exit on next iteration via shutdown or channel closure.
                     break;
@@ -780,16 +877,100 @@ async fn read_loop(
             }
         }
 
-        // Parse boundary events.
-        let mut events: Vec<BoundaryEvent> = Vec::new();
-        detector.feed(bytes, &mut events);
+        // --- Tier-1 diagnostic extraction (ADR 0007). ---
+        //
+        // UTF-8 decode lossy-safe so a partial codepoint across chunks
+        // doesn't crash the pipeline. The line buffer inside the
+        // pipeline re-joins cross-chunk lines so a diagnostic whose
+        // header arrives in chunk N-1 and whose `-->` arrives in chunk N
+        // still parses.
+        //
+        // Do NOT block the PTY drain on this: parsers are synchronous
+        // and regex-based, so the wall-clock cost per chunk is bounded;
+        // if a future parser becomes expensive it should move to a
+        // worker task per the note at the top of this loop.
+        if let Some(active) = active_block {
+            // Reset on block-change so stale state cannot bleed across.
+            if diag_block != Some(active) {
+                diagnostics.reset_block();
+                diag_block = Some(active);
+            }
+            let text = String::from_utf8_lossy(bytes);
+            let emitted = diagnostics.feed(text.as_ref());
+            for d in emitted {
+                let ev = Event::DiagnosticDetected(DiagnosticDetected {
+                    diagnostic_id: DiagnosticId::new(),
+                    block_id: active,
+                    parser_id: d.parser_id,
+                    category: map_category(d.category),
+                    severity: map_severity(d.severity),
+                    confidence: d.confidence,
+                    message: d.message,
+                    path: d.path,
+                    line: d.line,
+                    column: d.column,
+                    end_line: d.end_line,
+                    end_column: d.end_column,
+                    symbol: d.symbol,
+                });
+                if let Err(err) = emit_nowait(&emit_tx, Producer::Diagnostic, ev).await {
+                    warn!(
+                        session_id = %session_id_for_log,
+                        block_id = %active,
+                        ?err,
+                        "session.actor.reader: DiagnosticDetected append failed"
+                    );
+                    break;
+                }
+            }
+        } else if diag_block.is_some() {
+            // No active block → block ended between chunks. Flush any
+            // trailing diagnostics (e.g. a tsc line without a newline)
+            // before the pipeline goes idle.
+            let tail = diagnostics.flush();
+            if !tail.is_empty() {
+                // Tail emissions anchor to the block we WERE tracking,
+                // not the next one (which isn't known yet).
+                if let Some(block) = diag_block {
+                    for d in tail {
+                        let ev = Event::DiagnosticDetected(DiagnosticDetected {
+                            diagnostic_id: DiagnosticId::new(),
+                            block_id: block,
+                            parser_id: d.parser_id,
+                            category: map_category(d.category),
+                            severity: map_severity(d.severity),
+                            confidence: d.confidence,
+                            message: d.message,
+                            path: d.path,
+                            line: d.line,
+                            column: d.column,
+                            end_line: d.end_line,
+                            end_column: d.end_column,
+                            symbol: d.symbol,
+                        });
+                        let _ = emit_nowait(&emit_tx, Producer::Diagnostic, ev).await;
+                    }
+                }
+            }
+            diag_block = None;
+        }
+
+        // Parse boundary events. We reuse `boundary_events` across iterations
+        // (cleared before each feed) so the hot path doesn't pay for a fresh
+        // Vec allocation per 8 KiB chunk.
+        boundary_events.clear();
+        detector.feed(bytes, &mut boundary_events);
         // `n` is bounded by `PTY_READ_CHUNK_BYTES` (8 KiB), so the widen is
         // lossless on every supported target; kept as a `try_from` for lint
         // uniformity across the workspace.
         let chunk_len = u64::try_from(n).unwrap_or(u64::MAX);
-        for bev in events {
+        for bev in boundary_events.drain(..) {
             if let Err(err) = handle_boundary(bev, &emit_tx, &state, chunk_len).await {
-                warn!(?err, "handle_boundary failed");
+                warn!(
+                    session_id = %session_id_for_log,
+                    ?err,
+                    "session.actor.reader: handle_boundary failed"
+                );
             }
         }
     }
@@ -880,12 +1061,16 @@ async fn handle_boundary(
         BoundaryEvent::PromptStart => {
             // PromptStart indicates the shell is ready for the next command.
             // If we have an active block, close it with Osc133.
-            let active_block = {
+            let (active_block, was_not_installed) = {
                 let mut st = state.lock().await;
                 let active = st.active_block.take();
                 // Mark shell integration as installed on first marker.
+                let flipped = !matches!(
+                    st.shell_integration_status,
+                    ShellIntegrationStatus::Installed
+                );
                 st.shell_integration_status = ShellIntegrationStatus::Installed;
-                active
+                (active, flipped)
             };
             if let Some(active) = active_block {
                 emit_nowait(
@@ -901,20 +1086,35 @@ async fn handle_boundary(
                 )
                 .await?;
             }
-            emit_nowait(
-                emit_tx,
-                Producer::Session,
-                Event::SessionShellIntegrationStatus(SessionShellIntegrationStatus {
-                    status: ShellIntegrationStatus::Installed,
-                }),
-            )
-            .await?;
+            // Only emit the status transition on first install. Subsequent
+            // PromptStarts don't change state; emitting every time would spam
+            // the durable log with redundant transitions.
+            if was_not_installed {
+                emit_nowait(
+                    emit_tx,
+                    Producer::Session,
+                    Event::SessionShellIntegrationStatus(SessionShellIntegrationStatus {
+                        status: ShellIntegrationStatus::Installed,
+                    }),
+                )
+                .await?;
+            }
         }
         BoundaryEvent::CommandDone { exit_code } => {
-            // OSC 133 D — close the active block authoritatively.
-            let active_block = {
+            // OSC 133 D — close the active block authoritatively. Also flips
+            // shell_integration_status to `Installed`: observing a CommandDone
+            // without a prior PromptStart (e.g. we connected mid-session, or
+            // the first PromptStart straddled a chunk boundary the detector
+            // didn't coalesce) is still proof the shell is OSC133-aware.
+            let (active_block, was_not_installed) = {
                 let mut st = state.lock().await;
-                st.active_block.take()
+                let active = st.active_block.take();
+                let flipped = !matches!(
+                    st.shell_integration_status,
+                    ShellIntegrationStatus::Installed
+                );
+                st.shell_integration_status = ShellIntegrationStatus::Installed;
+                (active, flipped)
             };
             if let Some(active) = active_block {
                 emit_nowait(
@@ -926,6 +1126,18 @@ async fn handle_boundary(
                         termination_signal: None,
                         boundary_signal: BoundarySignal::Osc133,
                         boundary_confidence: BoundaryConfidence::Authoritative,
+                    }),
+                )
+                .await?;
+            }
+            // Only emit the status event on the first flip so we don't spam
+            // the log every time the shell emits a CommandDone.
+            if was_not_installed {
+                emit_nowait(
+                    emit_tx,
+                    Producer::Session,
+                    Event::SessionShellIntegrationStatus(SessionShellIntegrationStatus {
+                        status: ShellIntegrationStatus::Installed,
                     }),
                 )
                 .await?;
@@ -988,13 +1200,13 @@ async fn handle_boundary(
             // Book-keeping only; the state machine does not transition on these.
         }
     }
-    // Accumulate TUI bytes for BlockTuiExited.
-    {
-        let mut st = state.lock().await;
-        if st.in_tui {
-            st.tui_bytes = st.tui_bytes.saturating_add(chunk_len);
-        }
-    }
+    // NOTE: per-chunk TUI byte accumulation is done in the reader's single
+    // state.lock critical section — not here. Performing it here would miss
+    // every chunk that contains no boundary events (the common case during
+    // TUI sessions) and would double-count chunks that produced several
+    // boundary events. `chunk_len` is retained in the signature for
+    // symmetry / future callers.
+    let _ = chunk_len;
     Ok(())
 }
 
@@ -1004,6 +1216,7 @@ async fn input_loop(
     mut shutdown: oneshot::Receiver<()>,
     write_pending: Arc<AtomicBool>,
     write_ready: Arc<Notify>,
+    session_id: SessionId,
 ) {
     loop {
         let cmd = tokio::select! {
@@ -1021,7 +1234,11 @@ async fn input_loop(
             InputCommand::Write(bytes) => {
                 let mut g = pty.lock().await;
                 g.write_all(&bytes).await.map_err(|e| {
-                    warn!(?e, "pty write failed");
+                    warn!(
+                        session_id = %session_id,
+                        err = ?e,
+                        "session.actor.input: pty write failed"
+                    );
                     e
                 })
             }
@@ -1051,7 +1268,11 @@ async fn input_loop(
         // and then it can re-enter its read.
         write_ready.notify_waiters();
         if let Err(err) = outcome {
-            debug!(?err, "pty op failed");
+            debug!(
+                session_id = %session_id,
+                ?err,
+                "session.actor.input: pty op failed"
+            );
             // Do not exit on transient resize errors; keep going.
             if matches!(err, quanta_pty::PtyError::Closed) {
                 break;

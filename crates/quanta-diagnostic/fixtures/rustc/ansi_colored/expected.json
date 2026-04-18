@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0308] mismatched types",
+    "path": "src/lib.rs",
+    "line": 7,
+    "column": 18
+  }
+]

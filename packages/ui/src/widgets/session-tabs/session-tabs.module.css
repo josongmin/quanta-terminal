@@ -1,19 +1,38 @@
-/* SessionTabs — compact chip row. The "active" pulse is a 1px ring dot that
-   eases its opacity between 0.45 and 1.0 when the session is ready. */
+/* SessionTabs — horizontal scroll row of per-session chips.
+ *
+ * Each .tab is a native button so Tab/Enter/Space behavior is free. The `×`
+ * close control is a nested span with role=button — it lives INSIDE the
+ * button semantically, and we stopPropagation on its click so the outer tab
+ * activation doesn't fire first. On hover or focus of the parent tab, the
+ * × fades in; otherwise it's near-invisible to keep the chrome quiet.
+ *
+ * Active tab gets a 1px accent underline drawn via ::after so border-box
+ * layout stays stable when toggling.
+ */
 
 .row {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  max-width: 100%;
 }
+.row::-webkit-scrollbar { height: 3px; }
+.row::-webkit-scrollbar-thumb { background: var(--q-border-subtle); border-radius: 2px; }
 
 .tab {
+  position: relative;
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 22px;
-  padding: 0 10px;
+  flex-shrink: 0;
+  min-width: 140px;
+  max-width: 200px;
+  height: 24px;
+  padding: 0 8px 0 10px;
   color: var(--q-fg-muted);
   background: transparent;
   border: 1px solid var(--q-border-subtle);
@@ -21,6 +40,8 @@
   font-family: var(--q-font-mono);
   font-size: 11px;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
   transition:
     background var(--q-dur-fast) var(--q-ease-out),
     color var(--q-dur-fast) var(--q-ease-out),
@@ -34,16 +55,52 @@
   cursor: default;
   color: var(--q-fg-faint);
 }
+.tab:focus-visible {
+  outline: 2px solid var(--q-accent);
+  outline-offset: 1px;
+}
 
 .active {
   color: var(--q-fg);
   border-color: var(--q-border-strong);
   background: var(--q-bg-elev-2);
 }
+.active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--q-accent);
+  border-radius: 2px;
+}
+
+.inactive {
+  opacity: 0.75;
+}
+.inactive:hover {
+  opacity: 1;
+}
+
+.newTab {
+  min-width: 28px;
+  max-width: 28px;
+  padding: 0;
+  justify-content: center;
+  color: var(--q-fg-muted);
+}
+.newTab:hover {
+  color: var(--q-fg);
+}
 
 .label {
   font-family: var(--q-font-mono);
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  text-align: left;
 }
 
 .pulse {
@@ -57,10 +114,45 @@
   background: var(--q-success);
   animation: q-session-pulse 1.6s var(--q-ease-in-out) infinite;
 }
+.pulse.pulseError {
+  background: var(--q-danger);
+}
+.pulse.pulseExited {
+  background: var(--q-fg-faint);
+}
 @keyframes q-session-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.45; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pulse.pulseOn { animation: none; }
+}
+
+.close {
+  margin-left: 4px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  color: var(--q-fg-faint);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity var(--q-dur-fast) var(--q-ease-out),
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+.tab:hover .close,
+.tab:focus-visible .close,
+.close:focus-visible {
+  opacity: 0.7;
+}
+.close:hover {
+  opacity: 1;
+  color: var(--q-fg);
+  background: var(--q-bg-elev-3, rgba(255, 255, 255, 0.08));
 }

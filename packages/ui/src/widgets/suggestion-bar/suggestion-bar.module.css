@@ -1,0 +1,119 @@
+/*
+ * SuggestionBar — passive chrome above the composer.
+ *
+ * Uses existing design tokens from `shared/config/tokens.css`. No new color
+ * primitives. A Caution+ suggestion adds a warning border so the user sees
+ * the hotter state from the peripheral vision.
+ */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-1);
+  border-top: 1px solid var(--q-border-subtle);
+  border-bottom: 1px solid var(--q-border-subtle);
+  color: var(--q-fg);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  min-height: 36px;
+}
+
+.barWarn {
+  border-top-color: var(--q-warning);
+  border-bottom-color: var(--q-warning);
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: var(--q-radius-sm);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--q-border-subtle);
+  color: var(--q-fg-muted);
+  background: var(--q-bg);
+}
+
+.badge[data-tier='caution'] {
+  color: var(--q-warning);
+  border-color: var(--q-warning);
+}
+
+.badge[data-tier='destructive'] {
+  color: var(--q-warning);
+  border-color: var(--q-warning);
+  background: rgba(245, 196, 81, 0.08);
+}
+
+.badge[data-tier='blocked'] {
+  color: var(--q-danger);
+  border-color: var(--q-danger);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+.command {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  color: var(--q-fg);
+  background: var(--q-bg);
+  padding: 2px 6px;
+  border-radius: var(--q-radius-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+
+.rationale {
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.modifierCount {
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  margin-left: auto;
+}
+
+.acceptButton,
+.rejectButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  padding: 4px 8px;
+  border-radius: var(--q-radius-sm);
+  border: 1px solid var(--q-border-subtle);
+  background: var(--q-bg);
+  color: var(--q-fg);
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.acceptButton:hover {
+  border-color: var(--q-border-focus);
+  background: var(--q-bg-elev-2);
+}
+
+.rejectButton:hover {
+  border-color: var(--q-danger);
+  color: var(--q-danger);
+}

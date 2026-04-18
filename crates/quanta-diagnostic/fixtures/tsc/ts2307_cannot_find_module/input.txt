@@ -1,0 +1,1 @@
+src/index.ts(1,17): error TS2307: Cannot find module 'missing-pkg' or its corresponding type declarations.

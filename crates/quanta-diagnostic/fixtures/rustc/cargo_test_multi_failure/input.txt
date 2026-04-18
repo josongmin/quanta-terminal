@@ -1,0 +1,19 @@
+running 2 tests
+test a ... FAILED
+test b ... FAILED
+
+failures:
+
+---- a stdout ----
+thread 'a' panicked at src/lib.rs:2:1:
+boom
+
+---- b stdout ----
+thread 'b' panicked at src/lib.rs:6:1:
+boom two
+
+failures:
+    a
+    b
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored

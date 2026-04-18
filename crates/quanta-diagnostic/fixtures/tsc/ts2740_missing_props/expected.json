@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2740] Type '{ name: string; }' is missing the following properties from type 'User': age, email",
+    "path": "src/component.tsx",
+    "line": 30,
+    "column": 10
+  }
+]

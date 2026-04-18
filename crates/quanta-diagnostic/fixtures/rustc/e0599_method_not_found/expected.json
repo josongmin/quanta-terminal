@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0599] no method named `bar` found for struct `Foo` in the current scope",
+    "path": "src/lib.rs",
+    "line": 7,
+    "column": 10
+  }
+]

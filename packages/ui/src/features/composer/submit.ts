@@ -9,6 +9,16 @@
  *   - history (the "recent commands" scaffold in the widget) needs one place
  *     to be told about submits; this module owns that broadcast.
  *
+ * Relationship with features/command
+ * ----------------------------------
+ * `features/command` owns the canonical submit dispatcher — the one that
+ * creates a block and writes to the bridge atomically. This file is a thin
+ * composer-local facade that (a) normalizes composer text, (b) delegates
+ * to the canonical submit, (c) returns the composer-shaped result that the
+ * widget already knows how to render. One verb per concept; the outer name
+ * is kept because widgets call `submitCommand` and breaking that would
+ * churn widget code outside this agent's scope.
+ *
  * Contract:
  *   - Called with a raw string (what the user typed). Trailing newlines are
  *     normalized to a single \n.
@@ -18,8 +28,12 @@
  */
 
 import type { HostBridge } from '@quanta/host-common';
-import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
-import { useSessionStore } from '../../entities/session/index.js';
+// Cross-slice: the composer submit facade delegates the actual block-create +
+// bridge-write atomic dispatch to `features/command`. Both slices live under
+// `features/`; crossing is necessary because the one-command-per-submit
+// invariant is owned by the command slice, not the composer.
+// FIXME(fsd-layer-skip): composer delegates dispatch to the command submit facade
+import { submitCommand as submitThroughCommandFeature } from '../command/index.js';
 
 export type ComposerMode = 'shell' | 'intent' | 'auto';
 
@@ -28,6 +42,13 @@ export interface SubmitOptions {
   readonly mode?: ComposerMode;
   /** Override the bridge (tests). Defaults to the installed host bridge. */
   readonly bridge?: HostBridge;
+  /**
+   * Rerun lineage pointer (Phase 4). Forwarded to the command submit path;
+   * the composer widget itself never sets this — it's plumbing for the
+   * `rerunBlock` dispatcher so the new block's `rerunOfId` is stamped in
+   * the same atomic `startBlock` call.
+   */
+  readonly rerunOf?: string | null;
 }
 
 export interface SubmitResult {
@@ -41,31 +62,14 @@ export interface SubmitResult {
  * widget can render the submission state declaratively without a try/catch.
  */
 export async function submitCommand(options: SubmitOptions): Promise<SubmitResult> {
-  const text = options.text.replace(/\r\n/gu, '\n');
-  if (text.trim().length === 0) {
-    return { ok: false, reason: 'empty' };
+  const result = await submitThroughCommandFeature({
+    text: options.text,
+    ...(options.bridge !== undefined ? { bridge: options.bridge } : {}),
+    ...(options.rerunOf !== undefined ? { rerunOf: options.rerunOf } : {}),
+  });
+  if (result.ok) return { ok: true };
+  if (result.reason === 'write-failed') {
+    return { ok: false, error: result.error };
   }
-
-  const bridge = options.bridge ?? tryGetHostBridge();
-  if (!bridge) {
-    return { ok: false, reason: 'no-bridge' };
-  }
-
-  const sessionId = useSessionStore.getState().id;
-  if (sessionId === null) {
-    return { ok: false, reason: 'no-session' };
-  }
-
-  // Phase 1: every submit is shell-mode. Append a newline if missing so the
-  // pty treats it as a complete command.
-  const payload = text.endsWith('\n') ? text : text + '\n';
-  try {
-    await bridge.write(sessionId, payload);
-    return { ok: true };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err : new Error(String(err)),
-    };
-  }
+  return { ok: false, reason: result.reason };
 }

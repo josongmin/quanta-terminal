@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `std::collection::HashMap`
+ --> src/main.rs:1:5
+  |
+1 | use std::collection::HashMap;
+  |     ^^^^^^^^^^^^^^^^ could not find `collection` in `std`

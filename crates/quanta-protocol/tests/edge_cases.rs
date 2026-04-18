@@ -250,3 +250,104 @@ fn event_frame_encodes_payload_under_u32_ceiling() {
     let back = quanta_protocol::decode_event(&frame[4..]).unwrap();
     assert_eq!(back.monotonic_seq, 1);
 }
+
+/// ADR 0004 §Handshake: the handshake is one-shot-per-connection. A client
+/// that sends a second `Hello` AFTER `Ready` must not double-install the
+/// event pump, flip any state, or cause the server to panic. The expected
+/// behaviour is "ignore and continue" — a subsequent valid `Ping` still
+/// roundtrips, proving the request loop was not derailed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duplicate_hello_after_ready_is_ignored_not_reinstalled() {
+    use tokio::io::AsyncReadExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let sock = tmp.path().join("sock");
+    let handler: Arc<dyn ControlHandler> = Arc::new(StubHandler);
+    let server = UnixSocketServer::new(&sock, handler);
+    let accept = tokio::spawn(async move { server.accept_one().await });
+
+    wait_for_socket(&sock).await;
+    let stream = UnixStream::connect(&sock).await.unwrap();
+    let (mut r, mut w) = stream.into_split();
+
+    // First Hello.
+    let hello = ControlMessage::Hello(Hello {
+        host_protocol_version: ProtocolVersion::CURRENT,
+        host_version: "test".into(),
+        client_id: "dup-hello".into(),
+        resume_cursors: std::collections::HashMap::default(),
+    });
+    let mut bytes = vec![0x01u8];
+    bytes.extend_from_slice(&encode_control(&hello).unwrap());
+    w.write_all(&bytes).await.unwrap();
+
+    // Drain the Ready reply so we know the handshake completed.
+    let mut buf = Vec::new();
+    let mut tmp_buf = [0u8; 4096];
+    loop {
+        let n = r.read(&mut tmp_buf).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp_buf[..n]);
+        if buf.contains(&b'\n') {
+            break;
+        }
+    }
+    assert_eq!(buf.first().copied(), Some(0x01), "expected control channel");
+    let line_end = buf[1..].iter().position(|b| *b == b'\n').unwrap() + 1;
+    let ready = decode_control(&buf[1..line_end]).unwrap();
+    assert!(matches!(ready, ControlMessage::Ready(_)));
+
+    // Send a SECOND Hello on the same connection. The server must not
+    // re-handshake; it must keep the request loop alive.
+    let second_hello = ControlMessage::Hello(Hello {
+        host_protocol_version: ProtocolVersion::CURRENT,
+        host_version: "test-2".into(),
+        client_id: "dup-hello".into(),
+        resume_cursors: std::collections::HashMap::default(),
+    });
+    let mut bytes = vec![0x01u8];
+    bytes.extend_from_slice(&encode_control(&second_hello).unwrap());
+    w.write_all(&bytes).await.unwrap();
+
+    // Immediately send a Ping. If the server derailed on the dup Hello we'd
+    // never see a Pong.
+    let ping = ControlMessage::Ping { seq: 777 };
+    let mut bytes = vec![0x01u8];
+    bytes.extend_from_slice(&encode_control(&ping).unwrap());
+    w.write_all(&bytes).await.unwrap();
+
+    // Read the Pong reply. Drain any bytes after the Ready newline first.
+    buf.drain(..=line_end);
+    let pong_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if buf.contains(&b'\n') {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() <= pong_deadline,
+            "no Pong received within 5s after duplicate Hello",
+        );
+        let n = tokio::time::timeout(Duration::from_millis(200), r.read(&mut tmp_buf))
+            .await
+            .unwrap_or(Ok(0))
+            .unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        buf.extend_from_slice(&tmp_buf[..n]);
+    }
+    assert_eq!(buf.first().copied(), Some(0x01), "expected control channel");
+    let end = buf[1..].iter().position(|b| *b == b'\n').unwrap() + 1;
+    let msg = decode_control(&buf[1..end]).unwrap();
+    match msg {
+        ControlMessage::Pong { seq } => assert_eq!(seq, 777, "pong seq must echo ping"),
+        other => panic!("expected Pong, got {other:?}"),
+    }
+
+    // Close cleanly.
+    drop(w);
+    drop(r);
+    let _ = tokio::time::timeout(Duration::from_secs(5), accept).await;
+}

@@ -1,0 +1,120 @@
+/*
+ * AnsiOutput — styled <pre> surface for parsed ANSI spans.
+ *
+ * The block renderer (Agent A) renders one <AnsiOutput /> per command block.
+ * The palette pulls from ANSI terminal tokens. Until we finalise
+ * `--q-term-ansi-*` naming in tokens.css, we alias to the existing `--q-ansi-*`
+ * tokens (see report §CSS). The alias means the orchestrator can rename in
+ * tokens.css without touching this module.
+ */
+
+.pre {
+  margin: 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-term);
+  line-height: var(--q-line-height-term);
+  letter-spacing: var(--q-letter-spacing-term);
+  color: var(--q-fg);
+  background: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 8;
+}
+
+/* Link styling inherits the inline fg color from the current span, so a
+   coloured link keeps its colour; only underline + hover hint are added. */
+.link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Phase-3 path:line:col button. Reset native button chrome so the detected
+   path still reads as inline terminal text (same font, same color) but
+   announces itself as interactive via a dotted underline and hover styling.
+   We deliberately keep the affordance subtle — aggressive colouring would
+   fight rustc's own coloured diagnostics. */
+.pathLink {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.pathLink:hover {
+  text-decoration-style: solid;
+  text-decoration-thickness: 2px;
+  background: var(--q-bg-elev-2, rgba(255, 255, 255, 0.06));
+}
+.pathLink:focus-visible {
+  outline: 1px solid var(--q-accent, #5ea0ff);
+  outline-offset: 1px;
+  text-decoration-style: solid;
+}
+
+/* SGR attribute classes.
+   - `bold` and `dim` both intensify / attenuate the rendered color.
+   - `inverse` flips fg/bg at render time (see React side); no CSS rule here.
+   - `hidden` keeps layout but zeroes opacity so the text is selectable but
+      invisible, matching `ESC[8m` semantics.
+   - `strike` and `underline` combine additively. */
+.bold   { font-weight: 700; }
+.dim    { opacity: 0.65; }
+.italic { font-style: italic; }
+.underline { text-decoration: underline; text-underline-offset: 2px; }
+.strike    { text-decoration: line-through; }
+.underline.strike {
+  text-decoration: underline line-through;
+  text-underline-offset: 2px;
+}
+.hidden { visibility: hidden; }
+
+/* Named ANSI colors (30-37 / 40-47). Foreground: color. Background: bg.
+   The 0..7 indices correspond 1:1 to black / red / green / yellow / blue /
+   magenta / cyan / white per the ECMA-48 table. */
+.fg-named-0 { color: var(--q-ansi-black); }
+.fg-named-1 { color: var(--q-ansi-red); }
+.fg-named-2 { color: var(--q-ansi-green); }
+.fg-named-3 { color: var(--q-ansi-yellow); }
+.fg-named-4 { color: var(--q-ansi-blue); }
+.fg-named-5 { color: var(--q-ansi-magenta); }
+.fg-named-6 { color: var(--q-ansi-cyan); }
+.fg-named-7 { color: var(--q-ansi-white); }
+
+.bg-named-0 { background-color: var(--q-ansi-black); }
+.bg-named-1 { background-color: var(--q-ansi-red); }
+.bg-named-2 { background-color: var(--q-ansi-green); }
+.bg-named-3 { background-color: var(--q-ansi-yellow); }
+.bg-named-4 { background-color: var(--q-ansi-blue); }
+.bg-named-5 { background-color: var(--q-ansi-magenta); }
+.bg-named-6 { background-color: var(--q-ansi-cyan); }
+.bg-named-7 { background-color: var(--q-ansi-white); }
+
+/* Bright (90-97 / 100-107). */
+.fg-bright-0 { color: var(--q-ansi-bright-black); }
+.fg-bright-1 { color: var(--q-ansi-bright-red); }
+.fg-bright-2 { color: var(--q-ansi-bright-green); }
+.fg-bright-3 { color: var(--q-ansi-bright-yellow); }
+.fg-bright-4 { color: var(--q-ansi-bright-blue); }
+.fg-bright-5 { color: var(--q-ansi-bright-magenta); }
+.fg-bright-6 { color: var(--q-ansi-bright-cyan); }
+.fg-bright-7 { color: var(--q-ansi-bright-white); }
+
+.bg-bright-0 { background-color: var(--q-ansi-bright-black); }
+.bg-bright-1 { background-color: var(--q-ansi-bright-red); }
+.bg-bright-2 { background-color: var(--q-ansi-bright-green); }
+.bg-bright-3 { background-color: var(--q-ansi-bright-yellow); }
+.bg-bright-4 { background-color: var(--q-ansi-bright-blue); }
+.bg-bright-5 { background-color: var(--q-ansi-bright-magenta); }
+.bg-bright-6 { background-color: var(--q-ansi-bright-cyan); }
+.bg-bright-7 { background-color: var(--q-ansi-bright-white); }

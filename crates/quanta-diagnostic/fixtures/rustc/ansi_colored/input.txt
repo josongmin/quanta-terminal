@@ -1,0 +1,5 @@
+[31m[1merror[E0308][0m[1m: mismatched types[0m
+ --> src/lib.rs:7:18
+  |
+7 |     let x: u32 = "hi";
+  |                  ^^^^ expected `u32`, found `&str`

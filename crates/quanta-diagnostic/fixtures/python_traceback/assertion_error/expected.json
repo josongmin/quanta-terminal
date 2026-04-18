@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "AssertionError",
+    "path": "tests/test_it.py",
+    "line": 44,
+    "symbol": "test_math"
+  }
+]

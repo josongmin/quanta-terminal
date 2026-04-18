@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "test",
+    "severity": "error",
+    "message": "panicked",
+    "path": "tests/it.rs",
+    "line": 5,
+    "column": 5,
+    "symbol": "tests::eq_check"
+  }
+]

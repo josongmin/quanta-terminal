@@ -34,6 +34,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "resources": [
+      "../resources/shell-integration/bash.sh",
+      "../resources/shell-integration/zsh.zsh",
+      "../resources/shell-integration/fish.fish"
+    ]
   }
 }

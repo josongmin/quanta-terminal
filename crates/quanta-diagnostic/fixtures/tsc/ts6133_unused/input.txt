@@ -1,0 +1,1 @@
+src/main.ts(1,7): warning TS6133: 'x' is declared but its value is never read.

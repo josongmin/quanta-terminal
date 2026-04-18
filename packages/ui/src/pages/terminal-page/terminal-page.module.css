@@ -15,3 +15,59 @@
   flex-direction: column;
   position: relative;
 }
+
+/* Overlay renders on top of the page while a session is still booting.
+   Pointer events pass through so the user can interact the moment
+   connectSession resolves. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 12, 16, 0.6);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.blockListHost {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Alt-screen overlay: when a TUI is active, the xterm surface mounts OVER
+   the BlockList as a dialog-like layer. It is NOT a display:none swap with
+   the BlockList — BlockList state remains live underneath — but it fully
+   covers the page content below the title bar so the TUI gets a clean
+   fullscreen grid. Keyboard focus is moved into xterm via the focus handle
+   the page holds (`shellRef.current.focus()`). */
+.altScreenOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--q-bg-terminal);
+}
+
+/* Hide the BlockList beneath the overlay — display:none drops it from the
+   tab order so Tab / Shift+Tab stay trapped inside xterm (Phase-3 keyboard
+   contract). */
+.main.tuiActive .blockListHost,
+.main.tuiActive > .overlay {
+  display: none;
+}
+
+/* TUI status chip — a small overlay so the user never loses track of why
+   their keystrokes stopped reaching the composer. Uses the same Badge
+   primitive as other degraded-state indicators (ADR 0010). */
+.tuiBadge {
+  position: absolute;
+  top: var(--q-space-2);
+  right: var(--q-space-3);
+  z-index: 4;
+  pointer-events: none;
+}

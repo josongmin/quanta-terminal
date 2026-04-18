@@ -1,0 +1,187 @@
+/*
+ * RiskGate — approval modal for Caution/Destructive/Blocked suggestions.
+ *
+ * Tokens come from `shared/config/tokens.css`. No new color primitives.
+ * Blocked rows use --q-danger; Caution uses --q-warning; Destructive uses
+ * a mix that emphasizes the "type to confirm" input.
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--q-overlay-bg);
+  z-index: 60;
+}
+
+.panel {
+  min-width: 420px;
+  max-width: 640px;
+  width: min(90vw, 640px);
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-lg);
+  padding: var(--q-space-5);
+  box-shadow: var(--q-shadow-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-3);
+  outline: none;
+}
+
+.panelDestructive {
+  border-color: var(--q-warning);
+}
+
+.panelBlocked {
+  border-color: var(--q-danger);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.tierBadge {
+  padding: 2px 8px;
+  border-radius: var(--q-radius-sm);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg-muted);
+  border: 1px solid var(--q-border-subtle);
+}
+
+.tierBadge[data-tier='caution'] {
+  color: var(--q-warning);
+  border-color: var(--q-warning);
+}
+
+.tierBadge[data-tier='destructive'] {
+  color: var(--q-warning);
+  border-color: var(--q-warning);
+  background: rgba(245, 196, 81, 0.08);
+}
+
+.tierBadge[data-tier='blocked'] {
+  color: var(--q-danger);
+  border-color: var(--q-danger);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--q-font-size-lg);
+  font-family: var(--q-font-sans);
+  font-weight: 600;
+}
+
+.command {
+  margin: 0;
+  padding: var(--q-space-3);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  background: var(--q-bg);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.modifiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modifier {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  padding: 2px 6px;
+  border-radius: var(--q-radius-sm);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+}
+
+.typedRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-1);
+}
+
+.typedLabel {
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+}
+
+.typedInput {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  padding: var(--q-space-2);
+  background: var(--q-bg);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-md);
+  outline: none;
+}
+
+.typedInput:focus {
+  border-color: var(--q-border-focus);
+  box-shadow: var(--q-shadow-focus-ring);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--q-space-2);
+  margin-top: var(--q-space-2);
+}
+
+.cancelButton,
+.approveButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  padding: var(--q-space-2) var(--q-space-3);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  border-radius: var(--q-radius-md);
+  border: 1px solid var(--q-border-strong);
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.cancelButton:hover,
+.approveButton:hover:not(:disabled) {
+  background: var(--q-bg-elev-2);
+  border-color: var(--q-border-focus);
+}
+
+.approveButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.approveButton {
+  background: var(--q-accent);
+  color: var(--q-fg-on-accent);
+  border-color: var(--q-accent);
+}
+
+.approveButton:hover:not(:disabled) {
+  filter: brightness(1.05);
+}

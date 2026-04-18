@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "Error: explicit throw",
+    "path": "/Users/me/proj/index.js",
+    "line": 1,
+    "column": 7,
+    "symbol": "Object.<anonymous>"
+  }
+]

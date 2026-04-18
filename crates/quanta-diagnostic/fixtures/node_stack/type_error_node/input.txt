@@ -1,0 +1,2 @@
+TypeError: Cannot read properties of undefined (reading 'x')
+    at /work/app.js:7:22

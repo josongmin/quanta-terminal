@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "warning",
+    "message": "unused import: `std::mem`",
+    "path": "src/main.rs",
+    "line": 2,
+    "column": 5
+  }
+]

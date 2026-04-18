@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "TypeError: Bad arg",
+    "path": "node:internal/validators",
+    "line": 115,
+    "column": 11
+  }
+]

@@ -425,3 +425,72 @@ async fn passthrough_submit_does_not_mint_a_block() {
         .count();
     assert_eq!(block_created, 0, "passthrough must not emit BlockCreated");
 }
+
+/// ADR 0011 §Durable Commit Ordering — two sessions spawned concurrently
+/// must interleave without sharing mutable state. Each session's
+/// `SessionActor` owns its own PTY/state/emitter. The shared sink must
+/// not cause cross-session seq corruption: each session maintains its own
+/// `monotonic_seq` stream (scoped to `SessionId`), starting at 1.
+///
+/// This is the regression guard against a future refactor that makes
+/// `next_seq` a per-sink counter rather than per-session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_concurrent_sessions_do_not_share_seq_counters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = Arc::new(ZstdSegmentedEventLog::new(tmp.path()).unwrap());
+
+    // Spawn both actors concurrently so their SessionCreated envelopes can
+    // race through the shared sink. Whichever wins, each session's seqs
+    // must still start at 1 and march monotonically within that session.
+    let log_a = log.clone();
+    let log_b = log.clone();
+    let spawn_a = tokio::spawn(async move {
+        let pty = Arc::new(PortablePtyPort::new());
+        let cfg = SessionConfig::default_login(pick_shell(), PathBuf::from("/tmp"));
+        SessionActor::spawn(pty, log_a, cfg).await.unwrap()
+    });
+    let spawn_b = tokio::spawn(async move {
+        let pty = Arc::new(PortablePtyPort::new());
+        let cfg = SessionConfig::default_login(pick_shell(), PathBuf::from("/tmp"));
+        SessionActor::spawn(pty, log_b, cfg).await.unwrap()
+    });
+    let ((actor_a, sid_a), (actor_b, sid_b)) =
+        tokio::join!(async { spawn_a.await.unwrap() }, async {
+            spawn_b.await.unwrap()
+        });
+    assert_ne!(sid_a, sid_b, "session ids must be distinct");
+
+    // Let each session settle and then close.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _ = tokio::join!(actor_a.close(), actor_b.close());
+
+    let records_a = log.replay_session(sid_a).await.unwrap();
+    let records_b = log.replay_session(sid_b).await.unwrap();
+    assert!(!records_a.is_empty(), "session A must produce events");
+    assert!(!records_b.is_empty(), "session B must produce events");
+
+    // Seq invariant: strictly monotonic and starts at 1 for each session.
+    let seqs_a: Vec<u64> = records_a.iter().map(|r| r.envelope.monotonic_seq).collect();
+    let seqs_b: Vec<u64> = records_b.iter().map(|r| r.envelope.monotonic_seq).collect();
+    assert_eq!(seqs_a.first().copied(), Some(1), "seq A must start at 1");
+    assert_eq!(seqs_b.first().copied(), Some(1), "seq B must start at 1");
+    for pair in seqs_a.windows(2) {
+        assert!(pair[1] > pair[0], "seq A must be strictly monotonic");
+    }
+    for pair in seqs_b.windows(2) {
+        assert!(pair[1] > pair[0], "seq B must be strictly monotonic");
+    }
+    // Cross-session: every envelope under sid_a carries session_id == sid_a.
+    for rec in &records_a {
+        assert_eq!(
+            rec.envelope.session_id, sid_a,
+            "session A record attributed to wrong session"
+        );
+    }
+    for rec in &records_b {
+        assert_eq!(
+            rec.envelope.session_id, sid_b,
+            "session B record attributed to wrong session"
+        );
+    }
+}

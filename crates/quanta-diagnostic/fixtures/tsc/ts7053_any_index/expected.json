@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS7053] Element implicitly has an 'any' type because expression of type 'string' can't be used to index type 'Dict'.",
+    "path": "src/dict.ts",
+    "line": 12,
+    "column": 3
+  }
+]

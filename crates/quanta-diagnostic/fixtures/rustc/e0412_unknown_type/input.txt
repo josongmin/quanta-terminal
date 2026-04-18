@@ -1,0 +1,5 @@
+error[E0412]: cannot find type `MyType` in this scope
+ --> src/lib.rs:8:16
+  |
+8 |     let x: MyType = todo!();
+  |                ^^^^^^ not found in this scope

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/repo/app.py", line 3, in get
+    return data[k]
+KeyError: 'missing'

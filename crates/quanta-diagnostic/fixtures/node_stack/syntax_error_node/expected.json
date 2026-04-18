@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "SyntaxError: Unexpected token '}'",
+    "path": "node:internal/vm",
+    "line": 77,
+    "column": 18,
+    "symbol": "internalCompileFunction"
+  }
+]

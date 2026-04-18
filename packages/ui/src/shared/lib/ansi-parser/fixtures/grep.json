@@ -1,0 +1,13 @@
+{
+  "description": "grep --color=always --line-number. Magenta filename, green line number, red+bold match highlight.",
+  "input": "\u001b[35msrc/foo.ts\u001b[0m\u001b[36m:\u001b[0m\u001b[32m42\u001b[0m\u001b[36m:\u001b[0m  // \u001b[1;31mTODO\u001b[0m review\n",
+  "spans": [
+    { "text": "src/foo.ts", "fg": { "kind": "named", "index": 5 } },
+    { "text": ":", "fg": { "kind": "named", "index": 6 } },
+    { "text": "42", "fg": { "kind": "named", "index": 2 } },
+    { "text": ":", "fg": { "kind": "named", "index": 6 } },
+    { "text": "  // " },
+    { "text": "TODO", "bold": true, "fg": { "kind": "named", "index": 1 } },
+    { "text": " review\n" }
+  ]
+}

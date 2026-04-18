@@ -1,0 +1,5 @@
+error[E0425]: cannot find value `x` in this scope
+ --> /Users/me/My Project/src/main.rs:3:5
+  |
+3 |     x;
+  |     ^

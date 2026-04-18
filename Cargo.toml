@@ -11,6 +11,7 @@ members = [
     "crates/quanta-session",
     "crates/quanta-security",
     "crates/quanta-diagnostic",
+    "crates/quanta-ai",
     "crates/quanta-core",
     "tools/check-hex-imports",
     "tools/check-adr-compliance",

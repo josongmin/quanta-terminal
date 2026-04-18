@@ -1,0 +1,4 @@
+URIError: URI malformed
+    at decodeURI (<anonymous>)
+    at Object.parse (/lib/qs.js:15:20)
+    at (/app/main.js:100:3)

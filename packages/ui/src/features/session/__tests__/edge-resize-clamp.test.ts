@@ -38,6 +38,25 @@ function makeBridge(): HostBridge & { resize: ReturnType<typeof vi.fn> } {
     async write() {},
     resize: vi.fn(() => Promise.resolve()),
     async close() {},
+    async openInEditor() {},
+    async installShellIntegration() {
+      return {
+        targetPath: '/tmp/stub',
+        snippet: '',
+        alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async aiSuggest() {
+      return {
+        id: 'stub',
+        command: 'ls',
+        tier: 'safe',
+        modifiers: [],
+        rulesetVersion: 1,
+      };
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return { unsubscribe: () => listeners.delete(listener) };

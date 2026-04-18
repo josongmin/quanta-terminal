@@ -1,0 +1,4 @@
+Error: explicit throw
+    at Object.<anonymous> (/Users/me/proj/index.js:1:7)
+    at Module._compile (node:internal/modules/cjs/loader:1254:14)
+    at Object.Module._extensions..js (node:internal/modules/cjs/loader:1308:10)

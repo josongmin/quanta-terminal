@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "rec.py", line 2, in fact
+    return fact(n - 1)
+  File "rec.py", line 2, in fact
+    return fact(n - 1)
+  [Previous line repeated 995 more times]
+RecursionError: maximum recursion depth exceeded

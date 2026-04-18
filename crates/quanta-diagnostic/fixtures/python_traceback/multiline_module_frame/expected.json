@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "ConnectionError: HTTPConnectionPool(host='x', port=80): Max retries exceeded",
+    "path": "/usr/lib/python3.11/site-packages/requests/api.py",
+    "line": 59,
+    "symbol": "request"
+  }
+]

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "m.py", line 12, in foo
+    obj.missing
+AttributeError: 'MyObj' object has no attribute 'missing'

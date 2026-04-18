@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "ValidationError: name is required",
+    "path": "/app/src/v.js",
+    "line": 10,
+    "column": 5,
+    "symbol": "validate"
+  }
+]

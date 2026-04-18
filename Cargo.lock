@@ -670,6 +670,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quanta-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "proptest",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "quanta-block"
 version = "0.1.0"
 dependencies = [
@@ -709,7 +719,11 @@ dependencies = [
 name = "quanta-diagnostic"
 version = "0.1.0"
 dependencies = [
+ "once_cell",
+ "proptest",
  "quanta-proto",
+ "regex",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
 ]
@@ -824,6 +838,7 @@ dependencies = [
  "async-trait",
  "base64",
  "quanta-block",
+ "quanta-diagnostic",
  "quanta-events",
  "quanta-output",
  "quanta-proto",

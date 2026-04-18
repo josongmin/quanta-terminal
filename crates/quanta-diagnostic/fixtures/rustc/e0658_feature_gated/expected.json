@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0658] use of unstable library feature `foo`: it may change",
+    "path": "src/main.rs",
+    "line": 1,
+    "column": 5
+  }
+]

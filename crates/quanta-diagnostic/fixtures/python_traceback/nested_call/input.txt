@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "a.py", line 10, in main
+    helper()
+  File "b.py", line 33, in helper
+    raise RuntimeError("deep")
+RuntimeError: deep

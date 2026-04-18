@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2365] Operator '/' cannot be applied to types 'number' and 'string'.",
+    "path": "/abs/workspace/src/lib.ts",
+    "line": 100,
+    "column": 1
+  }
+]

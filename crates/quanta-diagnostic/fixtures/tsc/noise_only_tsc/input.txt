@@ -1,0 +1,4 @@
+Found 0 errors. Watching for file changes.
+> tsc --noEmit
+info Visit https://ts-watch/docs for more.
+src/app.ts: linted

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2339] Property 'foo' does not exist on type 'Bar'.",
+    "path": "src/lib.ts",
+    "line": 3,
+    "column": 7
+  }
+]

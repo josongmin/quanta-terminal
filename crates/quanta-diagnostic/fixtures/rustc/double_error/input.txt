@@ -1,0 +1,13 @@
+error[E0425]: cannot find value `a` in this scope
+ --> src/main.rs:1:5
+  |
+1 |     a;
+  |     ^
+
+error[E0425]: cannot find value `b` in this scope
+ --> src/main.rs:2:5
+  |
+2 |     b;
+  |     ^
+
+error: aborting due to 2 previous errors

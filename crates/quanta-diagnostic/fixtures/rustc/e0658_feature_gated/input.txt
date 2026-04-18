@@ -1,0 +1,7 @@
+error[E0658]: use of unstable library feature `foo`: it may change
+  --> src/main.rs:1:5
+   |
+1  | use std::foo;
+   |     ^^^^^^^^
+   |
+   = help: add `#![feature(foo)]` to the crate attributes to enable

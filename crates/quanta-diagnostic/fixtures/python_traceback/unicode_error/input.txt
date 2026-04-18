@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "u.py", line 3, in decode
+    b.decode("ascii")
+UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 0: ordinal not in range(128)

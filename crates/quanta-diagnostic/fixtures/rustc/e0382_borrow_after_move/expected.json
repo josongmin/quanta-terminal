@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0382] borrow of moved value: `s`",
+    "path": "src/main.rs",
+    "line": 5,
+    "column": 20
+  }
+]

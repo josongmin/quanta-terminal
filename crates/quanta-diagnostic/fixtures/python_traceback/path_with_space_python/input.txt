@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Users/me/My Code/app.py", line 3, in main
+    do_it()
+RuntimeError: space path

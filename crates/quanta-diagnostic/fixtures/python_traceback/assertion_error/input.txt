@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "tests/test_it.py", line 44, in test_math
+    assert 1 == 2
+AssertionError

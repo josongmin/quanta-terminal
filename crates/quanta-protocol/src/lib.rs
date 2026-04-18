@@ -12,6 +12,6 @@ pub mod adapters;
 pub mod domain;
 pub mod ports;
 
-pub use adapters::UnixSocketServer;
+pub use adapters::{UnixSocketClient, UnixSocketServer};
 pub use domain::{decode_control, decode_event, encode_control, encode_event, ControlMessage};
 pub use ports::{ControlHandler, ProtocolError};

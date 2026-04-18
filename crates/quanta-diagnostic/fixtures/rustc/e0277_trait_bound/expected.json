@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0277] the trait bound `MyType: std::fmt::Display` is not satisfied",
+    "path": "src/main.rs",
+    "line": 15,
+    "column": 20
+  }
+]

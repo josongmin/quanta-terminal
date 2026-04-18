@@ -1,0 +1,98 @@
+/* Shell-integration wizard — centered modal. Mirrors the palette's visual
+   language so the two modals feel consistent. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: var(--q-overlay-bg);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 100;
+  animation: q-wizard-backdrop-in var(--q-dur-fast) var(--q-ease-out);
+}
+
+.panel {
+  width: 100%;
+  max-width: 640px;
+  background: color-mix(in srgb, var(--q-bg-elev-2) 90%, transparent);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-palette-radius, 12px);
+  box-shadow: var(--q-shadow-overlay);
+  overflow: hidden;
+  transform-origin: center top;
+  animation: q-wizard-panel-in var(--q-dur-med) var(--q-ease-standard);
+  display: flex;
+  flex-direction: column;
+  max-height: 75vh;
+}
+
+@keyframes q-wizard-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes q-wizard-panel-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .backdrop, .panel { animation: none; }
+}
+
+.header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 4px 0 0 0;
+  color: var(--q-fg-muted);
+  font-size: 12px;
+}
+
+.body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.snippet {
+  margin: 8px 0 0 0;
+  padding: 12px;
+  background: var(--q-bg-elev-0, #0b0b0d);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: 6px;
+  font-family: var(--q-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--q-border-subtle);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.error {
+  color: var(--q-danger-fg, #ff7b72);
+  font-size: 13px;
+}
+
+.success {
+  color: var(--q-success-fg, #3fb950);
+  font-size: 13px;
+}

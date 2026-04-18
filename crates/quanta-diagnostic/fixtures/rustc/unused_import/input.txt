@@ -1,0 +1,5 @@
+warning: unused import: `std::mem`
+ --> src/main.rs:2:5
+  |
+2 | use std::mem;
+  |     ^^^^^^^^

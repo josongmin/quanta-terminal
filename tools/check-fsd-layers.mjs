@@ -12,14 +12,18 @@
  *     (@quanta/host-tauri, @quanta/host-vscode) — this preserves the
  *     ADR 0014 §Host Bridge Split contract.
  *
- * Output: one block per violation with file, line number, offending import,
- * and a clear rule string. Non-zero exit on any violation.
+ * Same-layer sibling escape hatch — enforcement intent:
+ *   For the `entities` / `features` / `widgets` layers, a sibling-slice import
+ *   is permitted ONLY when the import line (or the line immediately above it)
+ *   carries `FIXME(fsd-layer-skip): <reason>` with a meaningful reason
+ *   (>=10 non-whitespace chars). Every such exemption is a future redesign
+ *   debt entry; we require the reason inline so audit `rg` finds it.
+ *
+ * Output: one line per violation, prefixed with `[layer-order]`,
+ * `[same-layer-sibling]`, or `[host-import]`. Non-zero exit on any violation.
  *
  * Zero npm deps — Node built-ins only, so CI does not need `pnpm install`
  * to run this job.
- *
- * Escape hatch: a line may be exempted with a trailing `// FIXME(fsd-layer-skip)`
- * comment. Use sparingly; every skip is a TODO to redesign the slice.
  *
  * The audit core is exported so the rule surface can be unit-tested against
  * synthetic directory fixtures (see `tools/__tests__/check-fsd-layers.test.mjs`).
@@ -37,6 +41,16 @@ const UI_ROOT = join(ROOT, 'packages/ui/src');
 // (more composed) layer. `shared` is rank 0; `app` is the top.
 export const LAYER_ORDER = ['shared', 'entities', 'features', 'widgets', 'pages', 'processes', 'app'];
 export const FORBIDDEN_HOST_IMPORTS = ['@quanta/host-tauri', '@quanta/host-vscode'];
+
+/** Layers where the same-layer sibling rule applies. `shared` is exempt by
+ *  design (internal segments like `lib`/`ui` need to compose); other layers
+ *  above `widgets` are either single-slice (`app`) or not in use yet. */
+export const SIBLING_RULE_LAYERS = new Set(['entities', 'features', 'widgets']);
+
+/** Minimum non-whitespace chars required in the reason after `FIXME(fsd-layer-skip):`. */
+export const SIBLING_FIXME_MIN_REASON_CHARS = 10;
+
+const SIBLING_FIXME_RE = /FIXME\(fsd-layer-skip\)\s*:\s*(.*)$/u;
 
 /** Walk a directory recursively and yield every .ts/.tsx path. */
 async function* walk(dir) {
@@ -80,7 +94,14 @@ export function classify(file, uiRoot) {
 
 /**
  * Parse static `import ... from '...'` and `export ... from '...'` specifiers
- * out of a file's source. Returns [{ source, index, line, raw }].
+ * out of a file's source. Returns [{ source, index, line, raw, prevLine }].
+ *
+ * `raw` is the single line containing the matched specifier; `prevLine` is the
+ * line above it (empty string if the match is on line 1). Both trimmed of
+ * trailing newlines. The preceding-line capture is what powers the
+ * "FIXME on the line immediately above the import" escape hatch, which is
+ * required because multi-line imports push the specifier onto a line that
+ * cannot also hold a trailing comment.
  *
  * Regex captures both single- and double-quoted specifiers. Dynamic imports
  * are not analyzed — they are code-split boundaries that the static rule
@@ -91,17 +112,35 @@ export function extractImports(src) {
   const re = /(?:\bimport\b(?:[^'"]*?\bfrom\b)?|\bexport\b[^'"]*?\bfrom\b)\s*['"]([^'"]+)['"]/g;
   let m;
   while ((m = re.exec(src)) !== null) {
-    const index = m.index;
-    const lineStart = src.lastIndexOf('\n', index) + 1;
-    const lineEndMaybe = src.indexOf('\n', index);
-    const lineEnd = lineEndMaybe === -1 ? src.length : lineEndMaybe;
-    const raw = src.slice(lineStart, lineEnd);
-    // 1-based line number: count newlines up to (and not including) index.
+    // `m.index` points at the statement keyword (`import` / `export`). The
+    // specifier quote is at `specIdx` — for a multi-line import these live on
+    // different source lines.
+    const keywordIdx = m.index;
+    const specIdx = m.index + m[0].lastIndexOf(m[1]);
+
+    const specLineStart = src.lastIndexOf('\n', specIdx - 1) + 1;
+    const specLineEndMaybe = src.indexOf('\n', specIdx);
+    const specLineEnd = specLineEndMaybe === -1 ? src.length : specLineEndMaybe;
+    const raw = src.slice(specLineStart, specLineEnd);
+
+    const keywordLineStart = src.lastIndexOf('\n', keywordIdx - 1) + 1;
+    const keywordLineEndMaybe = src.indexOf('\n', keywordIdx);
+    const keywordLineEnd = keywordLineEndMaybe === -1 ? src.length : keywordLineEndMaybe;
+    const keywordLineRaw = src.slice(keywordLineStart, keywordLineEnd);
+
+    // Line immediately preceding the statement keyword — where a top-comment
+    // FIXME would naturally live. Empty string if the statement starts at the
+    // top of the file.
+    const prevLineEnd = keywordLineStart - 1;
+    const prevLineStart = prevLineEnd > 0 ? src.lastIndexOf('\n', prevLineEnd - 1) + 1 : 0;
+    const prevLine = prevLineEnd > 0 ? src.slice(prevLineStart, prevLineEnd) : '';
+
+    // 1-based line number of the specifier.
     let line = 1;
-    for (let i = 0; i < index; i += 1) {
+    for (let i = 0; i < specIdx; i += 1) {
       if (src.charCodeAt(i) === 10) line += 1;
     }
-    out.push({ source: m[1], index, line, raw });
+    out.push({ source: m[1], index: specIdx, line, raw, keywordLineRaw, prevLine });
   }
   return out;
 }
@@ -137,13 +176,31 @@ export function layerRank(layer) {
 }
 
 /**
- * Core audit: scan every .ts/.tsx file under `uiRoot` and return an array of
- * violations. Pure: no process.exit, no console output. CI entry layers on
- * top; tests consume this directly.
+ * Pull a reason out of `FIXME(fsd-layer-skip): <reason>` on one of the
+ * candidate comment lines. Returns the reason string or null if no valid
+ * FIXME is present. A reason is valid when it contains at least
+ * `SIBLING_FIXME_MIN_REASON_CHARS` non-whitespace characters.
+ */
+export function extractSiblingFixmeReason(lines) {
+  for (const line of lines) {
+    const m = line.match(SIBLING_FIXME_RE);
+    if (!m) continue;
+    const reason = m[1].trim();
+    const nonWs = reason.replace(/\s+/gu, '');
+    if (nonWs.length >= SIBLING_FIXME_MIN_REASON_CHARS) return reason;
+  }
+  return null;
+}
+
+/**
+ * Core audit: scan every .ts/.tsx file under `uiRoot` and return
+ * { violations, scanned, siblingExemptions }. Pure: no process.exit, no
+ * console output. CI entry layers on top; tests consume this directly.
  */
 export async function auditLayers(uiRoot) {
   const violations = [];
   let scanned = 0;
+  let siblingExemptions = 0;
 
   for await (const file of walk(uiRoot)) {
     scanned += 1;
@@ -153,13 +210,16 @@ export async function auditLayers(uiRoot) {
     const imports = extractImports(src);
 
     for (const imp of imports) {
-      if (imp.raw.includes('FIXME(fsd-layer-skip)')) continue;
+      const commentLines = [imp.raw, imp.keywordLineRaw, imp.prevLine];
+      const hasLegacyFixme = commentLines.some((l) => l.includes('FIXME(fsd-layer-skip)'));
 
       const resolved = resolveImport(file, imp.source, uiRoot);
 
       if (resolved.kind === 'package') {
         if (FORBIDDEN_HOST_IMPORTS.includes(resolved.name)) {
+          if (hasLegacyFixme) continue;
           violations.push({
+            category: 'host-import',
             file,
             line: imp.line,
             raw: imp.raw,
@@ -172,9 +232,11 @@ export async function auditLayers(uiRoot) {
       const there = resolved;
 
       // Rule 1: higher-layer import forbidden. `shared` imports are always OK
-      // because shared has the lowest rank.
+      // because shared has the lowest rank. Legacy FIXME marker suppresses.
       if (layerRank(there.layer) > layerRank(here.layer)) {
+        if (hasLegacyFixme) continue;
         violations.push({
+          category: 'layer-order',
           file,
           line: imp.line,
           raw: imp.raw,
@@ -183,22 +245,36 @@ export async function auditLayers(uiRoot) {
         continue;
       }
 
-      // Rule 2: same-layer cross-slice forbidden (except when either side is
-      // a bare layer barrel that has no slice).
-      if (here.layer === there.layer && here.layer !== 'shared') {
-        if (here.slice && there.slice && here.slice !== there.slice) {
-          violations.push({
-            file,
-            line: imp.line,
-            raw: imp.raw,
-            rule: `cross-slice import within "${here.layer}" forbidden: ${here.slice} → ${there.slice} (ADR 0014)`,
-          });
+      // Rule 2: same-layer cross-slice forbidden inside entities / features /
+      // widgets. The escape hatch requires `FIXME(fsd-layer-skip): <reason>`
+      // on the import line, the statement-keyword line, or the line above.
+      if (
+        here.layer === there.layer &&
+        SIBLING_RULE_LAYERS.has(here.layer) &&
+        here.slice &&
+        there.slice &&
+        here.slice !== there.slice
+      ) {
+        const reason = extractSiblingFixmeReason(commentLines);
+        if (reason) {
+          siblingExemptions += 1;
+          continue;
         }
+        violations.push({
+          category: 'same-layer-sibling',
+          file,
+          line: imp.line,
+          raw: imp.raw,
+          rule:
+            `cross-slice import within "${here.layer}" forbidden: ${here.slice} → ${there.slice}; ` +
+            `allow by adding \`// FIXME(fsd-layer-skip): <reason>\` on the import or preceding line ` +
+            `(reason must have >=${SIBLING_FIXME_MIN_REASON_CHARS} non-whitespace chars)`,
+        });
       }
     }
   }
 
-  return { violations, scanned };
+  return { violations, scanned, siblingExemptions };
 }
 
 async function run() {
@@ -213,18 +289,20 @@ async function run() {
     return;
   }
 
-  const { violations, scanned } = await auditLayers(UI_ROOT);
+  const { violations, scanned, siblingExemptions } = await auditLayers(UI_ROOT);
 
   if (violations.length > 0) {
-    console.error(`check-fsd-layers: ${violations.length} violation(s) of ADR 0014 found:\n`);
+    console.error(`check-fsd-layers: ${violations.length} violation(s) of ADR 0014 found:`);
     for (const v of violations) {
-      console.error(`  ${relative(ROOT, v.file)}:${v.line}`);
-      console.error(`    rule:   ${v.rule}`);
-      console.error(`    import: ${v.raw.trim()}\n`);
+      console.error(
+        `  [${v.category}] ${relative(ROOT, v.file)}:${v.line}: ${v.rule} — ${v.raw.trim()}`,
+      );
     }
     process.exit(1);
   }
-  console.log(`check-fsd-layers: ok (${scanned} file(s) scanned under ${relative(ROOT, UI_ROOT)})`);
+  console.log(
+    `check-fsd-layers: ok (${scanned} file(s) scanned, ${siblingExemptions} same-layer exemption(s) acknowledged)`,
+  );
 }
 
 // Run when invoked directly via the CLI; skip when imported by tests.

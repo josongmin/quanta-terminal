@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2365] Operator '+' cannot be applied to types 'string' and 'boolean'.",
+    "path": "src/calc.ts",
+    "line": 9,
+    "column": 9
+  }
+]

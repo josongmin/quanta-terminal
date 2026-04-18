@@ -1,0 +1,21 @@
+[package]
+name = "quanta-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — AI suggestion flow + risk classifier per ADR 0012."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The mock provider is async so we gate the port behind `async_trait` in
+# `ports/`. Domain stays sync and dep-free.
+async-trait = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { workspace = true }

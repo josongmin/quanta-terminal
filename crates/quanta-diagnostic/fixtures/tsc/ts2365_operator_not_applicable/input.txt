@@ -1,0 +1,1 @@
+src/calc.ts(9,9): error TS2365: Operator '+' cannot be applied to types 'string' and 'boolean'.

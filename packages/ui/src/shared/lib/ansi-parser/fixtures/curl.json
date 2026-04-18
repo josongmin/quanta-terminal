@@ -1,0 +1,11 @@
+{
+  "description": "curl -v with an OSC 8 hyperlink wrapping the response URL. Direction markers ('>', '<') are typed plain text.",
+  "input": "* Connected to \u001b]8;;https://example.com/\u0007example.com\u001b]8;;\u0007:443\n> GET / HTTP/1.1\n< \u001b[32mHTTP/1.1 200 OK\u001b[0m\n",
+  "spans": [
+    { "text": "* Connected to " },
+    { "text": "example.com", "link": "https://example.com/" },
+    { "text": ":443\n> GET / HTTP/1.1\n< " },
+    { "text": "HTTP/1.1 200 OK", "fg": { "kind": "named", "index": 2 } },
+    { "text": "\n" }
+  ]
+}

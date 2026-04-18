@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2554] Expected 2 arguments, but got 1.",
+    "path": "src/lib.ts",
+    "line": 10,
+    "column": 3
+  }
+]

@@ -1,0 +1,2 @@
+ValidationError: name is required
+    at validate (/app/src/v.js:10:5)

@@ -1,0 +1,2 @@
+Error: boom
+    at /app/bin/start.js:12:3

@@ -1,0 +1,5 @@
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+ --> src/main.rs:4:5
+  |
+4 |     add(1);
+  |     ^^^ ---- an argument of type `u32` is missing

@@ -264,7 +264,7 @@ async fn handle_connection(
         let msg = match read_one_control(&mut reader, &mut buf, &mut tmp).await {
             Ok(m) => m,
             Err(err) => {
-                debug!(?err, "client disconnected");
+                debug!(client_id = %hello.client_id, ?err, "protocol.socket: client disconnected");
                 break;
             }
         };
@@ -279,8 +279,24 @@ async fn handle_connection(
                 write_control(&writer, &ControlMessage::Pong { seq }).await?;
             }
             ControlMessage::Goodbye { .. } => break,
+            // An extra `Hello` from a client that retries the handshake on
+            // the same connection. Per ADR 0004 the handshake is
+            // one-shot-per-connection: we already sent Ready and the event
+            // pump is running. Rejecting the duplicate with a warn keeps the
+            // client responsive but ensures we don't double-install a pump
+            // or flip any state.
+            ControlMessage::Hello(_) => {
+                tracing::warn!(
+                    client_id = %hello.client_id,
+                    "protocol.socket: duplicate Hello after handshake; ignoring",
+                );
+            }
             other => {
-                debug!(?other, "unexpected control message");
+                debug!(
+                    client_id = %hello.client_id,
+                    ?other,
+                    "protocol.socket: unexpected control message",
+                );
             }
         }
     }

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "a.py", line 1, in <module>
+    do_it()
+process killed

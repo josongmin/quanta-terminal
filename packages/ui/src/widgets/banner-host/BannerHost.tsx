@@ -15,7 +15,7 @@
  * conditions via `raiseSyntheticBanner` to exercise precedence rendering.
  */
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { Banner } from '../../shared/ui/banner/index.js';
 import { Button } from '../../shared/ui/button/index.js';
@@ -23,6 +23,17 @@ import { useBannerStore, selectVisibleConditions } from '../../entities/banner/i
 import { pickBannerCondition, type BannerCondition } from '../../shared/lib/banner-precedence.js';
 import type { BannerKind } from '../../shared/ui/banner/index.js';
 import styles from './banner-host.module.css';
+
+/**
+ * The action button handler is a Phase-1 stub — it must exist so the Button
+ * renders an interactive surface, but the real target (settings pane / docs
+ * link) is plumbed in later phases. Lifting it to module scope keeps the
+ * reference stable so `Button`'s internals don't churn on every host render
+ * while the placeholder is in place.
+ */
+const NOOP_ACTION = (): void => {
+  /* Phase 1 stub; later phases route to the condition-specific destination. */
+};
 
 interface ConditionPresentation {
   readonly kind: BannerKind;
@@ -80,6 +91,14 @@ export function BannerHost() {
   );
   const top = useMemo(() => pickBannerCondition(visible), [visible]);
 
+  // Wrap the store-backed dismiss in a useCallback keyed on `top` so the
+  // `onDismiss` prop is referentially stable for each presented banner. Without
+  // this wrap the Banner primitive re-renders on every parent tick because the
+  // inline arrow function mints a fresh identity each time.
+  const handleDismiss = useCallback(() => {
+    if (top) dismiss(top);
+  }, [dismiss, top]);
+
   if (!top) return null;
 
   const p = PRESENTATION[top];
@@ -93,16 +112,10 @@ export function BannerHost() {
       >
         <Banner
           kind={p.kind}
-          onDismiss={() => dismiss(top)}
+          onDismiss={handleDismiss}
           dismissLabel={p.dismissLabel}
           action={
-            <Button
-              type="button"
-              onClick={() => {
-                // Phase 1: the action is a stub. Later phases swap the handler
-                // for one that opens the relevant settings pane.
-              }}
-            >
+            <Button type="button" onClick={NOOP_ACTION}>
               {p.actionLabel}
             </Button>
           }

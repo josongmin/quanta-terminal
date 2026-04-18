@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2322] Type 'string' is not assignable to type 'number'.",
+    "path": "src/app.ts",
+    "line": 17,
+    "column": 12
+  }
+]

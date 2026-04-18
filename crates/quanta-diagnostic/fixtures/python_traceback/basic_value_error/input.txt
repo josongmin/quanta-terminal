@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "app.py", line 7, in <module>
+    main()
+ValueError: bad thing

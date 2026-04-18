@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "EvalError: bad eval",
+    "path": "/srv/e.js",
+    "line": 3,
+    "column": 10,
+    "symbol": "evalFn"
+  }
+]

@@ -1,0 +1,3 @@
+ReferenceError: foo is not defined
+    at Object.<anonymous> (/repo/src/app.js:4:1)
+    at Module._compile (node:internal/modules/cjs/loader:1254:14)

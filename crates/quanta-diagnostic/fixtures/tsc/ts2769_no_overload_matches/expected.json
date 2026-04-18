@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "tsc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[TS2769] No overload matches this call.",
+    "path": "src/rpc.ts",
+    "line": 55,
+    "column": 14
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "python_traceback",
+    "category": "runtime",
+    "severity": "error",
+    "message": "RuntimeError: space path",
+    "path": "/Users/me/My Code/app.py",
+    "line": 3,
+    "symbol": "main"
+  }
+]

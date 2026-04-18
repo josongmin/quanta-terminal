@@ -1,0 +1,5 @@
+error[E0425]: cannot find value `x` in this scope
+ --> C:\src\main.rs:4:9
+  |
+4 |     let _ = x;
+  |             ^

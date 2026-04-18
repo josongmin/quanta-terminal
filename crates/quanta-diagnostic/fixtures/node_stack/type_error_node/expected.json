@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "node_stack",
+    "category": "runtime",
+    "severity": "error",
+    "message": "TypeError: Cannot read properties of undefined (reading 'x')",
+    "path": "/work/app.js",
+    "line": 7,
+    "column": 22
+  }
+]

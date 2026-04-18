@@ -1,0 +1,3 @@
+SyntaxError: Unexpected token '}'
+    at internalCompileFunction (node:internal/vm:77:18)
+    at /repo/src/main.js:1:1

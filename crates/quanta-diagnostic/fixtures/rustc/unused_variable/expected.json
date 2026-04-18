@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "warning",
+    "message": "unused variable: `x`",
+    "path": "src/lib.rs",
+    "line": 10,
+    "column": 9
+  }
+]

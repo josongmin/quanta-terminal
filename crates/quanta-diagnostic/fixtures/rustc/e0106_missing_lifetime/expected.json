@@ -1,0 +1,11 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "message": "[E0106] missing lifetime specifier",
+    "path": "src/lib.rs",
+    "line": 3,
+    "column": 13
+  }
+]

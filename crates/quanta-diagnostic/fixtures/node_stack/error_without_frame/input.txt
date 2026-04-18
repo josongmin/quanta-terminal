@@ -1,0 +1,2 @@
+TypeError: never a frame follows
+(followed by unrelated output)

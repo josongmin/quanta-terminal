@@ -1,0 +1,283 @@
+/*
+ * ComparePanel — rerun diff overlay (Phase 4).
+ *
+ * Warp-ish aesthetic: a modal dialog that reuses the palette's backdrop,
+ * border, radius, and shadow tokens. No new design tokens introduced.
+ *
+ * Layout rules:
+ *   - >= 900px viewport: side-by-side (two monospace columns).
+ *   - <  900px viewport: unified (single column with `+` / `-` gutter).
+ * The two modes share markup; the breakpoint is driven by `--q-compare-wide`
+ * being set on the container (JS reads viewport width and toggles the
+ * data-attribute, see `ComparePanel.tsx`).
+ *
+ * Motion: 240ms fade-in / 120ms fade-out. Respect reduced-motion via the
+ * token reduction already applied in tokens.css.
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 6vh;
+  background: var(--q-overlay-bg);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 90;
+  animation: q-compare-backdrop-in var(--q-dur-slow) var(--q-ease-out);
+}
+
+.backdrop[data-closing='true'] {
+  animation: q-compare-backdrop-out var(--q-dur-fast) var(--q-ease-out) forwards;
+}
+
+.panel {
+  width: 100%;
+  max-width: 1200px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-overlay);
+  overflow: hidden;
+  animation: q-compare-panel-in var(--q-dur-slow) var(--q-ease-standard);
+  font-family: var(--q-font-sans);
+  color: var(--q-fg);
+}
+
+.backdrop[data-closing='true'] .panel {
+  animation: q-compare-panel-out var(--q-dur-fast) var(--q-ease-out) forwards;
+}
+
+@keyframes q-compare-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes q-compare-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes q-compare-panel-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes q-compare-panel-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-2px) scale(0.995); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .backdrop, .panel { animation: none; }
+}
+
+/* --- Header --- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  padding: var(--q-space-3) var(--q-space-4);
+  border-bottom: 1px solid var(--q-border-subtle);
+  flex: 0 0 auto;
+}
+
+.title {
+  font-size: var(--q-font-size-md);
+  font-weight: 600;
+  color: var(--q-fg);
+  flex: 0 0 auto;
+}
+
+.chips {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-2);
+  min-width: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: 999px;
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chipLabel {
+  color: var(--q-fg-faint);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.chip[data-tone='positive'] { color: var(--q-success); border-color: color-mix(in srgb, var(--q-success) 25%, var(--q-border-subtle)); }
+.chip[data-tone='negative'] { color: var(--q-danger); border-color: color-mix(in srgb, var(--q-danger) 25%, var(--q-border-subtle)); }
+.chip[data-tone='warning'] { color: var(--q-warning); border-color: color-mix(in srgb, var(--q-warning) 25%, var(--q-border-subtle)); }
+
+.closeButton {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--q-fg-muted);
+  padding: 4px 8px;
+  border-radius: var(--q-radius-sm);
+  cursor: pointer;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  flex: 0 0 auto;
+  transition: background var(--q-dur-fast) var(--q-ease-out),
+              color var(--q-dur-fast) var(--q-ease-out);
+}
+.closeButton:hover,
+.closeButton:focus-visible {
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+  outline: none;
+}
+
+/* --- Truncation banner --- */
+
+.truncatedBanner {
+  padding: var(--q-space-2) var(--q-space-4);
+  background: color-mix(in srgb, var(--q-warning) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--q-warning) 30%, var(--q-border-subtle));
+  color: var(--q-warning);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  flex: 0 0 auto;
+}
+
+/* --- Body — shared container --- */
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-term);
+  line-height: var(--q-line-height-term);
+  background: var(--q-bg);
+}
+
+/* Side-by-side layout: two columns sharing the same diff row grid. Each
+   visible row is a pair of cells; on hover of one cell we highlight the
+   matching cell in the other column via the data-row attribute. */
+
+.sideBySide {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 0;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid var(--q-border-subtle);
+}
+.column:last-child {
+  border-right: none;
+}
+
+.columnHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--q-bg-elev-1);
+  border-bottom: 1px solid var(--q-border-subtle);
+  padding: var(--q-space-1) var(--q-space-3);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--q-space-2);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  padding: 0 var(--q-space-3) 0 0;
+  min-height: 1.5em;
+}
+
+.row[data-kind='+'] { background: color-mix(in srgb, var(--q-success) 10%, transparent); }
+.row[data-kind='-'] { background: color-mix(in srgb, var(--q-danger) 12%, transparent); }
+.row[data-kind=' '] { background: transparent; }
+.row[data-placeholder='true'] { background: color-mix(in srgb, var(--q-fg-faint) 5%, transparent); }
+
+.rowActive {
+  box-shadow: inset 2px 0 0 var(--q-accent);
+}
+
+.gutter {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 1px;
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  user-select: none;
+  border-right: 1px solid var(--q-border-subtle);
+  background: var(--q-bg-elev-1);
+}
+
+.row[data-kind='+'] .gutter { color: var(--q-success); }
+.row[data-kind='-'] .gutter { color: var(--q-danger); }
+
+.lineText {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding: 0 0 0 var(--q-space-2);
+  color: var(--q-fg);
+  font-family: var(--q-font-mono);
+  min-width: 0;
+}
+
+.placeholderText {
+  color: var(--q-fg-faint);
+  font-style: italic;
+}
+
+/* Unified layout — single column, the left/right info is encoded in the
+   gutter prefix. Same row element reused but the grid is one column, not
+   two. We toggle the parent data attribute. */
+
+.unified {
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Footer / hint --- */
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+  padding: var(--q-space-2) var(--q-space-4);
+  border-top: 1px solid var(--q-border-subtle);
+  background: var(--q-bg-elev-1);
+  flex: 0 0 auto;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-faint);
+}
+
+.footerHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

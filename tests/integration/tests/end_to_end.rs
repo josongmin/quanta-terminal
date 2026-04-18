@@ -238,6 +238,78 @@ async fn socket_cancel_long_running_emits_block_canceled() -> Result<()> {
     Ok(())
 }
 
+/// Third happy-path: emit a canned rustc error over the PTY and assert the
+/// engine forwards a `DiagnosticDetected` envelope over the socket's event
+/// plane. This closes the Phase-3 loop — the in-process diagnostic pipeline
+/// test (`crates/quanta-session/tests/diagnostics.rs`) pins the adapter; this
+/// test pins that the envelope survives the fanout → socket → client route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn socket_event_flow_emits_diagnostic_for_rustc_error() -> Result<()> {
+    let core = CoreProcess::spawn().await?;
+    let mut host = core.connect().await?;
+
+    let created = host
+        .create_session(pick_shell(), Some(std::path::Path::new("/tmp")))
+        .await?;
+
+    // printf is portable across sh/bash and preserves backslash escapes.
+    // The payload mimics a rustc header+span that the Tier-1 rustc adapter
+    // recognizes.
+    let cmd = r"printf 'error[E0425]: cannot find value `foo` in this scope\n --> src/fake.rs:3:5\n'; exit 0";
+    let _ = host.submit(created.session_id, cmd).await?;
+
+    let events = host
+        .collect_events_until(
+            |events| {
+                events
+                    .iter()
+                    .any(|e| matches!(&e.payload, Event::DiagnosticDetected(_)))
+                    && events
+                        .iter()
+                        .any(|e| matches!(&e.payload, Event::BlockCompleted(_)))
+            },
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    // Loud diagnostic extraction so a failure prints the actual set observed.
+    let diags: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            Event::DiagnosticDetected(d) => Some(d),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !diags.is_empty(),
+        "expected a DiagnosticDetected envelope; saw kinds: {:?}",
+        events
+            .iter()
+            .map(|e| event_kind_name(&e.payload))
+            .collect::<Vec<_>>()
+    );
+
+    let has_rustc_hit = diags.iter().any(|d| {
+        d.parser_id == "rustc"
+            && d.path
+                .as_ref()
+                .is_some_and(|p| p.to_string_lossy().contains("src/fake.rs"))
+            && d.line == Some(3)
+            && d.column == Some(5)
+    });
+    assert!(
+        has_rustc_hit,
+        "no matching rustc diagnostic in {:?}",
+        diags
+            .iter()
+            .map(|d| (d.parser_id.clone(), d.path.clone(), d.line, d.column))
+            .collect::<Vec<_>>()
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
 /// Asserts the ordered emission:
 ///   `SessionCreated → BlockCreated → BlockStarted → OutputChunk(*contains substr) → BlockCompleted(exit_code=Some(0))`.
 fn assert_event_chain_contains_echo(

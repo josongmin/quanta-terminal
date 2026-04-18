@@ -1,0 +1,1 @@
+src/my app.ts(3,4): error TS1005: ';' expected.

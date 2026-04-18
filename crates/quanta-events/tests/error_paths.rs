@@ -209,3 +209,87 @@ async fn replay_all_on_empty_log_yields_empty_vec() {
     let all = log.replay_all().await.unwrap();
     assert!(all.is_empty());
 }
+
+/// `EventLogError::PayloadTooLarge` is constructible and carries both the
+/// observed declared size and the adapter's ceiling. This covers the
+/// `PayloadTooLarge` arm of `decode_one_frame` that the happy-path corpus
+/// never reaches (normal writes are bounded well below the 16 MiB limit).
+///
+/// We build a synthetic on-disk frame whose zstd-decompressed inner payload
+/// declares a length of `u32::MAX` (much larger than MAX_PAYLOAD_BYTES). The
+/// reader must refuse it with `PayloadTooLarge` rather than allocating.
+#[tokio::test]
+async fn oversized_declared_payload_surfaces_payload_too_large() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = ZstdSegmentedEventLog::new(tmp.path()).unwrap();
+    let sid = SessionId::new();
+    // Seed the session dir via a legit append so the directory exists.
+    log.append(make_env(sid, 1)).await.unwrap();
+
+    let dir = tmp.path().join(sid.to_string());
+    let seg = std::fs::read_dir(&dir)
+        .unwrap()
+        .find_map(|e| {
+            let p = e.ok()?.path();
+            (p.extension().and_then(|s| s.to_str()) == Some("zlog")).then_some(p)
+        })
+        .expect("at least one segment file exists");
+
+    // Craft a raw frame: inner payload declares length = u32::MAX so the
+    // decoder hits the MAX_PAYLOAD_BYTES guard before attempting allocation.
+    // The outer structure mirrors the adapter's on-disk layout (u32 BE
+    // outer-frame-len, then zstd-compressed { u32 BE payload_len, u32 BE
+    // xx-checksum, payload... }).
+    let bogus_payload_len: u32 = u32::MAX;
+    let bogus_checksum: u32 = 0;
+    let mut inner = Vec::new();
+    inner.extend_from_slice(&bogus_payload_len.to_be_bytes());
+    inner.extend_from_slice(&bogus_checksum.to_be_bytes());
+    // The "payload" bytes we attach are irrelevant: the length header is
+    // checked FIRST, so we never look at the bytes beyond it.
+    inner.extend_from_slice(b"ignored");
+    let compressed = zstd::encode_all(&inner[..], 3).unwrap();
+    let outer_frame_len: u32 = u32::try_from(compressed.len()).unwrap();
+
+    // Truncate the existing segment and write just our bogus frame. Replay
+    // then hits `DecodeOne::PayloadTooLarge` on the first (and only) frame.
+    let mut f = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&seg)
+        .unwrap();
+    f.write_all(&outer_frame_len.to_be_bytes()).unwrap();
+    f.write_all(&compressed).unwrap();
+    drop(f);
+
+    match log.replay_session(sid).await {
+        Err(EventLogError::PayloadTooLarge { observed, limit }) => {
+            assert_eq!(
+                observed, bogus_payload_len as usize,
+                "observed must reflect the declared payload length"
+            );
+            assert!(
+                observed > limit,
+                "observed must exceed the limit; got observed={observed} limit={limit}"
+            );
+        }
+        Ok(records) => panic!("expected PayloadTooLarge, got {} records", records.len()),
+        Err(other) => panic!("expected PayloadTooLarge, got {other:?}"),
+    }
+}
+
+/// `EventLogError::Closed` is a documented variant. Nothing in the adapter
+/// currently constructs it (Phase 1 appends fsync synchronously so there's
+/// no "flushed then closed" window). The variant is reserved for a future
+/// background-flusher that may surface "writer already closed". This test
+/// asserts the variant Display behaviour so a refactor that drops the
+/// variant breaks here instead of silently losing an error shape.
+#[test]
+fn closed_variant_has_actionable_display() {
+    let err = EventLogError::Closed;
+    let s = format!("{err}");
+    assert!(
+        s.contains("closed"),
+        "EventLogError::Closed Display must mention 'closed', got {s:?}"
+    );
+}

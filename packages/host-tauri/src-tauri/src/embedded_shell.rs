@@ -44,7 +44,7 @@ impl EmbeddedShell {
     ) -> anyhow::Result<SpawnedSession> {
         let shell_path = shell
             .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| default_shell());
+            .unwrap_or_else(default_shell);
         let launch_cwd = cwd
             .or_else(|| std::env::var("HOME").ok())
             .unwrap_or_else(|| "/".to_string());
@@ -65,7 +65,10 @@ impl EmbeddedShell {
         // few terminal-facing vars so xterm.js behaves predictably.
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        cmd.env("LANG", std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".into()));
+        cmd.env(
+            "LANG",
+            std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".into()),
+        );
         // Per-caller overrides win.
         for (k, v) in env {
             cmd.env(k, v);

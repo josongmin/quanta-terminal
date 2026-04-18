@@ -1,0 +1,2 @@
+(node:12345) UnhandledPromiseRejectionWarning: Error: x
+    at handler (/repo/src/h.js:3:1)
