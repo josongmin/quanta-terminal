@@ -1,0 +1,22 @@
+[package]
+name = "check-hex-imports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — enforces the hexagonal import rules from ADR 0014"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-hex-imports"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+syn = { version = "2", features = ["full", "visit", "parsing"] }
+walkdir = "2"
+toml = "0.8"

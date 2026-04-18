@@ -1,0 +1,25 @@
+[package]
+name = "quanta-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — JSON-RPC control plane + MessagePack event plane codecs and Unix-socket adapter."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

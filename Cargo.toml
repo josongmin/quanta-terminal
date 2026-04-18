@@ -1,0 +1,116 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/quanta-proto",
+    "crates/quanta-pty",
+    "crates/quanta-output",
+    "crates/quanta-block",
+    "crates/quanta-events",
+    "crates/quanta-protocol",
+    "crates/quanta-lifecycle",
+    "crates/quanta-session",
+    "crates/quanta-core",
+    "tools/check-hex-imports",
+    "tools/fixtures-runner",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/quanta-terminal/quanta-terminal"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Pedantic lints that add cost without signal in a growing codebase.
+# Re-tighten selectively when we have bandwidth.
+uninlined_format_args = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+map_unwrap_or = "allow"
+unnecessary_debug_formatting = "allow"
+doc_markdown = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+items_after_statements = "allow"
+naive_bytecount = "allow"
+needless_pass_by_value = "allow"
+struct_excessive_bools = "allow"
+used_underscore_items = "allow"
+
+[workspace.dependencies]
+# Core async
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1.3"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# IDs and time
+ulid = { version = "1.1", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+
+# Terminal / PTY
+nix = { version = "0.29", features = ["term", "fs", "process", "signal", "ioctl"] }
+portable-pty = "0.8"
+vte = "0.13"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+zstd = "0.13"
+
+# Utility
+camino = { version = "1.1", features = ["serde1"] }
+globset = "0.4"
+regex = "1"
+bytes = "1"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+once_cell = "1"
+dashmap = "6"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+base64 = "0.22"
+tempfile = "3"
+
+# Testing
+insta = { version = "1.40", features = ["yaml", "json"] }
+proptest = "1.5"
+rstest = "0.23"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+# NOTE: abort-on-panic for the sidecar. A panic mid-session cannot be safely
+# recovered (shared state across tasks is in an unknown state); aborting lets
+# the supervisor restart us cleanly. This also shrinks the binary by
+# ~10 % via removal of unwinding tables. See ADR 0004 §Crash Recovery.
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2

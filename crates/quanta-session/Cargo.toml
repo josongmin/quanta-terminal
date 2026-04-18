@@ -1,0 +1,27 @@
+[package]
+name = "quanta-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — session actor owning a PTY and a block reducer."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }
+quanta-pty = { path = "../quanta-pty" }
+quanta-block = { path = "../quanta-block" }
+quanta-output = { path = "../quanta-output" }
+quanta-events = { path = "../quanta-events" }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

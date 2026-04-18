@@ -1,0 +1,41 @@
+/* EmptyState — centered hero. Leaves a lot of negative space on purpose;
+   the surface should feel calm rather than busy before a session starts. */
+
+.wrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--q-space-6);
+}
+
+.hero {
+  max-width: 520px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--q-space-4);
+}
+
+.title {
+  font-family: var(--q-font-sans);
+  font-weight: 600;
+  font-size: 32px;
+  letter-spacing: -0.02em;
+  color: var(--q-fg);
+}
+
+.subtitle {
+  font-family: var(--q-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--q-fg-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  margin-top: var(--q-space-3);
+}

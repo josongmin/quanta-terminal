@@ -1,0 +1,31 @@
+{
+  "name": "@quanta/host-tauri",
+  "version": "0.1.0",
+  "description": "Quanta Terminal — Tauri desktop host (Mode B per ADR 0001).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:vite": "vite",
+    "build": "pnpm --filter @quanta/ui build && tauri build",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@quanta/host-common": "workspace:*",
+    "@quanta/ui": "workspace:*",
+    "@tauri-apps/api": "^2.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.1",
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.1"
+  }
+}

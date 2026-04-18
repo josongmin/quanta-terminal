@@ -1,0 +1,20 @@
+[package]
+name = "quanta-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — PTY domain (spawn, read, write, resize) and portable-pty adapter"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+portable-pty = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

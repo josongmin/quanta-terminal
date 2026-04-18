@@ -1,0 +1,43 @@
+/* Badge — border-only chip per ADR 0010. No fill; color is not the only
+   differentiator. Label carries the information. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 16px;
+  color: var(--q-fg);
+  background: transparent;
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-sm);
+  white-space: nowrap;
+  user-select: none;
+  transition: border-color var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.tone-neutral {
+  color: var(--q-fg-muted);
+  border-color: var(--q-border-strong);
+}
+.tone-accent {
+  color: var(--q-accent);
+  border-color: rgba(94, 160, 255, 0.45);
+}
+.tone-warning {
+  color: var(--q-warning);
+  border-color: rgba(245, 196, 81, 0.45);
+}
+.tone-danger {
+  color: var(--q-danger);
+  border-color: rgba(255, 107, 107, 0.45);
+}
+.tone-success {
+  color: var(--q-success);
+  border-color: rgba(110, 231, 183, 0.45);
+}

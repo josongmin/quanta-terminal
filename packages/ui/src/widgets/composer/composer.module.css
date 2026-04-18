@@ -1,0 +1,127 @@
+/* Composer — elevated input card. Focus reveals a soft blue stroke + glow;
+   the mode chip sits on the right separated by a 1px Separator. */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin: 0 var(--q-space-4) var(--q-space-3) var(--q-space-4);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-lg);
+  transition:
+    border-color var(--q-dur-fast) var(--q-ease-out),
+    box-shadow var(--q-dur-fast) var(--q-ease-out),
+    background var(--q-dur-fast) var(--q-ease-out);
+  min-height: var(--q-composer-min-height);
+}
+
+.wrap.focused {
+  border-color: var(--q-border-focus);
+  box-shadow: var(--q-shadow-focus-ring);
+  background: var(--q-bg-elev-2);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--q-space-2);
+  padding: 8px 12px;
+}
+
+.prompt {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--q-accent);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  line-height: 20px;
+  user-select: none;
+}
+
+.editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 2px 0;
+  color: var(--q-fg);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  line-height: 20px;
+  caret-color: var(--q-accent);
+  animation: q-caret-pulse 1.1s var(--q-ease-in-out) infinite;
+}
+
+.editor::placeholder {
+  color: var(--q-fg-faint);
+}
+.editor:disabled {
+  color: var(--q-fg-muted);
+  cursor: progress;
+}
+
+/* Subtle caret emphasis: CSS cannot style the textarea caret directly beyond
+   caret-color, but pulsing the editor's subtle box-shadow while focused makes
+   the insertion point feel alive without being noisy. */
+@keyframes q-caret-pulse {
+  0%, 100% { caret-color: var(--q-accent); }
+  50%      { caret-color: rgba(94, 160, 255, 0.6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor { animation: none; }
+}
+
+.modeChip {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 2px 8px;
+  color: var(--q-fg-muted);
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  user-select: none;
+}
+
+/* History (recent commands) scaffold: a slim panel rising above the input.
+   Phase 1 shows only the empty state; later phases populate rows. */
+.history {
+  border-bottom: 1px solid var(--q-border-subtle);
+  padding: 8px 12px;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  animation: q-history-in var(--q-dur-med) var(--q-ease-standard);
+}
+.historyEmpty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@keyframes q-history-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .history { animation: none; }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

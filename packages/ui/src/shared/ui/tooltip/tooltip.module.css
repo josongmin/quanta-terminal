@@ -1,0 +1,51 @@
+/* Tooltip — hover/focus reveal per ADR 0010. One sentence plus optional
+   action link. Keyboard-accessible via :focus-within on the wrapper. */
+
+.wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  min-width: 160px;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-md);
+  font-size: var(--q-font-size-sm);
+  line-height: 1.4;
+  font-family: var(--q-font-sans);
+  box-shadow: var(--q-shadow-pop);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--q-dur-fast) var(--q-ease-out),
+    transform var(--q-dur-fast) var(--q-ease-out);
+  z-index: 10;
+}
+
+.wrap:hover .bubble,
+.wrap:focus-within .bubble {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.arrow {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-1px) rotate(45deg);
+  width: 8px;
+  height: 8px;
+  background: var(--q-bg-elev-2);
+  border-right: 1px solid var(--q-border-strong);
+  border-bottom: 1px solid var(--q-border-strong);
+}

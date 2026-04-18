@@ -1,0 +1,41 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.backup
+
+# Node
+node_modules/
+.pnpm-store/
+dist/
+dist-ssr/
+.turbo/
+.next/
+.vite/
+*.tsbuildinfo
+
+# Tauri
+/packages/host-tauri/src-tauri/target/
+/packages/host-tauri/src-tauri/gen/
+/packages/host-tauri/src-tauri/WixTools/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+
+# Local dev
+.env
+.env.local
+*.log
+coverage/
+.nyc_output/
+
+# Quanta runtime data (developer local profile)
+/.quanta-dev-profile/

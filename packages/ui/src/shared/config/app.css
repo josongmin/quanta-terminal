@@ -1,0 +1,59 @@
+/* Application-level resets and layout. Imported after tokens.css. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#quanta-root {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--q-bg);
+  color: var(--q-fg);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Focus ring — keyboard only. */
+:focus-visible {
+  outline: 2px solid var(--q-border-focus);
+  outline-offset: 1px;
+  border-radius: var(--q-radius-sm);
+}
+
+/* Draggable region surface (Tauri). Elements inside can opt out with
+   [data-tauri-drag-region="false"]. */
+[data-tauri-drag-region='true'] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+[data-tauri-drag-region='false'] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* xterm layout: host the terminal so fit addon can measure. */
+.xterm,
+.xterm-viewport,
+.xterm-screen {
+  width: 100% !important;
+  height: 100% !important;
+}
+.xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--q-border-strong);
+  border-radius: 8px;
+}
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}

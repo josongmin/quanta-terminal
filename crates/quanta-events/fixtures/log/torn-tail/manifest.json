@@ -1,0 +1,20 @@
+{
+  "scenario": "torn_tail",
+  "description": "The last record is truncated mid-frame. The reader must return the prefix cleanly without error.",
+  "sessions": [
+    {
+      "name": "session-a",
+      "records": [
+        { "seq": 1, "payload": "BlockCreated" },
+        { "seq": 2, "payload": "BlockStarted" }
+      ]
+    }
+  ],
+  "mutation": { "kind": "truncate_trailing_bytes", "bytes": 5 },
+  "expected": {
+    "total_records": 2,
+    "payload_kinds_in_order": ["block_created", "block_started"],
+    "expect_error": null,
+    "recovery_note": "trailing partial frame was skipped"
+  }
+}

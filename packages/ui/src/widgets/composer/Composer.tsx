@@ -1,0 +1,170 @@
+/**
+ * Composer — bottom input affordance, a real input this time.
+ *
+ * Design:
+ *   - A multi-line `<textarea>` auto-sizes between one and six lines.
+ *   - Enter submits via `features/composer/submit`, Shift+Enter inserts a
+ *     newline, Up at the first line opens the "recent commands" scaffold.
+ *   - A mode chip on the right ("shell / intent / auto") is structurally
+ *     present; Phase 1 always renders "shell" because the intent pipeline
+ *     hasn't shipped.
+ *   - A hairline inner stroke + glow appears on focus via a
+ *     `data-focused="true"` attribute — keeps the motion token on the div,
+ *     not a pseudo-element that CSS modules can't style.
+ *
+ * Why textarea, not contenteditable: with IME, paste, undo, selection, and
+ * cursor behaviour you get all three "for free" from the platform. A
+ * contenteditable would need a dozen edge cases for the same outcome.
+ * CodeMirror is a future upgrade when syntax highlighting matters (PR gate
+ * on line ≥2 of input).
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
+
+import { Kbd } from '../../shared/ui/kbd/index.js';
+import { Separator } from '../../shared/ui/separator/index.js';
+import { submitCommand, type ComposerMode } from '../../features/composer/index.js';
+import { cx } from '../../shared/lib/cx.js';
+import styles from './composer.module.css';
+
+export interface ComposerProps {
+  /** Phase 1: always 'shell'. Prop exists so the chip's state is explicit. */
+  readonly mode?: ComposerMode;
+  /** Focus the textarea on mount. Default false — the terminal owns focus first. */
+  readonly autoFocus?: boolean;
+  /**
+   * Called after a successful submit. Lets the caller log to a history store
+   * or flash the terminal surface.
+   */
+  readonly onSubmitted?: (text: string) => void;
+}
+
+const MIN_ROWS = 1;
+const MAX_ROWS = 6;
+const LINE_HEIGHT_PX = 20; // matches .editor line-height in CSS
+
+export function Composer(props: ComposerProps) {
+  const { mode = 'shell', autoFocus = false, onSubmitted } = props;
+  const [value, setValue] = useState('');
+  const [focused, setFocused] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Auto-size. Measured from scrollHeight, clamped between MIN and MAX lines.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const desired = Math.min(MAX_ROWS, Math.max(MIN_ROWS, Math.ceil(el.scrollHeight / LINE_HEIGHT_PX)));
+    el.style.height = `${desired * LINE_HEIGHT_PX}px`;
+  }, [value]);
+
+  useEffect(() => {
+    if (autoFocus) textareaRef.current?.focus();
+  }, [autoFocus]);
+
+  const handleChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    setValue(e.target.value);
+    if (historyOpen) setHistoryOpen(false);
+  }, [historyOpen]);
+
+  const handleSubmit = useCallback(async () => {
+    if (busy) return;
+    if (value.trim().length === 0) return;
+    setBusy(true);
+    const result = await submitCommand({ text: value, mode });
+    setBusy(false);
+    if (result.ok) {
+      onSubmitted?.(value);
+      setValue('');
+    }
+    // On failure we keep the text so the user can retry; a future toast
+    // affordance will show the error string.
+  }, [busy, mode, onSubmitted, value]);
+
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        void handleSubmit();
+        return;
+      }
+      if (e.key === 'ArrowUp' && !e.shiftKey) {
+        // Open history only when the cursor is at the start of the first line.
+        const el = e.currentTarget;
+        const upToCursor = el.value.slice(0, el.selectionStart);
+        if (!upToCursor.includes('\n')) {
+          e.preventDefault();
+          setHistoryOpen(true);
+        }
+        return;
+      }
+      if (e.key === 'Escape' && historyOpen) {
+        e.preventDefault();
+        setHistoryOpen(false);
+      }
+    },
+    [handleSubmit, historyOpen],
+  );
+
+  return (
+    <div
+      className={cx(styles.wrap, focused && styles.focused)}
+      data-focused={focused ? 'true' : 'false'}
+      data-testid="composer"
+    >
+      {historyOpen ? (
+        <div
+          className={styles.history}
+          role="listbox"
+          aria-label="Recent commands"
+        >
+          <div className={styles.historyEmpty}>
+            No recent commands yet. Press <Kbd>Esc</Kbd> to close.
+          </div>
+        </div>
+      ) : null}
+      <div className={styles.row}>
+        <span className={styles.prompt} aria-hidden>
+          &gt;
+        </span>
+        <label className={styles.srOnly} htmlFor="quanta-composer-input">
+          Command input
+        </label>
+        <textarea
+          id="quanta-composer-input"
+          ref={textareaRef}
+          className={styles.editor}
+          value={value}
+          rows={1}
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          placeholder="Type a command, then Enter"
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          aria-busy={busy}
+          aria-multiline
+          disabled={busy}
+        />
+        <Separator />
+        <div className={styles.modeChip} aria-label={`Composer mode: ${mode}`}>
+          {mode}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Composer.displayName = 'Composer';

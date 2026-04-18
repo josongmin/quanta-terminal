@@ -1,0 +1,66 @@
+/* SessionTabs — compact chip row. The "active" pulse is a 1px ring dot that
+   eases its opacity between 0.45 and 1.0 when the session is ready. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  color: var(--q-fg-muted);
+  background: transparent;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+.tab:hover:not(:disabled) {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+}
+.tab:disabled {
+  cursor: default;
+  color: var(--q-fg-faint);
+}
+
+.active {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+  background: var(--q-bg-elev-2);
+}
+
+.label {
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+}
+
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--q-fg-faint);
+  flex-shrink: 0;
+}
+.pulse.pulseOn {
+  background: var(--q-success);
+  animation: q-session-pulse 1.6s var(--q-ease-in-out) infinite;
+}
+@keyframes q-session-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse.pulseOn { animation: none; }
+}

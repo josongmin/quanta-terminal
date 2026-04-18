@@ -1,0 +1,25 @@
+{
+  "scenario": "healthy_session",
+  "description": "A clean, well-formed commit sequence for one session.",
+  "sessions": [
+    {
+      "name": "session-a",
+      "records": [
+        { "seq": 1, "payload": "BlockCreated" },
+        { "seq": 2, "payload": "BlockStarted" },
+        { "seq": 3, "payload": "OutputChunk", "bytes_b64": "aGVsbG8=" },
+        { "seq": 4, "payload": "BlockCompleted", "exit_code": 0 }
+      ]
+    }
+  ],
+  "expected": {
+    "total_records": 4,
+    "payload_kinds_in_order": [
+      "block_created",
+      "block_started",
+      "output_chunk",
+      "block_completed"
+    ],
+    "expect_error": null
+  }
+}

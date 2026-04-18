@@ -1,0 +1,26 @@
+{
+  "scenario": "cross_segment",
+  "description": "Two segments for distinct sessions; replay_all reads both. Replay per session stays scoped.",
+  "sessions": [
+    {
+      "name": "session-a",
+      "records": [
+        { "seq": 1, "payload": "BlockCreated" },
+        { "seq": 2, "payload": "BlockStarted" }
+      ]
+    },
+    {
+      "name": "session-b",
+      "records": [
+        { "seq": 1, "payload": "BlockCreated" },
+        { "seq": 2, "payload": "BlockStarted" },
+        { "seq": 3, "payload": "BlockCompleted", "exit_code": 0 }
+      ]
+    }
+  ],
+  "expected": {
+    "replay_all_total": 5,
+    "session_a_total": 2,
+    "session_b_total": 3
+  }
+}

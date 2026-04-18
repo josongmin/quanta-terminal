@@ -1,0 +1,28 @@
+/* BannerHost — holds the single active banner. A slide-down + fade using
+   --q-ease-standard (the "Warp curve") gives the banner a tactile arrival
+   without bouncing. */
+
+.host {
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.slide {
+  min-height: var(--q-banner-height);
+  animation: q-banner-slide var(--q-dur-med) var(--q-ease-standard);
+}
+
+@keyframes q-banner-slide {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide { animation: none; }
+}

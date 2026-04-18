@@ -1,0 +1,149 @@
+name: CI
+
+# Run on PRs against any branch and on direct pushes to main. Tag/release
+# pipelines live elsewhere so this workflow stays a pure correctness gate.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel redundant runs on the same ref so a fast-moving PR does not queue
+# a backlog of stale checks. Each unique head ref gets its own group.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Keep pnpm's store pinned so the setup-node cache key is stable.
+  PNPM_VERSION: '9.12.0'
+
+jobs:
+  fmt:
+    name: fmt (cargo fmt + prettier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: prettier --check
+        run: pnpm run format:check
+
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ matrix.os }}
+
+      - name: cargo build --workspace
+        run: cargo build --workspace --locked
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  check-hex-imports:
+    name: check-hex-imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu-latest
+          save-if: 'false'
+
+      - name: Run check-hex-imports
+        run: cargo run --quiet -p check-hex-imports -- --root .
+
+  ts:
+    name: ts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm -r typecheck
+        run: pnpm -r --if-present typecheck
+
+      - name: pnpm -r lint
+        run: pnpm -r --if-present lint
+
+      - name: pnpm -r test
+        run: pnpm -r --if-present test
+
+  check-fsd-layers:
+    name: check-fsd-layers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run check-fsd-layers
+        run: node tools/check-fsd-layers.mjs

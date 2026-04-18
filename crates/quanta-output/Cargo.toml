@@ -1,0 +1,14 @@
+[package]
+name = "quanta-output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — output span storage domain."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }

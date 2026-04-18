@@ -1,0 +1,16 @@
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 5px;
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--q-fg-muted);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-bottom-width: 2px;
+  border-radius: var(--q-radius-sm);
+  user-select: none;
+}

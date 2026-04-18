@@ -1,0 +1,31 @@
+/* Spinner — thin arc that rotates. Border on three sides creates the arc
+   cheaply without SVG. --q-dur-slow paired with a single keyframe means
+   reduced-motion users see a static ring. */
+
+.spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.size-sm { width: 12px; height: 12px; }
+.size-md { width: 16px; height: 16px; }
+
+.ring {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid var(--q-border-strong);
+  border-top-color: var(--q-accent);
+  animation: q-spin 800ms linear infinite;
+}
+
+@keyframes q-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring { animation: none; }
+}

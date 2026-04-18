@@ -1,0 +1,32 @@
+/* TerminalShell — xterm.js host surface. Occupies all remaining vertical
+   space between the title bar and the status bar. */
+
+.wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  background: var(--q-bg-terminal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--q-space-3) var(--q-space-4) var(--q-space-1) var(--q-space-4);
+  position: relative;
+  transition: box-shadow var(--q-dur-fast) var(--q-ease-out);
+}
+
+.focused {
+  box-shadow: var(--q-shadow-focus-inset);
+}
+
+/* A thin, confident cursor. xterm.js already renders its own; this rule sets
+   a cue on the container when the terminal has focus. */
+.surface:focus-within {
+  box-shadow: var(--q-shadow-focus-inset);
+}

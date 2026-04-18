@@ -1,0 +1,14 @@
+.wrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: 13px;
+}
+
+.label {
+  color: var(--q-fg-muted);
+}

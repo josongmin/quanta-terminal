@@ -1,0 +1,57 @@
+/* Button — minimal, precise. Ghost default; solid for primary affordances. */
+
+.button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px;
+  height: 24px;
+  border-radius: var(--q-radius-sm);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--q-fg);
+  background: transparent;
+  border: 1px solid var(--q-border-strong);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--q-border-focus);
+}
+
+.button:disabled {
+  color: var(--q-fg-faint);
+  border-color: var(--q-border-subtle);
+  cursor: not-allowed;
+}
+
+.variant-primary {
+  background: var(--q-accent);
+  color: var(--q-fg-on-accent);
+  border-color: var(--q-accent);
+}
+.variant-primary:hover:not(:disabled) {
+  background: #7FB4FF;
+  border-color: #7FB4FF;
+  color: var(--q-fg-on-accent);
+}
+
+.variant-ghost {
+  border-color: transparent;
+  color: var(--q-fg-muted);
+}
+.variant-ghost:hover:not(:disabled) {
+  color: var(--q-fg);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+}

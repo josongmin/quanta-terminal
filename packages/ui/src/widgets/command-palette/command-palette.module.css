@@ -1,0 +1,158 @@
+/* CommandPalette — centered modal at 680px wide with backdrop blur.
+   Everything inside obeys the motion tokens; no magic numbers in the JSX. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: var(--q-overlay-bg);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 100;
+  animation: q-palette-backdrop-in var(--q-dur-fast) var(--q-ease-out);
+}
+
+.panel {
+  width: 100%;
+  max-width: var(--q-palette-width);
+  background: color-mix(in srgb, var(--q-bg-elev-2) 90%, transparent);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-palette-radius);
+  box-shadow: var(--q-shadow-overlay);
+  overflow: hidden;
+  transform-origin: center top;
+  animation: q-palette-panel-in var(--q-dur-med) var(--q-ease-standard);
+}
+
+@keyframes q-palette-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes q-palette-panel-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .backdrop, .panel { animation: none; }
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+
+.inputIcon {
+  color: var(--q-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  user-select: none;
+}
+
+.input {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--q-fg);
+  font-family: var(--q-font-sans);
+  font-size: 15px;
+  line-height: 1.3;
+  caret-color: var(--q-accent);
+}
+.input::placeholder { color: var(--q-fg-muted); }
+
+.results {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.section { padding: 4px 0; }
+
+.sectionHeader {
+  padding: 6px 16px 4px 16px;
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.sectionList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  height: 48px;
+  padding: 0 16px;
+  cursor: pointer;
+  color: var(--q-fg);
+  border-left: 2px solid transparent;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.row:hover,
+.rowActive {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: var(--q-accent);
+}
+
+.rowMain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rowLabel {
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  font-weight: 500;
+  color: var(--q-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowDescription {
+  font-family: var(--q-font-sans);
+  font-size: 12px;
+  color: var(--q-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.rowHint {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+}

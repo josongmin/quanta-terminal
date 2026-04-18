@@ -1,0 +1,18 @@
+{
+  "scenario": "corrupted_checksum",
+  "description": "A single record's payload byte is flipped after the checksum is computed. Replay must surface a checksum error.",
+  "sessions": [
+    {
+      "name": "session-a",
+      "records": [
+        { "seq": 1, "payload": "BlockCreated" },
+        { "seq": 2, "payload": "BlockStarted" }
+      ]
+    }
+  ],
+  "mutation": { "kind": "flip_payload_byte_of_record", "record_index": 1 },
+  "expected": {
+    "expect_error": "ChecksumMismatch",
+    "note": "the reader aborts on the bad record per ADR 0011; future hardening may shift this to skip+report"
+  }
+}

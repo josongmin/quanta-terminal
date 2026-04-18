@@ -1,0 +1,8 @@
+# CODEOWNERS — single-owner stub for Phase 1.
+# When the team grows, split this file by domain (quanta-pty/, quanta-block/,
+# packages/ui/src/widgets/composer/, etc.) so reviews route automatically.
+#
+# Format: <path pattern> <owner>
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/about-codeowners
+
+*   @quanta-terminal/maintainers

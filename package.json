@@ -1,0 +1,27 @@
+{
+  "name": "quanta-terminal",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Quanta Terminal — Tauri desktop + VS Code extension sharing a Rust engine",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.10.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @quanta/host-tauri dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
+    "check:layering": "node tools/check-fsd-layers.mjs",
+    "check:layering:selftest": "node tools/__tests__/check-fsd-layers.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.11",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.2"
+  }
+}

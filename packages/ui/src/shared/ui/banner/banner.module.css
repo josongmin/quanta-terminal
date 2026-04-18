@@ -1,0 +1,57 @@
+/* Banner — one-line session/block strip per ADR 0010. Never stacked, never
+   more than one line. Always has a primary action and a dismiss action. */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--q-space-4);
+  font-size: var(--q-font-size-sm);
+  font-family: var(--q-font-sans);
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+
+.text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.action {
+  flex: 0 0 auto;
+}
+
+.dismiss {
+  flex: 0 0 auto;
+  appearance: none;
+  background: transparent;
+  color: var(--q-fg-muted);
+  border: none;
+  padding: 4px 6px;
+  border-radius: var(--q-radius-sm);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--q-dur-fast) var(--q-ease-out),
+    background var(--q-dur-fast) var(--q-ease-out);
+}
+.dismiss:hover {
+  color: var(--q-fg);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.kind-warning {
+  border-left: 2px solid var(--q-warning);
+}
+.kind-danger {
+  border-left: 2px solid var(--q-danger);
+}
+.kind-info {
+  border-left: 2px solid var(--q-accent);
+}

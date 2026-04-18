@@ -1,0 +1,48 @@
+[package]
+name = "quanta-host-tauri"
+version = "0.1.0"
+edition = "2021"
+description = "Quanta Terminal — Tauri desktop host (Mode B per ADR 0001)"
+license = "Apache-2.0 OR MIT"
+
+# This crate intentionally lives outside the root Cargo workspace: it depends
+# on Tauri which has its own build constraints and a much larger dep graph,
+# and we do not want normal `cargo test` in the root workspace to compile it.
+[workspace]
+
+[lib]
+name = "quanta_host_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = ["macos-private-api"] }
+tauri-plugin-shell = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+parking_lot = "0.12"
+
+# Phase-1 dev stub only — remove when the real `quanta-core` sidecar ships
+# per ADR 0001 / ADR 0004. The `embedded-shell` feature gates this path.
+portable-pty = { version = "0.8", optional = true }
+bytes = { version = "1", optional = true }
+
+[features]
+# Default enables the embedded dev shell so `pnpm dev` works end-to-end before
+# the real engine binary is wired in. Disable this feature once the sidecar is
+# available.
+default = ["embedded-shell"]
+embedded-shell = ["dep:portable-pty", "dep:bytes"]
+
+[[bin]]
+name = "quanta-host-tauri"
+path = "src/main.rs"

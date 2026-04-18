@@ -1,0 +1,25 @@
+[package]
+name = "quanta-block"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — block aggregate, state machine, boundary detection."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }
+# `vte` is used only by `src/adapters/boundary.rs`. Per ADR 0014 the domain
+# layer does not touch it; `src/domain/boundary.rs` only declares value types
+# and the sink trait, and `src/ports/boundary.rs` declares the trait.
+vte = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+insta = { workspace = true }

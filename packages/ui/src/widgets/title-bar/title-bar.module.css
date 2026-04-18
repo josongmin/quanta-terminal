@@ -1,0 +1,86 @@
+/* TitleBar — frameless macOS chrome.
+   The 72px cutout matches the three-button row + system margin so Tauri's
+   native buttons align flush. The rest of the row is a drag handle. */
+
+.bar {
+  display: grid;
+  grid-template-columns: 72px auto 1fr auto;
+  align-items: center;
+  height: var(--q-titlebar-height);
+  background: var(--q-bg-titlebar);
+  border-bottom: 1px solid var(--q-border-subtle);
+  user-select: none;
+  position: relative;
+  z-index: 2;
+}
+
+.trafficCutout {
+  grid-column: 1;
+  height: 100%;
+}
+
+.left {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--q-space-3);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  letter-spacing: 0.02em;
+  min-width: 0;
+}
+
+.brand {
+  color: var(--q-fg);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.sep {
+  color: var(--q-fg-faint);
+}
+
+.subtle {
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+.center {
+  grid-column: 3;
+  height: 100%;
+}
+
+.right {
+  grid-column: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  padding: 0 var(--q-space-3);
+}
+
+.paletteHint {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--q-radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+.paletteHint:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--q-border-subtle);
+}

@@ -1,0 +1,29 @@
+[package]
+name = "quanta-events"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — append-only event log, replay, dedupe."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+zstd = { workspace = true }
+xxhash-rust = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+insta = { workspace = true }
+quanta-block = { path = "../quanta-block" }

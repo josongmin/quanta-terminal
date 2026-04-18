@@ -1,0 +1,8 @@
+[
+  { "kind": "prompt_start" },
+  { "kind": "command_start" },
+  { "kind": "output_start" },
+  { "kind": "alt_screen_entered" },
+  { "kind": "alt_screen_exited" },
+  { "kind": "command_done", "exit_code": 0 }
+]

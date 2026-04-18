@@ -1,0 +1,130 @@
+/*
+ * Quanta Terminal — Design Tokens (Phase 1).
+ *
+ * One polished dark theme. Every visual surface reads from these variables so
+ * the xterm.js theme, React chrome, and badges share one palette.
+ *
+ * Palette is an OLED-friendly near-black with a modernized-One-Dark terminal
+ * color ramp. Values tuned for high readability and strong green/yellow/red
+ * separation in diff/error output.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* --- surface --- */
+  --q-bg:              #0B0C10;   /* app background */
+  --q-bg-elev-1:       #111218;   /* status bar, subtle elevation */
+  --q-bg-elev-2:       #171922;   /* tooltip, banner, overlay */
+  --q-bg-terminal:     #0B0C10;   /* xterm background mirrors app bg */
+  --q-bg-titlebar:     #0A0B10;
+
+  /* --- border / divider --- */
+  --q-border-subtle:   #1F222B;
+  --q-border-strong:   #2B2F3C;
+  --q-border-focus:    #5EA0FF;
+
+  /* --- text ---
+     Contrast check (WCAG AA body text, ratio against --q-bg #0B0C10):
+       --q-fg         #E6E8EE  → 13.8:1  (AAA for body, AAA for large)
+       --q-fg-muted   #A6ACBA  → 8.7:1   (AAA for body)   [was #9AA0AE, 7.2:1]
+       --q-fg-faint   #747B8D  → 5.0:1   (AA  for body)   [was #5A6070, 3.4:1 — below AA]
+     The faint tone was tightened so tertiary text (shortcut hints, shell
+     label in status bar, placeholder in composer) still clears AA. */
+  --q-fg:              #E6E8EE;
+  --q-fg-muted:        #A6ACBA;
+  --q-fg-faint:        #747B8D;
+  --q-fg-on-accent:    #0B0C10;
+
+  /* --- semantic accents --- */
+  --q-accent:          #5EA0FF;
+  --q-success:         #6EE7B7;
+  --q-warning:         #F5C451;
+  --q-danger:          #FF6B6B;
+
+  /* --- terminal ANSI palette (Snazzy-inspired, retuned) --- */
+  --q-ansi-black:       #0B0C10;
+  --q-ansi-red:         #FF5C57;
+  --q-ansi-green:       #5AF78E;
+  --q-ansi-yellow:      #F3F99D;
+  --q-ansi-blue:        #57C7FF;
+  --q-ansi-magenta:     #FF6AC1;
+  --q-ansi-cyan:        #9AEDFE;
+  --q-ansi-white:       #E6E8EE;
+  --q-ansi-bright-black:   #4E5263;
+  --q-ansi-bright-red:     #FF6E67;
+  --q-ansi-bright-green:   #5AF78E;
+  --q-ansi-bright-yellow:  #F3F99D;
+  --q-ansi-bright-blue:    #71D1FF;
+  --q-ansi-bright-magenta: #FF92D0;
+  --q-ansi-bright-cyan:    #B4F9FF;
+  --q-ansi-bright-white:   #FFFFFF;
+
+  /* --- terminal surface tokens (consumed by xterm theme) --- */
+  --q-term-cursor:          #7FB4FF;
+  --q-term-cursor-accent:   #0B0C10;
+  --q-term-selection:       rgba(94, 160, 255, 0.28);
+
+  /* --- typography --- */
+  --q-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', 'Consolas', monospace;
+  --q-font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  --q-font-size-term: 13px;
+  --q-font-size-sm:   12px;
+  --q-font-size-md:   13px;
+  --q-font-size-lg:   15px;
+  --q-line-height-term: 1.5;
+  --q-letter-spacing-term: 0;
+
+  /* --- spacing scale (4px grid) --- */
+  --q-space-1:  4px;
+  --q-space-2:  8px;
+  --q-space-3: 12px;
+  --q-space-4: 16px;
+  --q-space-5: 20px;
+  --q-space-6: 24px;
+
+  /* --- radius --- */
+  --q-radius-sm: 3px;
+  --q-radius-md: 6px;
+  --q-radius-lg: 10px;
+
+  /* --- motion ---
+     All hover transitions use --q-dur-fast; layout/overlay transitions use
+     --q-dur-med. The banner slide uses --q-ease-standard (the "Warp curve"). */
+  --q-dur-fast: 120ms;
+  --q-dur-med:  180ms;
+  --q-dur-slow: 240ms;
+  --q-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --q-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --q-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* --- chrome / layout --- */
+  --q-titlebar-height: 36px;
+  --q-statusbar-height: 28px;
+  --q-composer-height: auto;   /* grows with input; min-height lives in css */
+  --q-composer-min-height: 52px;
+  --q-banner-height: 36px;
+
+  /* --- overlay / palette --- */
+  --q-palette-width: 680px;
+  --q-palette-radius: 18px;
+  --q-overlay-bg: rgba(4, 6, 10, 0.55);
+
+  /* --- shadows (restrained) --- */
+  --q-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --q-shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --q-shadow-focus-inset: inset 0 1px 0 rgba(94, 160, 255, 0.35);
+  --q-shadow-focus-ring: 0 0 0 1px rgba(94, 160, 255, 0.55), 0 0 0 4px rgba(94, 160, 255, 0.12);
+}
+
+/* Respect users who prefer reduced motion: disable transitions/animations.
+   Only a few motion tokens reduce to 1ms; this avoids the jump that comes
+   from setting transition: none everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --q-dur-fast: 1ms;
+    --q-dur-med: 1ms;
+    --q-dur-slow: 1ms;
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "code": "E0425",
+    "message": "cannot find value `foo` in this scope",
+    "path": "src/main.rs",
+    "line": 3,
+    "column": 5
+  }
+]

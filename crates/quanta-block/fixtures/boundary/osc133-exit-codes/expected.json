@@ -1,0 +1,6 @@
+[
+  { "kind": "prompt_start" },
+  { "kind": "command_start" },
+  { "kind": "output_start" },
+  { "kind": "command_done", "exit_code": 1 }
+]

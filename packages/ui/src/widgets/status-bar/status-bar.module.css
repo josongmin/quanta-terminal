@@ -1,0 +1,80 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  height: var(--q-statusbar-height);
+  padding: 0 var(--q-space-4);
+  background: var(--q-bg-elev-1);
+  border-top: 1px solid var(--q-border-subtle);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.grow { flex: 1 1 auto; }
+
+.cwd {
+  font-family: var(--q-font-mono);
+  font-size: 12px;
+  color: var(--q-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60vw;
+}
+
+.shell {
+  font-family: var(--q-font-mono);
+  font-size: 12px;
+  color: var(--q-fg-muted);
+}
+
+.health {
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--q-fg-muted);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--q-success);
+  display: inline-block;
+  margin-right: 6px;
+  transition: background var(--q-dur-fast) var(--q-ease-out);
+}
+.dot.dotReady { background: var(--q-success); }
+.dot.dotBooting { background: var(--q-warning); }
+.dot.dotExited { background: var(--q-fg-faint); }
+.dot.dotError  { background: var(--q-danger); }
+
+/* Pulse ring: a peer halo around the dot. Using box-shadow rather than a
+   separate element so the existing JSX stays clean; the animation is
+   reduced-motion-aware via tokens. */
+.dot.dotPulse {
+  box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.6);
+  animation: q-dot-pulse 1.8s var(--q-ease-in-out) infinite;
+}
+@keyframes q-dot-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(110, 231, 183, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(110, 231, 183, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(110, 231, 183, 0);   }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.dotPulse { animation: none; }
+}
+
+.kbdHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
