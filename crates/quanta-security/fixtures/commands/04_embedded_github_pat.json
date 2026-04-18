@@ -1,0 +1,6 @@
+{
+  "description": "Well-known GitHub PAT embedded in a command argument.",
+  "command": "gh auth login --with-token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+  "expected_classes": ["well_known_token"],
+  "forbidden_substring": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+}

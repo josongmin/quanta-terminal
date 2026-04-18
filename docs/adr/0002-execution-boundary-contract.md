@@ -82,3 +82,8 @@ Add to the block schema:
 - Compound command rerun always re-runs the full compound. Users asking for partial rerun are told to edit and resubmit.
 - Background-job rerun re-issues the original command; it does not try to rebuild the child's state.
 - Fixture corpus for boundary tests must include: compound, heredoc, subshell, background, Ctrl+C, TUI entry, shell rc echoing.
+
+## Verification
+
+- `crates/quanta-block/tests/boundary_corpus.rs` — fixture-driven boundary detection.
+- `tools/check-adr-compliance` ADR-0002 row.

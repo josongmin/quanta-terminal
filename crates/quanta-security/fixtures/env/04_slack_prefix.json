@@ -1,0 +1,8 @@
+{
+  "description": "SLACK_ prefix catches any Slack-vendor variable.",
+  "key": "SLACK_BOT_TOKEN",
+  "value": "xoxb-1234-5678-abcdef",
+  "expected": [
+    { "class": "env_key_secret", "rule_id": "env_key_denylist" }
+  ]
+}

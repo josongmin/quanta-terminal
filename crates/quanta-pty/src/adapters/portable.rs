@@ -10,6 +10,16 @@
 //!
 //! This lets reads and writes proceed concurrently at the adapter level
 //! without requiring changes to the `PtyHandle` port surface.
+//!
+//! # Panic policy
+//!
+//! The adapter's `std::sync::Mutex` `lock().expect(...)` calls exist in the
+//! blocking closures passed to `spawn_blocking`. The only way they can fail
+//! is mutex poisoning, which happens when a prior lock holder panicked while
+//! the lock was held. Because none of our blocking closures panic
+//! intentionally, a poisoned mutex means the PTY state is already in an
+//! unknown partial state — propagating the panic is the correct outcome
+//! under ADR 0004 (release profile aborts, supervisor restarts).
 
 use std::io::{Read, Write};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
@@ -148,6 +158,12 @@ fn reader_thread(mut reader: Box<dyn Read + Send>, tx: &SyncSender<ReadMsg>) {
     }
 }
 
+/// Concrete [`PtyHandle`] implementation backed by [`portable_pty`].
+///
+/// Owns the master fd, the writer half, the child process, and the receiver
+/// end of the dedicated reader thread. Dropping the handle drops the
+/// receiver, which in turn closes the reader thread's tx and triggers its
+/// shutdown via the `send` error path.
 pub struct PortablePtyHandle {
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
@@ -183,7 +199,9 @@ impl PtyHandle for PortablePtyHandle {
         // when bytes arrive — it does NOT hold any lock across an indefinite
         // PTY syscall. Bytes are already in memory in the channel.
         let msg = tokio::task::spawn_blocking(move || -> Result<ReadMsg, PtyError> {
-            let guard = rx_arc.lock().expect("read_rx poisoned");
+            let guard = rx_arc
+                .lock()
+                .expect("pty adapter mutex poisoned (prior task panicked; state unrecoverable)");
             let Some(rx) = guard.as_ref() else {
                 return Err(PtyError::Closed);
             };
@@ -245,7 +263,9 @@ impl PtyHandle for PortablePtyHandle {
         let writer = self.writer.clone();
         let owned = data.to_vec();
         tokio::task::spawn_blocking(move || -> Result<(), PtyError> {
-            let mut guard = writer.lock().expect("writer poisoned");
+            let mut guard = writer
+                .lock()
+                .expect("pty adapter mutex poisoned (prior task panicked; state unrecoverable)");
             let Some(w) = guard.as_mut() else {
                 return Err(PtyError::Closed);
             };
@@ -262,7 +282,9 @@ impl PtyHandle for PortablePtyHandle {
     async fn resize(&mut self, size: PtySize) -> Result<(), PtyError> {
         let master = self.master.clone();
         tokio::task::spawn_blocking(move || -> Result<(), PtyError> {
-            let guard = master.lock().expect("master poisoned");
+            let guard = master
+                .lock()
+                .expect("pty adapter mutex poisoned (prior task panicked; state unrecoverable)");
             let Some(m) = guard.as_ref() else {
                 return Err(PtyError::Closed);
             };
@@ -282,7 +304,9 @@ impl PtyHandle for PortablePtyHandle {
     async fn wait(&mut self) -> Result<PtyExit, PtyError> {
         let child = self.child.clone();
         let status = tokio::task::spawn_blocking(move || -> Result<PtyExit, PtyError> {
-            let mut guard = child.lock().expect("child poisoned");
+            let mut guard = child
+                .lock()
+                .expect("pty adapter mutex poisoned (prior task panicked; state unrecoverable)");
             let Some(mut c) = guard.take() else {
                 return Err(PtyError::Closed);
             };
@@ -305,7 +329,9 @@ impl PtyHandle for PortablePtyHandle {
     async fn kill(&mut self) -> Result<(), PtyError> {
         let child = self.child.clone();
         tokio::task::spawn_blocking(move || -> Result<(), PtyError> {
-            let mut guard = child.lock().expect("child poisoned");
+            let mut guard = child
+                .lock()
+                .expect("pty adapter mutex poisoned (prior task panicked; state unrecoverable)");
             let Some(c) = guard.as_mut() else {
                 return Ok(());
             };

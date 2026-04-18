@@ -49,9 +49,7 @@ describe('<CommandPalette />', () => {
   it('runs the active row on Enter', () => {
     const onRun = vi.fn();
     const onClose = vi.fn();
-    render(
-      <CommandPalette open onClose={onClose} commands={FIXTURE} onRun={onRun} />,
-    );
+    render(<CommandPalette open onClose={onClose} commands={FIXTURE} onRun={onRun} />);
     const dialog = screen.getByRole('dialog');
     fireEvent.keyDown(dialog, { key: 'Enter' });
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ id: 'sessions.new' }));
@@ -90,5 +88,33 @@ describe('<CommandPalette />', () => {
     });
     expect(dialog.contains(document.activeElement)).toBe(true);
     document.body.removeChild(outer);
+  });
+
+  it('aria-activedescendant points at the active row and updates with ArrowDown', () => {
+    render(<CommandPalette open onClose={() => undefined} commands={FIXTURE} />);
+    const input = screen.getByLabelText('Search commands') as HTMLInputElement;
+    // On open the first row is active.
+    expect(input.getAttribute('aria-activedescendant')).toBe('quanta-palette-opt-sessions.new');
+    const dialog = screen.getByRole('dialog');
+    act(() => {
+      fireEvent.keyDown(dialog, { key: 'ArrowDown' });
+    });
+    expect(input.getAttribute('aria-activedescendant')).toBe('quanta-palette-opt-sessions.close');
+  });
+
+  it('returns focus to the previously active element on close', () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'trigger';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const { rerender } = render(
+      <CommandPalette open onClose={() => undefined} commands={FIXTURE} />,
+    );
+    // Palette opened: focus now in the search input.
+    expect(document.activeElement).not.toBe(trigger);
+    rerender(<CommandPalette open={false} onClose={() => undefined} commands={FIXTURE} />);
+    // After close the palette restores focus to the previous element.
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
   });
 });

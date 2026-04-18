@@ -1,0 +1,6 @@
+{
+  "description": "Inline env-assignment prefix on a command.",
+  "command": "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG ./deploy",
+  "expected_classes": ["env_key_secret"],
+  "forbidden_substring": "wJalrXUtnFEMI/K7MDENG"
+}

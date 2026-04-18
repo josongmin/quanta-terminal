@@ -1,0 +1,5 @@
+{
+  "description": "Anthropic API key (sk-ant- prefix).",
+  "output": "export ANTHROPIC_API_KEY=sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_rule_ids": ["anthropic_api_key"]
+}

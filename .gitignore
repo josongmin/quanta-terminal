@@ -1,41 +1,132 @@
-# Rust
-/target
+# -----------------------------------------------------------------------------
+# Rust (workspace + every nested crate / Tauri)
+# -----------------------------------------------------------------------------
+**/target/
 **/*.rs.bk
+**/*.rlib
+**/*.prof*
+**/*.pdb
+**/incremental/
+**/.cargo/
+!**/.cargo/config.toml
+!**/.cargo/config
 Cargo.lock.backup
+# `grcov`, `llvm-cov` (often written next to `lcov.info`)
+**/lcov.info
+/html/
 
-# Node
+# -----------------------------------------------------------------------------
+# Node / pnpm (monorepo)
+# -----------------------------------------------------------------------------
 node_modules/
 .pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Bundlers & frameworks
 dist/
 dist-ssr/
-.turbo/
+build/
+out/
 .next/
+.nuxt/
+.svelte-kit/
 .vite/
+.turbo/
+.parcel-cache/
+.cache/
+.eslintcache
+.stylelintcache
+.rpt2_cache/
 *.tsbuildinfo
+tsconfig.tsbuildinfo
 
+# Test / coverage
+coverage/
+.nyc_output/
+vitest.config.*.timestamp-*
+
+# -----------------------------------------------------------------------------
 # Tauri
+# -----------------------------------------------------------------------------
 /packages/host-tauri/src-tauri/target/
 /packages/host-tauri/src-tauri/gen/
 /packages/host-tauri/src-tauri/WixTools/
 
-# OS
-.DS_Store
-Thumbs.db
+# -----------------------------------------------------------------------------
+# Secrets & local env (never commit)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa
+id_ed25519
+*.pem.pub
+secrets/
+.secrets/
 
-# Editor
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# -----------------------------------------------------------------------------
+# Editors & tooling
+# -----------------------------------------------------------------------------
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json.example
 .idea/
+*.iml
 *.swp
 *.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-*
 
-# Local dev
-.env
-.env.local
+# Cursor — ignore local state; keep shared rules if present
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+# direnv
+.direnv/
+.envrc
+
+# -----------------------------------------------------------------------------
+# Logs & temp
+# -----------------------------------------------------------------------------
 *.log
-coverage/
-.nyc_output/
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
 
-# Quanta runtime data (developer local profile)
+# -----------------------------------------------------------------------------
+# Quanta — local developer profile / runtime
+# -----------------------------------------------------------------------------
 /.quanta-dev-profile/

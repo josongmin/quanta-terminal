@@ -1,0 +1,6 @@
+{
+  "description": "PATH is benign — the detector MUST NOT fire.",
+  "key": "PATH",
+  "value": "/usr/local/bin:/usr/bin",
+  "expected": []
+}

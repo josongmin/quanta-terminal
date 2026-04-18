@@ -1,0 +1,6 @@
+{
+  "description": "-p 22 is a port, NOT a password. Detector must not over-redact.",
+  "command": "ssh -p 22 user@example.com",
+  "expected_classes": [],
+  "forbidden_substring": null
+}

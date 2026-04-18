@@ -28,14 +28,13 @@ quanta-lifecycle = { path = "../quanta-lifecycle" }
 quanta-session = { path = "../quanta-session" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-base64 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
+base64 = { workspace = true }

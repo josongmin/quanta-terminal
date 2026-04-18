@@ -130,7 +130,21 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       return;
     }
     if (isEventOfKind(event, 'pty_exit')) {
-      useSessionStore.getState().markExited(event.exitCode);
+      // A signal-caused exit (`exitCode === null && signal !== null`) is a
+      // crash from the user's point of view. Surface it as `error` health so
+      // the banner detector raises the crash banner — otherwise the exit
+      // would look clean (exit code 0) and the user would see no warning.
+      const isCrash =
+        (event.exitCode === null && event.signal !== null) ||
+        (event.exitCode !== null && event.exitCode > 128);
+      if (isCrash) {
+        useSessionStore.getState().setSession({
+          health: 'error',
+          exitCode: event.exitCode,
+        });
+      } else {
+        useSessionStore.getState().markExited(event.exitCode);
+      }
       return;
     }
     if (isEventOfKind(event, 'session_cwd_changed')) {

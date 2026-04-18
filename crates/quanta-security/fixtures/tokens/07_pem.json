@@ -1,0 +1,5 @@
+{
+  "description": "PEM private key header.",
+  "output": "-----BEGIN RSA PRIVATE KEY-----\nMIICXAIBAAKBgQDk...\n-----END RSA PRIVATE KEY-----",
+  "expected_rule_ids": ["pem_private_key"]
+}

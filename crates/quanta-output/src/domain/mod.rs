@@ -60,6 +60,11 @@ impl OutputStore {
 
     /// Append bytes to a block's output. Returns the outcome describing the
     /// new span. Empty appends are skipped and return `None`.
+    ///
+    /// Saturates the running byte-offset and seq counters on overflow: a
+    /// block that writes more than `u64::MAX` bytes (≈ 16 EiB) would be a
+    /// bug elsewhere, but if we ever hit it we'd rather pin the offset at
+    /// the ceiling than silently wrap and corrupt span bookkeeping.
     pub fn append(
         &mut self,
         block_id: BlockId,
@@ -71,9 +76,13 @@ impl OutputStore {
         }
         let book = self.blocks.entry(block_id).or_default();
         let seq = book.next_seq;
-        book.next_seq += 1;
+        book.next_seq = book.next_seq.saturating_add(1);
         let start = book.next_offset;
-        let end = start + bytes.len() as u64;
+        // `bytes.len()` is a `usize`. On 32- and 64-bit targets widening to
+        // u64 is lossless, but using `try_from` documents the guarantee and
+        // keeps the lint ban on raw `as` casts uniform across the codebase.
+        let len_u64 = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let end = start.saturating_add(len_u64);
         book.next_offset = end;
 
         let span_id = SpanId::new();

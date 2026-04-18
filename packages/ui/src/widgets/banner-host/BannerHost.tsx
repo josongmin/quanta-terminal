@@ -19,14 +19,8 @@ import { useMemo } from 'react';
 
 import { Banner } from '../../shared/ui/banner/index.js';
 import { Button } from '../../shared/ui/button/index.js';
-import {
-  useBannerStore,
-  selectVisibleConditions,
-} from '../../entities/banner/index.js';
-import {
-  pickBannerCondition,
-  type BannerCondition,
-} from '../../shared/lib/banner-precedence.js';
+import { useBannerStore, selectVisibleConditions } from '../../entities/banner/index.js';
+import { pickBannerCondition, type BannerCondition } from '../../shared/lib/banner-precedence.js';
 import type { BannerKind } from '../../shared/ui/banner/index.js';
 import styles from './banner-host.module.css';
 

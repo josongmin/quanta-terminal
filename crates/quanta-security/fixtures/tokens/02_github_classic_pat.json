@@ -1,0 +1,5 @@
+{
+  "description": "GitHub classic PAT in captured output.",
+  "output": "echoed token: ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_rule_ids": ["github_classic_pat"]
+}

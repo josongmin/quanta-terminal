@@ -1,8 +1,9 @@
 //! `ControlRegistry` — implements `quanta_protocol::ControlHandler` by routing
-//! RPC calls into the `Engine` and event fetch into the shared event log.
+//! RPC calls into the `Engine` and event fetch into the shared broadcast
+//! channel fed by `FanoutSink`.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use quanta_proto::envelope::Envelope;
@@ -13,20 +14,25 @@ use quanta_proto::rpc::{
 };
 use quanta_protocol::ControlHandler;
 use quanta_session::{InputSubmission, SessionHandle as _};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
+use tracing::warn;
 
 use super::engine::Engine;
 
-/// The registry holds the engine handle and a small event queue used as the
-/// default event-plane fanout (Phase 1 simply drains the log as events are
-/// appended; a fuller implementation uses pub/sub fanout).
+/// Bounded poll window for `next_event`. The protocol adapter polls at a 5 ms
+/// cadence; we cap our wait on the broadcast receiver at roughly the same
+/// order so we return `None` and let the adapter pick other work up
+/// (shutdown signal, connection close) promptly.
+const NEXT_EVENT_WAIT: Duration = Duration::from_millis(20);
+
+/// The registry binds the engine to the control plane.
+///
+/// `next_event` consumes the broadcast channel fed by `FanoutSink`. A lagged
+/// receiver skips ahead per ADR 0011 at-least-once semantics — the durable
+/// event log remains canonical.
 pub struct ControlRegistry {
     pub engine: Engine,
-    /// Pending events waiting to be drained by the protocol adapter. In Phase 1
-    /// we deliberately leave this empty unless the host explicitly fills it;
-    /// the control plane and the event plane are layered but not yet
-    /// pub-sub-coupled.
-    pub pending: Mutex<VecDeque<Envelope<Event>>>,
+    rx: Mutex<broadcast::Receiver<Envelope<Event>>>,
 }
 
 impl std::fmt::Debug for ControlRegistry {
@@ -36,10 +42,10 @@ impl std::fmt::Debug for ControlRegistry {
 }
 
 impl ControlRegistry {
-    pub fn new(engine: Engine) -> Arc<Self> {
+    pub fn new(engine: Engine, rx: broadcast::Receiver<Envelope<Event>>) -> Arc<Self> {
         Arc::new(Self {
             engine,
-            pending: Mutex::new(VecDeque::new()),
+            rx: Mutex::new(rx),
         })
     }
 }
@@ -150,6 +156,40 @@ impl ControlHandler for ControlRegistry {
     }
 
     async fn next_event(&self) -> Option<Envelope<Event>> {
-        self.pending.lock().await.pop_front()
+        let mut rx = self.rx.lock().await;
+        match tokio::time::timeout(NEXT_EVENT_WAIT, rx.recv()).await {
+            Ok(Ok(env)) => Some(env),
+            Ok(Err(broadcast::error::RecvError::Closed)) => None,
+            Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                warn!(
+                    dropped = n,
+                    "control registry: broadcast subscriber lagged; events replayable via event log"
+                );
+                None
+            }
+            Err(_timeout) => None,
+        }
+    }
+
+    /// Replay events for `session_id` whose `monotonic_seq > since_seq` by
+    /// reading the durable event log. Per ADR 0011, this is the read path
+    /// for the resume cursor. Errors surface empty to the caller — missing
+    /// history is not fatal at the protocol boundary.
+    async fn replay_since(
+        &self,
+        session_id: quanta_proto::ids::SessionId,
+        since_seq: u64,
+    ) -> Vec<Envelope<Event>> {
+        match self.engine.replay_session(session_id).await {
+            Ok(records) => records
+                .into_iter()
+                .map(|r| r.envelope)
+                .filter(|env| env.monotonic_seq > since_seq)
+                .collect(),
+            Err(err) => {
+                warn!(%session_id, ?err, "replay_since: event log read failed; returning empty");
+                Vec::new()
+            }
+        }
     }
 }

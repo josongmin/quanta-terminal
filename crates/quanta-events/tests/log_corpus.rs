@@ -19,7 +19,10 @@ use quanta_proto::ids::{BlockId, SessionId, SpanId};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "deserialized from manifest.json; unused fields document the expected schema"
+)]
 struct Manifest {
     scenario: String,
     #[serde(default)]
@@ -30,7 +33,10 @@ struct Manifest {
 }
 
 #[derive(Deserialize, Debug)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "deserialized from manifest.json; `name` is informational"
+)]
 struct SessionManifest {
     name: String,
     records: Vec<RecordManifest>,
@@ -54,7 +60,10 @@ enum Mutation {
 }
 
 #[derive(Deserialize, Debug, Default)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "deserialized from manifest.json; not all expectations are asserted by every scenario"
+)]
 struct Expected {
     #[serde(default)]
     total_records: Option<usize>,

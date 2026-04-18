@@ -242,3 +242,10 @@ A feature that cannot be added this way is a signal that the layout is wrong for
 - Test organization mirrors the dependency graph, which makes CI partitioning easy.
 - The layout is enforceable. Lint rules and a tiny import-graph script are Phase 1 deliverables, not wishes.
 - This ADR supersedes the crate/package lists in [technical-architecture.md](../technical-architecture.md) §4.1 and §4.2; that document points here.
+
+## Verification
+
+- `tools/check-hex-imports` — backend hex layer enforcement.
+- `tools/check-fsd-layers.mjs` — frontend FSD layer enforcement.
+- `packages/host-common/src/__tests__/schema-parity.test.ts` — Rust ↔ TS schema mirroring.
+- `tools/check-adr-compliance` ADR-0014 row.

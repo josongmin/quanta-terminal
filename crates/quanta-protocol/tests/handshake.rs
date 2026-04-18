@@ -41,6 +41,7 @@ fn compatible_hello_yields_ready() {
         host_protocol_version: ProtocolVersion::CURRENT,
         host_version: "host-0.0.0".into(),
         client_id: "test-client".into(),
+        resume_cursors: std::collections::HashMap::new(),
     };
     // Roundtrip the Hello through the codec (the wire).
     let encoded = encode_control(&ControlMessage::Hello(hello.clone())).unwrap();
@@ -71,6 +72,7 @@ fn incompatible_hello_yields_incompatible_with_reason() {
         },
         host_version: "future-host".into(),
         client_id: "far-future".into(),
+        resume_cursors: std::collections::HashMap::new(),
     };
     let reply = simulate_server_reply(&hello);
     match reply {
@@ -132,6 +134,7 @@ fn decode_tolerates_missing_trailing_newline() {
         host_protocol_version: ProtocolVersion::CURRENT,
         host_version: "h".into(),
         client_id: "c".into(),
+        resume_cursors: std::collections::HashMap::new(),
     });
     let mut bytes = encode_control(&hello).unwrap();
     // Strip the trailing newline and decode; must still parse per

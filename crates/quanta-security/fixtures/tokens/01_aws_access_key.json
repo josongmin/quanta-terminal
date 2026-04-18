@@ -1,0 +1,5 @@
+{
+  "description": "AWS access key id in captured output.",
+  "output": "Creds: AKIAIOSFODNN7EXAMPLE (saved)",
+  "expected_rule_ids": ["aws_access_key"]
+}

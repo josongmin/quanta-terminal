@@ -40,7 +40,7 @@ async fn wait_for_completion(
 async fn spawns_echo_and_completes_block() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = EngineConfig::new(tmp.path().to_path_buf());
-    let engine = Engine::boot(cfg).await.expect("boot engine");
+    let (engine, _evrx) = Engine::boot(cfg).await.expect("boot engine");
 
     // Pick a shell that exists on macOS/Linux CI.
     let shell = if std::path::Path::new("/bin/bash").exists() {

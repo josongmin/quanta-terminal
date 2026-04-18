@@ -16,6 +16,7 @@ quanta-pty = { path = "../quanta-pty" }
 quanta-block = { path = "../quanta-block" }
 quanta-output = { path = "../quanta-output" }
 quanta-events = { path = "../quanta-events" }
+quanta-security = { path = "../quanta-security" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
@@ -25,3 +26,4 @@ base64 = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
+base64 = { workspace = true }

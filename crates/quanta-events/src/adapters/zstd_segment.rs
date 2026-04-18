@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use quanta_proto::envelope::Envelope;
 use quanta_proto::events::Event;
@@ -51,6 +52,21 @@ use crate::ports::{EventLogError, EventLogReader, EventSink};
 /// keep segments small enough for fast replay while still amortizing rotation
 /// overhead. Tunable; ADR 0005 calls this out as a phase 2 knob.
 const SEGMENT_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Absolute ceiling on how many bytes we will slurp from a single segment file
+/// during replay. A file larger than this is treated as corruption (most
+/// likely a malformed or adversarial file, since appenders rotate at
+/// [`SEGMENT_ROTATE_BYTES`]). 256 MiB — 4x the rotation target — accommodates
+/// an in-flight rotation plus a sizable padding for debugging leeway, while
+/// refusing to blindly memory-map gigabytes under an attacker's control.
+const MAX_SEGMENT_READ_BYTES: u64 = 4 * SEGMENT_ROTATE_BYTES;
+
+/// Maximum decompressed payload size accepted during frame decode. Mirrors
+/// the write path's `u32::MAX` ceiling but at a tighter safety bound: the
+/// largest event we reasonably emit is a single output chunk, which is
+/// capped at 8 KiB at the session layer. 16 MiB is generous headroom and
+/// defends decode against a zstd bomb.
+const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Append-only event log rooted at `root`, one subdirectory per session with
 /// numbered segment files.
@@ -146,7 +162,14 @@ impl ZstdSegmentedEventLog {
         let compressed_len_u32 = u32::try_from(compressed.len())
             .map_err(|_| EventLogError::Encode("frame > u32::MAX".into()))?;
 
-        let _guard = self.write_lock.lock().expect("log mutex poisoned");
+        // Poisoning would mean a prior writer panicked while holding the lock.
+        // Under ADR 0004 panic policy (release = abort) we never ship a panic
+        // to the user; propagating here ensures the supervisor restarts with
+        // a known-clean state rather than silently re-entering corrupted IO.
+        let _guard = self
+            .write_lock
+            .lock()
+            .expect("event log write mutex poisoned; prior writer panicked");
         let path = self.active_segment_path(env.session_id)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -169,15 +192,31 @@ impl ZstdSegmentedEventLog {
 
     /// Attempt to decode one frame starting at `offset`. Returns the record and
     /// the next offset on success, or a signal that the tail is torn.
+    ///
+    /// Every index is bounds-checked before use. The slice-to-4-byte
+    /// conversions are defensive: even though the preceding `len()` checks
+    /// guarantee the shape, we avoid `expect`/`unwrap` in favour of explicit
+    /// error reporting so a future refactor cannot accidentally panic the
+    /// reader on malformed input.
     fn decode_one_frame(bytes: &[u8], offset: usize) -> DecodeOne {
-        if bytes.len() - offset < 4 {
+        let Some(remaining) = bytes.len().checked_sub(offset) else {
+            return DecodeOne::TornTail;
+        };
+        if remaining < 4 {
             return DecodeOne::TornTail;
         }
-        let frame_len_u32 =
-            u32::from_be_bytes(bytes[offset..offset + 4].try_into().expect("4-byte slice"));
-        let frame_len = frame_len_u32 as usize;
+        let header = &bytes[offset..offset + 4];
+        let Ok(header_arr) = <[u8; 4]>::try_from(header) else {
+            // unreachable in practice (we just validated len == 4); guard
+            // against future refactors silently breaking the invariant.
+            return DecodeOne::TornTail;
+        };
+        let frame_len = u32::from_be_bytes(header_arr) as usize;
         let body_start = offset + 4;
-        if bytes.len() - body_start < frame_len {
+        let Some(body_remaining) = bytes.len().checked_sub(body_start) else {
+            return DecodeOne::TornTail;
+        };
+        if body_remaining < frame_len {
             return DecodeOne::TornTail;
         }
         let frame = &bytes[body_start..body_start + frame_len];
@@ -190,9 +229,20 @@ impl ZstdSegmentedEventLog {
         if decompressed.len() < 8 {
             return DecodeOne::TornTail;
         }
-        let payload_len =
-            u32::from_be_bytes(decompressed[0..4].try_into().expect("4-byte slice")) as usize;
-        let xx_expected = u32::from_be_bytes(decompressed[4..8].try_into().expect("4-byte slice"));
+        let Ok(len_bytes) = <[u8; 4]>::try_from(&decompressed[0..4]) else {
+            return DecodeOne::TornTail;
+        };
+        let Ok(xx_bytes) = <[u8; 4]>::try_from(&decompressed[4..8]) else {
+            return DecodeOne::TornTail;
+        };
+        let payload_len = u32::from_be_bytes(len_bytes) as usize;
+        let xx_expected = u32::from_be_bytes(xx_bytes);
+        // Cap declared payload size to defend against a zstd-bomb or adversarial
+        // framing that claims a payload exceeding anything the writer would ever
+        // emit. Surfaces as a hard error rather than a truncation.
+        if payload_len > MAX_PAYLOAD_BYTES {
+            return DecodeOne::PayloadTooLarge(payload_len);
+        }
         if decompressed.len() < 8 + payload_len {
             return DecodeOne::TornTail;
         }
@@ -213,14 +263,40 @@ impl ZstdSegmentedEventLog {
     /// Read records from one segment file. Torn tails are truncated in-place
     /// per ADR 0011 §Partial Flush and the caller is notified via the returned
     /// `ReadOutcome::truncated_at_offset` so a recovery event can be emitted.
+    ///
+    /// Refuses to load files larger than [`MAX_SEGMENT_READ_BYTES`]; such a
+    /// file is treated as corruption rather than silently memory-mapped.
     fn read_segment(path: &Path) -> Result<ReadOutcome, EventLogError> {
-        let mut f = match File::open(path) {
+        let f = match File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ReadOutcome::default()),
             Err(e) => return Err(e.into()),
         };
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes).map_err(EventLogError::from)?;
+        // Pre-check file size so a rogue multi-GB file does not induce an
+        // unbounded allocation. `metadata` is cheap and the value may still be
+        // stale vs. the open fd, but any file that grows past this ceiling
+        // during our read is also corrupt by the same rule.
+        let declared_len = f.metadata().map_err(EventLogError::from)?.len();
+        if declared_len > MAX_SEGMENT_READ_BYTES {
+            warn!(
+                ?path,
+                observed = declared_len,
+                limit = MAX_SEGMENT_READ_BYTES,
+                "segment exceeds read ceiling; refusing to replay"
+            );
+            return Err(EventLogError::SegmentTooLarge {
+                observed: declared_len,
+                limit: MAX_SEGMENT_READ_BYTES,
+            });
+        }
+        // Pre-size the buffer so we don't realloc on every 8 KB read.
+        let cap = usize::try_from(declared_len).unwrap_or(0);
+        let mut bytes = Vec::with_capacity(cap);
+        // Hard-cap the reader too: even if the file grew mid-read, refuse to
+        // keep pulling once we cross the ceiling.
+        f.take(MAX_SEGMENT_READ_BYTES)
+            .read_to_end(&mut bytes)
+            .map_err(EventLogError::from)?;
 
         let mut out = Vec::new();
         let mut offset = 0usize;
@@ -235,7 +311,7 @@ impl ZstdSegmentedEventLog {
                     offset = next_offset;
                 }
                 DecodeOne::TornTail => {
-                    truncated_at = Some(offset as u64);
+                    truncated_at = Some(offset_as_u64(offset));
                     break;
                 }
                 DecodeOne::Checksum => {
@@ -243,21 +319,37 @@ impl ZstdSegmentedEventLog {
                     // means bytes survived but the payload is corrupted.
                     // Surface it so callers can decide policy.
                     return Err(EventLogError::ChecksumMismatch {
-                        offset: offset as u64,
+                        offset: offset_as_u64(offset),
                     });
                 }
                 DecodeOne::Decode(e) => return Err(EventLogError::Decode(e)),
+                DecodeOne::PayloadTooLarge(observed) => {
+                    return Err(EventLogError::PayloadTooLarge {
+                        observed,
+                        limit: MAX_PAYLOAD_BYTES,
+                    });
+                }
             }
         }
         // If we observed a torn tail, truncate the segment in place so
         // subsequent appends don't pile onto the broken frame. This is the
         // "recovery" side of ADR 0011 §Partial Flush.
         if let Some(off) = truncated_at {
-            if off < bytes.len() as u64 {
-                if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
-                    let _ = f.seek(SeekFrom::Start(off));
-                    let _ = f.set_len(off);
-                    let _ = f.sync_data();
+            let bytes_len_u64 = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            if off < bytes_len_u64 {
+                match OpenOptions::new().write(true).open(path) {
+                    Ok(mut w) => {
+                        if let Err(err) = w.seek(SeekFrom::Start(off)) {
+                            warn!(?path, ?err, off, "torn-tail seek failed");
+                        } else if let Err(err) = w.set_len(off) {
+                            warn!(?path, ?err, off, "torn-tail truncate failed");
+                        } else if let Err(err) = w.sync_data() {
+                            warn!(?path, ?err, "torn-tail fsync failed");
+                        }
+                    }
+                    Err(err) => {
+                        warn!(?path, ?err, "torn-tail open-for-truncate failed");
+                    }
                 }
             }
         }
@@ -318,6 +410,17 @@ enum DecodeOne {
     Checksum,
     /// Post-checksum decode failure (JSON schema drift, etc.).
     Decode(String),
+    /// Declared payload size exceeds [`MAX_PAYLOAD_BYTES`].
+    PayloadTooLarge(usize),
+}
+
+/// Widen a `usize` file offset to `u64` without any risk of overflow.
+///
+/// This is always sound on 32- and 64-bit targets (usize ≤ u64), but we keep
+/// the helper so lint bans on `as` casts can apply uniformly and the intent is
+/// explicit at each call site.
+fn offset_as_u64(offset: usize) -> u64 {
+    u64::try_from(offset).unwrap_or(u64::MAX)
 }
 
 #[async_trait]

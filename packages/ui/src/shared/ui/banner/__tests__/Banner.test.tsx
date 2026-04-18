@@ -38,9 +38,7 @@ describe('<Banner />', () => {
   });
 
   it('renders an action slot when provided', () => {
-    render(
-      <Banner action={<button>Install</button>}>Install shell integration.</Banner>,
-    );
+    render(<Banner action={<button>Install</button>}>Install shell integration.</Banner>);
     expect(screen.getByRole('button', { name: 'Install' })).toBeInTheDocument();
   });
 });

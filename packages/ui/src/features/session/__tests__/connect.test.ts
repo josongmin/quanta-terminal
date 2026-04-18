@@ -145,9 +145,9 @@ describe('connectSession', () => {
     bridge.spawn = async () => {
       throw new Error('spawn failed');
     };
-    await expect(
-      connectSession({ bridge, cols: 80, rows: 24, onData: () => {} }),
-    ).rejects.toThrow('spawn failed');
+    await expect(connectSession({ bridge, cols: 80, rows: 24, onData: () => {} })).rejects.toThrow(
+      'spawn failed',
+    );
     expect(bridge.listenerCount()).toBe(0);
   });
 
@@ -189,5 +189,81 @@ describe('connectSession', () => {
     bridge.emit(sessionless);
     expect(useSessionStore.getState().cwd).toBe('/etc');
     await conn.close();
+  });
+
+  it('pty_exit with signal-only exit marks session health=error (crash path)', async () => {
+    const bridge = makeBridge({ sessionId: 'sess-1' as SessionId });
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+    bridge.emit({
+      kind: 'pty_exit',
+      sessionId: 'sess-1',
+      exitCode: null,
+      signal: 'SIGSEGV',
+    });
+    const state = useSessionStore.getState();
+    expect(state.health).toBe('error');
+    expect(state.exitCode).toBeNull();
+    await conn.close();
+  });
+
+  it('pty_exit with exit code > 128 marks session health=error (crash path)', async () => {
+    const bridge = makeBridge({ sessionId: 'sess-1' as SessionId });
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+    bridge.emit({
+      kind: 'pty_exit',
+      sessionId: 'sess-1',
+      exitCode: 139, // 128 + SIGSEGV
+      signal: null,
+    });
+    const state = useSessionStore.getState();
+    expect(state.health).toBe('error');
+    expect(state.exitCode).toBe(139);
+    await conn.close();
+  });
+
+  it('pty_exit with clean exit marks session exited (not error)', async () => {
+    const bridge = makeBridge({ sessionId: 'sess-1' as SessionId });
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+    bridge.emit({
+      kind: 'pty_exit',
+      sessionId: 'sess-1',
+      exitCode: 0,
+      signal: null,
+    });
+    const state = useSessionStore.getState();
+    expect(state.health).toBe('exited');
+    expect(state.exitCode).toBe(0);
+    await conn.close();
+  });
+
+  it('close racing a second close is still idempotent (StrictMode-safe)', async () => {
+    const bridge = makeBridge();
+    const closeSpy = vi.spyOn(bridge, 'close');
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+    // Two concurrent close() calls (mirrors StrictMode's double-invoked effect
+    // cleanup). Only ONE bridge.close must be issued.
+    await Promise.all([conn.close(), conn.close()]);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(bridge.listenerCount()).toBe(0);
   });
 });

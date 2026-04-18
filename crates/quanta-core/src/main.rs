@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
         .init();
 
     let args = parse_args();
-    let engine = Engine::boot(EngineConfig {
+    let (engine, event_rx) = Engine::boot(EngineConfig {
         socket_path: args.socket_path.clone(),
         profile_dir: args.profile_dir.clone(),
     })
@@ -29,10 +29,11 @@ async fn main() -> Result<()> {
     .context("boot engine")?;
 
     if let Some(socket_path) = args.socket_path {
-        let handler = ControlRegistry::new(engine.clone());
+        let handler = ControlRegistry::new(engine.clone(), event_rx);
         let server = UnixSocketServer::new(socket_path, handler as Arc<_>);
         server.serve().await.context("serve")?;
     } else {
+        drop(event_rx);
         tracing::info!("no --socket provided; engine idle. (Pass --socket <path> to serve.)");
         // Wait forever so the binary stays up for inspection.
         let _ = tokio::signal::ctrl_c().await;

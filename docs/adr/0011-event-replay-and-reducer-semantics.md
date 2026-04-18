@@ -117,3 +117,9 @@ Some invariants span events (for example, "a block must not emit `completed` bef
 - The replay harness is a Phase 1 deliverable, not a future-work item.
 - The host must track `last_applied_seq` per session durably enough to survive a reload; a small local index next to UI state handles this.
 - Bugs that divulge as "the UI is out of sync" become reproducible by running the replay harness against the user's event log from their support bundle.
+
+## Verification
+
+- `crates/quanta-events/tests/replay_determinism.rs` — writes, rotates, replays; asserts projection equality.
+- `crates/quanta-core/tests/walking_skeleton.rs` — end-to-end boot → run → replay, diffs the projection.
+- `tools/check-adr-compliance` ADR-0011 row.

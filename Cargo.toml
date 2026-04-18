@@ -9,9 +9,13 @@ members = [
     "crates/quanta-protocol",
     "crates/quanta-lifecycle",
     "crates/quanta-session",
+    "crates/quanta-security",
+    "crates/quanta-diagnostic",
     "crates/quanta-core",
     "tools/check-hex-imports",
+    "tools/check-adr-compliance",
     "tools/fixtures-runner",
+    "tests/integration",
 ]
 
 [workspace.package]

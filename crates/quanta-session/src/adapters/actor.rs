@@ -34,18 +34,19 @@ use quanta_events::{EventLogError, EventSink};
 use quanta_output::OutputStore;
 use quanta_proto::envelope::{Envelope, Producer, SchemaVersion};
 use quanta_proto::events::{
-    BlockCompleted, BlockCreated, BlockStarted, BlockTuiEntered, BlockTuiExited,
+    BlockCanceled, BlockCompleted, BlockCreated, BlockStarted, BlockTuiEntered, BlockTuiExited,
     BoundaryConfidence, BoundarySignal, CwdSource, Event, InputSubmitted, OutputChunk,
     OutputStream, SessionCreated, SessionCwdChanged, SessionEndReason, SessionEnded,
     SessionShellIntegrationStatus, ShellIntegrationStatus,
 };
 use quanta_proto::ids::{BlockId, EventId, SessionId};
 use quanta_pty::{PtyHandle, PtyPort, PtySize, PtySpec};
+use quanta_security::{DefaultDetector, SecretDetector};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::domain::{InputSubmission, SessionConfig, SessionSnapshot};
 use crate::ports::{SessionError, SessionHandle};
@@ -114,6 +115,9 @@ pub struct SessionActor {
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     /// Join handles of the three long-running tasks. Awaited on `close`.
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Secret detector used to redact persisted input text (ADR 0006).
+    /// Injected for determinism in tests via [`SessionActor::spawn_with_detector`].
+    detector: Arc<dyn SecretDetector>,
 }
 
 impl std::fmt::Debug for SessionActor {
@@ -143,21 +147,46 @@ enum InputCommand {
 
 impl SessionActor {
     /// Spawn the PTY, emit `SessionCreated`, and launch the read/write tasks.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "inline wiring of 3 tasks + shutdown fanout kept local for locality"
-    )]
+    ///
+    /// Uses [`DefaultDetector`] for secret redaction. Call
+    /// [`SessionActor::spawn_with_detector`] to inject a mock or alternative
+    /// detector (test rigs, sensitivity tuning).
     pub async fn spawn(
         pty_port: Arc<dyn PtyPort>,
         sink: Arc<dyn EventSink>,
         config: SessionConfig,
     ) -> Result<(Self, SessionId), SessionError> {
+        Self::spawn_with_detector(pty_port, sink, config, Arc::new(DefaultDetector::new())).await
+    }
+
+    /// Variant of [`spawn`](Self::spawn) with an explicit detector port.
+    ///
+    /// Required for integration tests that need to inject mock detectors so
+    /// the assertions are deterministic across ruleset bumps. See ADR 0006
+    /// §Detection Placement — the detector runs at the persistence boundary,
+    /// so this is the correct injection point.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "inline wiring of 3 tasks + shutdown fanout kept local for locality"
+    )]
+    pub async fn spawn_with_detector(
+        pty_port: Arc<dyn PtyPort>,
+        sink: Arc<dyn EventSink>,
+        config: SessionConfig,
+        detector: Arc<dyn SecretDetector>,
+    ) -> Result<(Self, SessionId), SessionError> {
         let session_id = SessionId::new();
+        // Launch env is currently empty in Phase 1 per ADR 0003, but we still
+        // pipe it through the denylist. This is the "filter at boundary"
+        // guarantee ADR 0006 §Detection Placement requires: any env we pass
+        // to the PTY is pre-scrubbed by the detector, not by ad-hoc filters.
+        let launch_env: Vec<(String, String)> = Vec::new();
+        let launch_env_filtered = filter_launch_env(launch_env, detector.as_ref());
         let spec = PtySpec {
             program: config.shell.clone(),
             args: config.args.clone(),
             cwd: Some(config.cwd.clone()),
-            env: Vec::new(),
+            env: launch_env_filtered,
             size: PtySize::new(config.cols, config.rows),
         };
         let pty = pty_port.open(spec).await?;
@@ -215,6 +244,7 @@ impl SessionActor {
             session_id,
             shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
             tasks: Arc::new(Mutex::new(Vec::new())),
+            detector,
         };
 
         // Emit SessionCreated through the emitter.
@@ -272,6 +302,12 @@ impl SessionActor {
             tasks.push(shutdown_fanout);
         }
 
+        info!(
+            session_id = %session_id,
+            shell = %config.shell,
+            cwd = ?config.cwd,
+            "session actor spawned"
+        );
         Ok((actor, session_id))
     }
 }
@@ -279,12 +315,23 @@ impl SessionActor {
 #[async_trait]
 impl SessionHandle for SessionActor {
     async fn submit_input(&self, input: InputSubmission) -> Result<Option<BlockId>, SessionError> {
+        // ADR 0006 §Placement of Redaction: command gets redacted representation
+        // on persistence. The raw bytes still go to the PTY — redaction never
+        // alters what the user typed in-memory or the live stream. Here we
+        // redact ONLY the text that flows onto the persisted event envelope.
+        let redactions = self.detector.scan_command(&input.text);
+        let redacted_text = if redactions.is_empty() {
+            input.text.clone()
+        } else {
+            quanta_security::domain::render_display(&input.text, &redactions)
+        };
+
         emit(
             &self.emitter_tx,
             &self.state,
-            Producer::Session,
+            Producer::Input,
             Event::InputSubmitted(InputSubmitted {
-                text: input.text.clone(),
+                text: redacted_text.clone(),
                 input_kind: input.kind,
             }),
         )
@@ -305,7 +352,11 @@ impl SessionHandle for SessionActor {
         let (ordinal, cwd, cwd_source) = {
             let mut st = self.state.lock().await;
             let ord = st.next_ordinal;
-            st.next_ordinal += 1;
+            // Saturate on overflow — a session that minted `u64::MAX` blocks
+            // is astronomically unlikely, but we prefer to freeze the ordinal
+            // at the ceiling over silently wrapping to 0 and confusing
+            // downstream consumers that assume monotonicity.
+            st.next_ordinal = st.next_ordinal.saturating_add(1);
             (ord, st.cwd.clone(), st.cwd_source)
         };
         emit(
@@ -315,7 +366,9 @@ impl SessionHandle for SessionActor {
             Event::BlockCreated(BlockCreated {
                 block_id,
                 ordinal,
-                input_text: input.text.clone(),
+                // BlockCreated.input_text is part of the persisted projection, so
+                // it also carries the redacted form per ADR 0006.
+                input_text: redacted_text.clone(),
                 input_kind: input.kind,
                 cwd,
                 cwd_source,
@@ -339,11 +392,15 @@ impl SessionHandle for SessionActor {
                 block_id,
                 pid: None,
                 ordinal,
+                // Retain raw input in-memory only. Per ADR 0006 §Scope the
+                // raw buffer is user-observable truth; redaction lives at
+                // the persistence boundary, not here.
                 input_text: input.text.clone(),
                 saw_osc133_d: false,
             });
         }
-        // Write command bytes + CR so the shell executes.
+        // Write command bytes + CR so the shell executes. Raw bytes reach the
+        // PTY — redaction is a persistence-layer concern only.
         let mut bytes = input.text.into_bytes();
         bytes.push(b'\n');
         self.input_tx
@@ -362,6 +419,31 @@ impl SessionHandle for SessionActor {
     }
 
     async fn cancel_block(&self, block_id: BlockId) -> Result<(), SessionError> {
+        // Per ADR 0002, cancellation is a terminal state. Emit `BlockCanceled`
+        // eagerly (synchronously from the caller's perspective) so the event
+        // log is authoritative regardless of whether the shell produces a
+        // matching child-exit afterwards. If the shell DOES exit, the reducer
+        // ignores the later `BlockCompleted` because `Canceled` is terminal.
+        //
+        // Only emit when the cancellation targets the currently active block;
+        // a stale `cancel_block(old_id)` is a no-op event-wise but still sends
+        // Ctrl-C to the PTY (the shell will ignore it if the prompt is idle).
+        let is_active = {
+            let st = self.state.lock().await;
+            st.active_block
+                .as_ref()
+                .is_some_and(|b| b.block_id == block_id)
+        };
+        if is_active {
+            emit(
+                &self.emitter_tx,
+                &self.state,
+                Producer::Block,
+                Event::BlockCanceled(BlockCanceled { block_id }),
+            )
+            .await?;
+        }
+
         self.input_tx
             .send(InputCommand::Cancel(block_id))
             .await
@@ -369,20 +451,63 @@ impl SessionHandle for SessionActor {
         Ok(())
     }
 
+    /// Close the session.
+    ///
+    /// This function is idempotent and re-entrant: a second call observes
+    /// `shutdown_tx` as `None` (already taken) and an empty `tasks` vector,
+    /// so it completes without signalling or joining anything. This is
+    /// relied upon by `Engine::close_session` which may be invoked through
+    /// multiple code paths (explicit RPC, host shutdown, crash recovery).
+    ///
+    /// Note: we do NOT apply a timeout here. Callers that need a bounded
+    /// close should wrap this in `tokio::time::timeout`. Tasks stop promptly
+    /// because the shutdown oneshot fires and channels close.
     async fn close(&self) -> Result<(), SessionError> {
-        // Best effort: ask the input task to kill the child.
+        // Take the shutdown oneshot first. If it is `None`, a prior `close()`
+        // already ran; the idempotent path skips all emission / join work.
+        let maybe_tx = self.shutdown_tx.lock().await.take();
+        let first_close = maybe_tx.is_some();
+
+        if first_close {
+            // ADR 0011 §Durable Commit Ordering: emit `SessionEnded`
+            // SYNCHRONOUSLY (ack-backed) BEFORE we trigger shutdown, so the
+            // envelope is durable in the event log before the emitter task
+            // winds down. This closes the test race where a racing
+            // `replay_session` saw no `SessionEnded` on the first iteration.
+            //
+            // We swallow the error deliberately: if the emitter has already
+            // died (e.g. the emit channel is closed because the input task
+            // killed the child and the emitter's shutdown arm ran), we still
+            // want `close()` to tear down cleanly. The reader's post-loop
+            // `emit_nowait(SessionEnded)` covers the ungraceful case.
+            let _ = emit(
+                &self.emitter_tx,
+                &self.state,
+                Producer::Session,
+                Event::SessionEnded(SessionEnded {
+                    reason: SessionEndReason::UserClosed,
+                }),
+            )
+            .await;
+        }
+
+        // Best effort: ask the input task to kill the child. Harmless no-op
+        // when the channel is already closed.
         let _ = self.input_tx.send(InputCommand::Close).await;
-        // Signal all tasks to stop.
-        if let Some(tx) = self.shutdown_tx.lock().await.take() {
+
+        if let Some(tx) = maybe_tx {
+            // `send` fails only if the receiver has been dropped — harmless.
             let _ = tx.send(());
+            info!(session_id = %self.session_id, "session actor closing");
         }
         // Drain and join tasks so we don't leak orphans past session close.
-        // NOTE: we do NOT await here with a hard timeout; callers that need a
-        // bounded close should apply their own `tokio::time::timeout`. Tasks
-        // stop promptly because the shutdown oneshot fires and channels close.
         let handles: Vec<_> = std::mem::take(&mut *self.tasks.lock().await);
+        let joined = handles.len();
         for h in handles {
             let _ = h.await;
+        }
+        if first_close {
+            debug!(session_id = %self.session_id, joined, "session actor: all tasks joined");
         }
         Ok(())
     }
@@ -462,6 +587,23 @@ fn block_id_for_event(ev: &Event) -> Option<BlockId> {
 
 fn is_compound(text: &str) -> bool {
     text.contains("&&") || text.contains("||") || text.contains(';') || text.contains('|')
+}
+
+/// Drop any `(key, value)` pair whose key matches the secret detector's env
+/// denylist. Values themselves are NOT leaked to the persisted event log —
+/// the filter here controls what the PTY child sees, not what gets logged.
+///
+/// Per ADR 0006 §Detection Placement the launch env is passed through the
+/// denylist filter before any `launch_env_redacted` record is written.
+/// Phase 1 ships an empty launch env, so this is a defensive preparation
+/// for when that surface starts carrying real values.
+fn filter_launch_env(
+    env: Vec<(String, String)>,
+    detector: &dyn SecretDetector,
+) -> Vec<(String, String)> {
+    env.into_iter()
+        .filter(|(k, v)| detector.scan_env_entry(k, v).is_none())
+        .collect()
 }
 
 /// The single emitter: assigns `monotonic_seq`, stamps the envelope, calls the
@@ -641,8 +783,12 @@ async fn read_loop(
         // Parse boundary events.
         let mut events: Vec<BoundaryEvent> = Vec::new();
         detector.feed(bytes, &mut events);
+        // `n` is bounded by `PTY_READ_CHUNK_BYTES` (8 KiB), so the widen is
+        // lossless on every supported target; kept as a `try_from` for lint
+        // uniformity across the workspace.
+        let chunk_len = u64::try_from(n).unwrap_or(u64::MAX);
         for bev in events {
-            if let Err(err) = handle_boundary(bev, &emit_tx, &state, n as u64).await {
+            if let Err(err) = handle_boundary(bev, &emit_tx, &state, chunk_len).await {
                 warn!(?err, "handle_boundary failed");
             }
         }
@@ -696,6 +842,17 @@ async fn read_loop(
 /// sliced from the scratch buffer. The allocation for the final `String` is
 /// unavoidable because `OutputChunk.bytes_b64` owns a `String`, but the
 /// intermediate encode buffer is reused across iterations.
+///
+/// Both `expect` calls below guard invariants that are bounded by the
+/// allocation above:
+///
+/// - `encode_slice` only fails when the destination buffer is smaller than
+///   the encoded output, and we just sized `scratch` to `needed` which is the
+///   exact encoded length for `bytes.len()`.
+/// - `str::from_utf8` only fails on non-ASCII bytes. Base64 output is
+///   restricted to ASCII (`[A-Za-z0-9+/=]`), so a failure would indicate a
+///   programming error in the `base64` crate itself; panic is the right
+///   outcome in that case because the data would already be corrupt.
 fn encode_b64_reuse(bytes: &[u8], scratch: &mut Vec<u8>) -> String {
     let needed = bytes.len().div_ceil(3) * 4;
     if scratch.len() < needed {
@@ -703,11 +860,9 @@ fn encode_b64_reuse(bytes: &[u8], scratch: &mut Vec<u8>) -> String {
     }
     let written = BASE64
         .encode_slice(bytes, &mut scratch[..needed])
-        .expect("scratch sized for full encode");
-    // Base64 output is always ASCII; construction via from_utf8_lossy would be
-    // redundant, but we use the checked path for defense.
+        .expect("base64: scratch sized for full encode (see encode_b64_reuse docs)");
     std::str::from_utf8(&scratch[..written])
-        .expect("base64 output is ASCII")
+        .expect("base64 output is ASCII by construction (see encode_b64_reuse docs)")
         .to_string()
 }
 

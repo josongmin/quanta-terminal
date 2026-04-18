@@ -20,6 +20,12 @@ We use [`just`](https://just.systems) for shortcuts. All of these run locally:
 - `just check-layers` — run both layering enforcers (hexagonal + FSD).
 - `just proto-check` — check the generated schema types against `quanta-proto` (wired in Phase 2).
 
+For the full picture of the three-layer test story (per-crate Rust unit → workspace-spanning integration harness over the real socket → vitest + schema parity), see [`TESTING.md`](./TESTING.md). Key touchpoints when making cross-surface changes:
+
+- A Rust-side proto change must pass the TS schema-parity test at `packages/host-common/src/__tests__/schema-parity.test.ts`. That test catches silent renames of event variants, `kind` discriminators, or enum values.
+- A sidecar protocol change must keep `tests/integration/tests/end_to_end.rs` green. That test drives the real `quanta-core` binary over its Unix socket.
+- `cargo run -p check-adr-compliance` is a one-line-per-ADR audit; new ADRs or new mechanically-checkable rules land a new check there.
+
 The CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the same checks on every PR. Do not rely on a green CI to find problems a local `just lint` would have caught.
 
 ## Style

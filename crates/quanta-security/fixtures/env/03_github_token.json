@@ -1,0 +1,8 @@
+{
+  "description": "GITHUB_TOKEN exact name match.",
+  "key": "GITHUB_TOKEN",
+  "value": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "expected": [
+    { "class": "env_key_secret", "rule_id": "env_key_denylist" }
+  ]
+}

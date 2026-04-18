@@ -1,10 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useBannerStore } from '../../../entities/banner/index.js';
-import {
-  raiseSyntheticBanner,
-  clearSyntheticBanner,
-} from '../../../features/banner/index.js';
+import { raiseSyntheticBanner, clearSyntheticBanner } from '../../../features/banner/index.js';
 import { BannerHost } from '../BannerHost.js';
 
 beforeEach(() => {
@@ -54,6 +51,23 @@ describe('<BannerHost />', () => {
     render(<BannerHost />);
     const host = screen.getByTestId('banner-host');
     expect(host.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it('suppresses the slide animation under prefers-reduced-motion', () => {
+    // The MQ is expressed in CSS (prefers-reduced-motion: reduce). We can't
+    // exercise the actual keyframe run in jsdom, but we CAN assert the host
+    // honors the MQ by exposing a class CSS can scope on. The CSS module
+    // suppresses `.slide` animation when the MQ matches — we pin the slide
+    // class existence here so the MQ selector keeps matching the right node.
+    act(() => {
+      raiseSyntheticBanner('shell_integration');
+    });
+    render(<BannerHost />);
+    const host = screen.getByTestId('banner-host');
+    // There must be a node with the `.slide` class as a direct child — the
+    // CSS `@media (prefers-reduced-motion: reduce) { .slide { animation: none }}`
+    // depends on this name.
+    expect(host.querySelector('[class*="slide"]')).not.toBeNull();
   });
 
   it('dismiss removes the banner until another condition rises', () => {

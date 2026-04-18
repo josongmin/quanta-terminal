@@ -41,6 +41,7 @@ export type Producer =
   | 'session'
   | 'block'
   | 'output'
+  | 'input'
   | 'diagnostic'
   | 'suggestion'
   | 'history'

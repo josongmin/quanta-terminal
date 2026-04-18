@@ -1,0 +1,5 @@
+{
+  "description": "GitHub fine-grained PAT (github_pat_ prefix, exact 82-char body).",
+  "output": "api call: github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "expected_rule_ids": ["github_fine_pat"]
+}

@@ -31,6 +31,12 @@ pub struct Hello {
     pub host_protocol_version: ProtocolVersion,
     pub host_version: String,
     pub client_id: String,
+    /// Per ADR 0011 §Resume Cursor: a reconnecting host may ask the sidecar to
+    /// replay events for specific sessions starting from the last seq the host
+    /// durably applied. Empty (or missing) = cold start, no replay requested.
+    /// Keyed by session id ULID string for stable JSON shape.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub resume_cursors: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

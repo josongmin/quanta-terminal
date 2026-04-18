@@ -8,6 +8,16 @@ use quanta_proto::ids::SessionId;
 
 use crate::domain::LogRecord;
 
+/// Errors surfaced by event-log adapters.
+///
+/// The variants carry enough context to diagnose a specific record/segment
+/// without needing access to the originating file. In particular:
+/// - [`EventLogError::ChecksumMismatch`] pins the byte offset inside the
+///   affected segment.
+/// - [`EventLogError::SegmentTooLarge`] reports the observed length and the
+///   ceiling so operators can triage malformed or adversarial files.
+/// - [`EventLogError::PayloadTooLarge`] distinguishes a post-decompression
+///   size violation from a pre-read one.
 #[derive(Debug, thiserror::Error)]
 pub enum EventLogError {
     #[error("io error: {0}")]
@@ -18,6 +28,14 @@ pub enum EventLogError {
     Decode(String),
     #[error("checksum mismatch at offset {offset}")]
     ChecksumMismatch { offset: u64 },
+    /// A segment file on disk exceeded the reader's size ceiling. This is
+    /// treated as corruption; no records from the segment are returned.
+    #[error("segment file too large: {observed} bytes (limit {limit})")]
+    SegmentTooLarge { observed: u64, limit: u64 },
+    /// A decompressed frame declared a payload larger than the decoder will
+    /// accept. Defends replay against zstd bombs.
+    #[error("record payload too large: {observed} bytes (limit {limit})")]
+    PayloadTooLarge { observed: usize, limit: usize },
     #[error("event log closed")]
     Closed,
 }

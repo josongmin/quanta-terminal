@@ -74,3 +74,8 @@ Opinion: if the team does both in parallel before the bridges stabilize, you wil
 - Implementation tickets must declare their host mode in the title.
 - Any feature that depends on host capability must gate on a `HostCapabilities` flag, never on a string-matched host name.
 - Release engineering owns two packaging pipelines; plan for that cost.
+
+## Verification
+
+- `tools/check-fsd-layers.mjs` — enforces that `packages/ui/` never imports `@quanta/host-tauri`.
+- `tools/check-adr-compliance` ADR-0001 row — confirms `packages/host-common/` and `packages/host-tauri/` exist and the UI package does not reach into host-specific code.

@@ -1,0 +1,5 @@
+{
+  "description": "OpenAI-shaped API key (sk- prefix, 20+ body).",
+  "output": "token: sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  "expected_rule_ids": ["openai_api_key"]
+}

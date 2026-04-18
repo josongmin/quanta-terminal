@@ -1,0 +1,79 @@
+.wrap {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding: var(--q-space-6);
+  background: var(--q-bg);
+  color: var(--q-fg);
+}
+
+.card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    'icon title'
+    'icon message'
+    'icon actions';
+  column-gap: var(--q-space-4);
+  row-gap: var(--q-space-2);
+  max-width: 560px;
+  padding: var(--q-space-5) var(--q-space-6);
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-pop);
+}
+
+.icon {
+  grid-area: icon;
+  align-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--q-danger);
+  background: color-mix(in oklab, var(--q-danger) 14%, transparent);
+  border: 1px solid var(--q-danger);
+  border-radius: 999px;
+  font-weight: 600;
+  font-family: var(--q-font-sans);
+}
+
+.title {
+  grid-area: title;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-lg);
+  font-weight: 600;
+  color: var(--q-fg);
+}
+
+.message {
+  grid-area: message;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  grid-area: actions;
+  display: flex;
+  gap: var(--q-space-2);
+  margin-top: var(--q-space-2);
+}
+
+@media (forced-colors: active) {
+  .card {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .icon {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: transparent;
+  }
+}

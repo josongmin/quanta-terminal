@@ -1,7 +1,9 @@
 //! Ports — the crash-recovery scaffold persists a shutdown marker via this.
 
+/// Errors returned by a [`MarkerStore`].
 #[derive(Debug, thiserror::Error)]
 pub enum MarkerStoreError {
+    /// Underlying IO error (filesystem, permissions).
     #[error("io error: {0}")]
     Io(String),
 }

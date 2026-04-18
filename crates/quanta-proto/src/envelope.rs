@@ -22,6 +22,11 @@ pub enum Producer {
     Session,
     Block,
     Output,
+    /// Input-domain events originate from the shared composer surface, not the
+    /// session actor itself. `Event::InputSubmitted` (prefix `input.*`) must
+    /// carry `Producer::Input` so the envelope's `producer_id` agrees with the
+    /// event-name prefix per ADR 0014.
+    Input,
     Diagnostic,
     Suggestion,
     History,

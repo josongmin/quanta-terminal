@@ -28,11 +28,16 @@ import { LoadingState } from './LoadingState.js';
 import { ErrorState } from './ErrorState.js';
 
 import { useSessionStore } from '../../entities/session/index.js';
+import { useBannerStore, selectVisibleConditions } from '../../entities/banner/index.js';
 import { installBannerDetectors } from '../../features/banner/index.js';
+import { pickBannerCondition } from '../../shared/lib/banner-precedence.js';
 import { useKeymap } from '../../shared/lib/keymap.js';
+import { createLogger } from '../../shared/lib/logger.js';
 import { uiBus } from '../../shared/lib/event-bus.js';
 
 import styles from './terminal-page.module.css';
+
+const log = createLogger('terminal-page');
 
 export function TerminalPage() {
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -53,12 +58,23 @@ export function TerminalPage() {
     e.preventDefault();
     setPaletteOpen((p) => !p);
   });
+  // Escape cascade: close palette first; if no palette open, dismiss the
+  // top banner (if any is dismissible). This mirrors the natural "most
+  // transient overlay first" rule most editors follow.
   useKeymap(
     'escape',
     () => {
-      if (paletteOpen) setPaletteOpen(false);
+      if (paletteOpen) {
+        setPaletteOpen(false);
+        return;
+      }
+      // Dismiss the highest-precedence active, not-yet-dismissed banner.
+      const bannerStore = useBannerStore.getState();
+      const visible = selectVisibleConditions(bannerStore);
+      const top = pickBannerCondition(visible);
+      if (top) bannerStore.dismiss(top);
     },
-    { enabled: paletteOpen, allowInEditable: true },
+    { enabled: true, allowInEditable: true },
   );
   useKeymap('mod+t', (e) => {
     // Phase 1: new-session is a stub. We still preventDefault so the browser
@@ -75,8 +91,7 @@ export function TerminalPage() {
       const ok = window.confirm('Close this session? This will terminate the shell.');
       if (ok) {
         // Real close wires through features/session in a later phase.
-        // eslint-disable-next-line no-console
-        console.info('close-session requested (stub)');
+        log.info('terminal-page: close-session requested (stub, not yet wired)');
       }
     }
   });
@@ -85,10 +100,22 @@ export function TerminalPage() {
     uiBus.emit('terminal.focus', undefined);
   });
 
+  const retrySpawn = useCallback(() => {
+    // Resetting the store flips `health` back to 'booting' and drops the
+    // error exit code. The TerminalShell is remounted via its key below so
+    // its useEffect re-runs and a fresh connectSession() attempts to spawn.
+    useSessionStore.getState().reset();
+  }, []);
+
   const view = (() => {
     if (!sessionId) {
       if (health === 'error') {
-        return <ErrorState />;
+        return (
+          <ErrorState
+            message="quanta: shell session failed to start. See the status bar for details."
+            onRetry={retrySpawn}
+          />
+        );
       }
       if (health === 'booting') {
         return <LoadingState />;

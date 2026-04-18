@@ -52,6 +52,7 @@ pub enum Event {
 
 // --- session payloads ---
 
+/// Payload for [`Event::SessionCreated`]: a new session has been minted.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionCreated {
     pub session_id: SessionId,
@@ -60,6 +61,10 @@ pub struct SessionCreated {
     pub launch_cwd: PathBuf,
 }
 
+/// Tiered health of the host shell's integration with Quanta.
+///
+/// Drives the `session.shell_integration_status` event and — downstream — the
+/// degraded-mode UI contract (ADR 0010).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellIntegrationStatus {
@@ -68,11 +73,13 @@ pub enum ShellIntegrationStatus {
     Partial,
 }
 
+/// Payload for [`Event::SessionShellIntegrationStatus`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionShellIntegrationStatus {
     pub status: ShellIntegrationStatus,
 }
 
+/// Where a cwd observation came from (ADR 0003).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CwdSource {
@@ -83,17 +90,20 @@ pub enum CwdSource {
     ExplicitOverride,
 }
 
+/// Payload for [`Event::SessionCwdChanged`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionCwdChanged {
     pub cwd: PathBuf,
     pub source: CwdSource,
 }
 
+/// Payload for [`Event::SessionEnded`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionEnded {
     pub reason: SessionEndReason,
 }
 
+/// Why a session ended (ADR 0004).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionEndReason {
@@ -105,6 +115,7 @@ pub enum SessionEndReason {
 
 // --- block payloads ---
 
+/// Coarse-grain classification of a block (ADR 0002).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockKind {
@@ -113,6 +124,7 @@ pub enum BlockKind {
     Detached,
 }
 
+/// Which signal closed a block boundary (ADR 0002).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoundarySignal {
@@ -121,6 +133,7 @@ pub enum BoundarySignal {
     PromptRegex,
 }
 
+/// How confident we are in the boundary assignment (ADR 0002, ADR 0010).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoundaryConfidence {
@@ -128,6 +141,7 @@ pub enum BoundaryConfidence {
     Degraded,
 }
 
+/// Payload for [`Event::BlockCreated`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockCreated {
     pub block_id: BlockId,
@@ -139,6 +153,7 @@ pub struct BlockCreated {
     pub is_compound: bool,
 }
 
+/// Whether an input was typed as a shell command or an AI intent (ADR 0009).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputKind {
@@ -146,12 +161,14 @@ pub enum InputKind {
     Intent,
 }
 
+/// Payload for [`Event::BlockStarted`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockStarted {
     pub block_id: BlockId,
     pub pid: Option<u32>,
 }
 
+/// Payload for [`Event::BlockCompleted`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockCompleted {
     pub block_id: BlockId,
@@ -161,17 +178,20 @@ pub struct BlockCompleted {
     pub boundary_confidence: BoundaryConfidence,
 }
 
+/// Payload for [`Event::BlockCanceled`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockCanceled {
     pub block_id: BlockId,
 }
 
+/// Payload for [`Event::BlockDetached`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockDetached {
     pub block_id: BlockId,
     pub reason: DetachReason,
 }
 
+/// Why a block detached from the session (ADR 0004).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetachReason {
@@ -180,11 +200,13 @@ pub enum DetachReason {
     SessionEnd,
 }
 
+/// Payload for [`Event::BlockTuiEntered`] (ADR 0008).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockTuiEntered {
     pub block_id: BlockId,
 }
 
+/// Payload for [`Event::BlockTuiExited`] (ADR 0008).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockTuiExited {
     pub block_id: BlockId,
@@ -194,6 +216,7 @@ pub struct BlockTuiExited {
 
 // --- output payloads ---
 
+/// Which PTY stream produced a chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputStream {
@@ -201,6 +224,7 @@ pub enum OutputStream {
     Stderr,
 }
 
+/// Payload for [`Event::OutputChunk`]: a contiguous span of bytes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutputChunk {
     pub span_id: SpanId,
@@ -213,6 +237,7 @@ pub struct OutputChunk {
     pub bytes_b64: String,
 }
 
+/// Payload for [`Event::OutputTruncated`] (ADR 0005).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutputTruncated {
     pub block_id: BlockId,
@@ -220,6 +245,7 @@ pub struct OutputTruncated {
     pub reason: TruncationReason,
 }
 
+/// Why output was truncated (ADR 0005).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TruncationReason {
@@ -229,6 +255,7 @@ pub enum TruncationReason {
 
 // --- input ---
 
+/// Payload for [`Event::InputSubmitted`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputSubmitted {
     pub text: String,
@@ -239,6 +266,7 @@ pub struct InputSubmitted {
 
 // --- diagnostic ---
 
+/// Severity of an extracted diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
@@ -247,6 +275,7 @@ pub enum DiagnosticSeverity {
     Info,
 }
 
+/// Broad category a diagnostic originated from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticCategory {
@@ -259,6 +288,7 @@ pub enum DiagnosticCategory {
     Unknown,
 }
 
+/// Payload for [`Event::DiagnosticDetected`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiagnosticDetected {
     pub diagnostic_id: DiagnosticId,
@@ -294,6 +324,7 @@ pub enum RiskLevel {
     Destructive,
 }
 
+/// What the user did with a suggestion (ADR 0012).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionDecision {
@@ -303,6 +334,7 @@ pub enum SuggestionDecision {
     Canceled,
 }
 
+/// Payload for [`Event::SuggestionGenerated`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SuggestionGenerated {
     pub suggestion_id: SuggestionId,
@@ -315,6 +347,7 @@ pub struct SuggestionGenerated {
     pub modifiers: Vec<String>,
 }
 
+/// Payload for [`Event::SuggestionReviewed`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SuggestionReviewed {
     pub suggestion_id: SuggestionId,
@@ -324,6 +357,7 @@ pub struct SuggestionReviewed {
 
 // --- history ---
 
+/// Payload for [`Event::HistoryIndexed`] (ADR 0013).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryIndexed {
     pub block_id: BlockId,

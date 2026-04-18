@@ -36,4 +36,15 @@ If you are onboarding as an implementation agent:
 1. `product-spec.md` — what the product is and why.
 2. `technical-architecture.md` — how it is built.
 3. ADRs in order — the contracts that keep two implementers from building two different products.
-4. `benchmark-protocol.md` — how we decide whether it works.
+4. [`TESTING.md`](./TESTING.md) — the three test layers (Rust unit / Rust integration over the real socket / vitest + schema parity) and how to run them locally. Start here once you have an environment set up.
+5. `benchmark-protocol.md` — how we decide whether it works.
+
+## Testing
+
+See [`TESTING.md`](./TESTING.md). Quick reference:
+
+- `cargo test --workspace` — Rust unit + integration.
+- `pnpm -r test` — TypeScript + the Rust-↔-TS schema parity test (`packages/host-common/src/__tests__/schema-parity.test.ts`).
+- `cargo run -p check-adr-compliance` — mechanical one-line-per-ADR audit.
+- `cargo run -q -p check-hex-imports -- --root .` — hexagonal import rules.
+- `node tools/check-fsd-layers.mjs` — FSD layer rules.

@@ -1,0 +1,23 @@
+[package]
+name = "quanta-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — secret detection & redaction per ADR 0006."
+
+[lints]
+workspace = true
+
+[dependencies]
+# `regex` is workspace-pinned. Used exclusively in adapters/default so the
+# domain layer stays free of heavy deps.
+regex = { workspace = true }
+# `once_cell::sync::Lazy` compiles regex once per process.
+once_cell = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+rstest = { workspace = true }

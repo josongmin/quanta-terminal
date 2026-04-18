@@ -55,3 +55,24 @@
 .kind-info {
   border-left: 2px solid var(--q-accent);
 }
+
+/* High-contrast / forced-colors mode (Windows High Contrast, some screen
+   magnifiers). Opt into system colors so the banner remains legible and the
+   kind-accent stripe still distinguishes by color ramp without us fighting
+   the OS palette. */
+@media (forced-colors: active) {
+  .banner {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border-bottom-color: CanvasText;
+  }
+  .dismiss {
+    color: LinkText;
+  }
+  .kind-warning,
+  .kind-danger,
+  .kind-info {
+    border-left-color: CanvasText;
+  }
+}

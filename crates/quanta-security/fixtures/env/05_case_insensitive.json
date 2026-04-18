@@ -1,0 +1,8 @@
+{
+  "description": "Lowercase api_key still matches — denylist is case-insensitive.",
+  "key": "my_api_key",
+  "value": "deadbeef",
+  "expected": [
+    { "class": "env_key_secret", "rule_id": "env_key_denylist" }
+  ]
+}

@@ -55,3 +55,36 @@
   background: rgba(255, 255, 255, 0.04);
   border-color: transparent;
 }
+
+/* Focus ring: keyboard users MUST see which button has focus. The Quanta
+   focus-ring shadow is in tokens. We scope to :focus-visible so click users
+   don't get a ring on mouse press. */
+.button:focus-visible {
+  outline: none;
+  box-shadow: var(--q-shadow-focus-ring);
+  border-color: var(--q-border-focus);
+}
+
+/* High-contrast / Windows High Contrast mode. Borders, text, and the focus
+   ring must all be visible regardless of the custom palette. */
+@media (forced-colors: active) {
+  .button {
+    forced-color-adjust: none;
+    background: ButtonFace;
+    color: ButtonText;
+    border-color: ButtonText;
+  }
+  .button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  .button:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+  .variant-primary {
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+}

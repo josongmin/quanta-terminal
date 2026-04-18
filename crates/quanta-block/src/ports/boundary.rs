@@ -6,8 +6,8 @@
 
 use crate::domain::BoundarySink;
 
-/// Stream-oriented detector that consumes PTY bytes and emits [`BoundaryEvent`]s
-/// through a sink.
+/// Stream-oriented detector that consumes PTY bytes and emits
+/// [`crate::domain::BoundaryEvent`]s through a sink.
 ///
 /// Implementations are stateful across calls: partial escape sequences split
 /// across `feed` calls must be remembered until completion.

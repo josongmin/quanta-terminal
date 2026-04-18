@@ -122,3 +122,8 @@ This classifier runs on AI-originated commands only. Commands that the user type
 - Review UX always shows both the final level and the reasons. Users learn to trust the system because the reasoning is visible.
 - Adding support for a new command family is additive: new fixtures, new rules, no changes to composition logic.
 - The floor-only rule means an unknown parse cannot be labeled `safe_readonly` by any path. This is the single most important property of the classifier.
+
+## Verification
+
+- `crates/quanta-proto/src/events.rs` — `RiskLevel` derives `PartialOrd`/`Ord` so composition "take the max" is the built-in ordering.
+- `tools/check-adr-compliance` ADR-0012 row — confirms the derive is still present.

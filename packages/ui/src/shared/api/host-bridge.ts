@@ -32,7 +32,9 @@ export function getHostBridge(): HostBridge {
     return window.__QUANTA_HOST__;
   }
   throw new Error(
-    'HostBridge not installed. A host package must call setHostBridge() or assign window.__QUANTA_HOST__ before mount.',
+    'shared.api.host-bridge.getHostBridge: no HostBridge is installed. ' +
+      'A host package (host-tauri, host-vscode, ...) must call setHostBridge() ' +
+      'or assign window.__QUANTA_HOST__ before bootstrapUi() mounts React.',
   );
 }
 

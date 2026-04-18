@@ -3,6 +3,15 @@
 //! This is the only place in the block crate that depends on `vte`. All other
 //! layers speak in domain types (`BoundaryEvent`, `BoundarySink`) and the port
 //! trait.
+//!
+//! # Byte transparency
+//!
+//! `vte::Parser::advance` takes bytes (`u8`), not chars. The detector never
+//! decodes PTY bytes to `String` on the hot path: only OSC payloads that are
+//! advertised as text to the domain (OSC 7 cwd, OSC 133 `D` exit code) are
+//! parsed via `std::str::from_utf8`, and those failures are handled as
+//! **event-skipped-with-warning** rather than panics (see policy at
+//! [`Performer::osc_dispatch`]).
 
 use vte::{Params, Parser, Perform};
 
@@ -83,7 +92,9 @@ impl<S: BoundarySink + ?Sized> Perform for Performer<'_, S> {
                 b'B' => self.sink.on_event(BoundaryEvent::CommandStart),
                 b'C' => self.sink.on_event(BoundaryEvent::OutputStart),
                 b'D' => {
-                    // OSC 133 ; D ; <exit_code>
+                    // OSC 133 ; D ; <exit_code>. Exit code is an ASCII decimal.
+                    // If bytes are non-UTF-8 (malformed shell integration) we
+                    // fall back to `None` rather than panicking.
                     let exit = if params.len() >= 3 {
                         std::str::from_utf8(params[2])
                             .ok()
@@ -98,12 +109,29 @@ impl<S: BoundarySink + ?Sized> Perform for Performer<'_, S> {
             }
             return;
         }
-        // OSC 7 — cwd advertisement.
+        // OSC 7 — cwd advertisement. The payload is `file://<host>/<path>`.
+        //
+        // Malformed-UTF-8 policy: we **skip the event** and leave cwd
+        // unchanged. We explicitly do NOT use `String::from_utf8_lossy` here
+        // because a cwd that silently replaces bytes with U+FFFD would be
+        // wrong for downstream consumers (chdir, breadcrumb UI). The
+        // domain-level `BoundaryEvent::CwdAdvertised` carries a plain
+        // `String`, so propagating a lossy path would falsify that type
+        // contract. Skipping is safe: the next shell prompt typically emits
+        // another OSC 7 with correct bytes, or the reducer falls back to
+        // `CwdSource::PromptEstimate`.
+        //
+        // The session actor does not panic on this path because we never
+        // emit the event; `handle_boundary` only runs when an event fires.
+        //
+        // Valid multi-byte UTF-8 (Korean/Japanese/Chinese/emoji paths) passes
+        // through unchanged — see `fixtures/boundary/multibyte-osc7-*`.
         if head == b"7" && params.len() >= 2 {
             if let Ok(s) = std::str::from_utf8(params[1]) {
                 let cwd = parse_file_url(s).unwrap_or_else(|| s.to_string());
                 self.sink.on_event(BoundaryEvent::CwdAdvertised { cwd });
             }
+            // else: malformed UTF-8 cwd. Silently drop per docblock above.
         }
     }
 
@@ -227,5 +255,64 @@ mod tests {
         let mut sink: Vec<BoundaryEvent> = Vec::new();
         det.feed(b"\x1b]133;A\x1b\\", &mut sink);
         assert_eq!(sink, vec![BoundaryEvent::PromptStart]);
+    }
+
+    #[test]
+    fn osc7_with_korean_path_is_emitted_unchanged() {
+        // "/tmp/한글" — Korean characters in the path, correctly UTF-8 encoded.
+        let mut input: Vec<u8> = b"\x1b]7;file://localhost/tmp/".to_vec();
+        // 한 = ED 95 9C, 글 = EA B8 80
+        input.extend_from_slice(&[0xED, 0x95, 0x9C, 0xEA, 0xB8, 0x80]);
+        input.extend_from_slice(b"\x1b\\");
+        let events = drive(&input);
+        assert_eq!(
+            events,
+            vec![BoundaryEvent::CwdAdvertised {
+                cwd: "/tmp/한글".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc7_with_emoji_path_is_emitted_unchanged() {
+        // "/tmp/👋" — 4-byte UTF-8 sequence (emoji).
+        let mut input: Vec<u8> = b"\x1b]7;file://localhost/tmp/".to_vec();
+        input.extend_from_slice(&[0xF0, 0x9F, 0x91, 0x8B]);
+        input.extend_from_slice(b"\x1b\\");
+        let events = drive(&input);
+        assert_eq!(
+            events,
+            vec![BoundaryEvent::CwdAdvertised {
+                cwd: "/tmp/👋".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn osc7_with_malformed_utf8_is_silently_skipped() {
+        // 0xFF is not a valid UTF-8 leading byte in any context; the detector
+        // must NOT panic, and it must NOT emit a CwdAdvertised with replacement
+        // chars. Per policy: skip.
+        let mut input: Vec<u8> = b"\x1b]7;file://localhost/tmp/".to_vec();
+        input.extend_from_slice(&[0xFF, 0xFE]);
+        input.extend_from_slice(b"\x1b\\");
+        let events = drive(&input);
+        assert_eq!(events, vec![], "malformed OSC 7 must produce no events");
+    }
+
+    #[test]
+    fn cjk_output_across_chunk_boundaries_stays_byte_transparent() {
+        // Plain non-boundary output containing Korean "한글" split mid-codepoint
+        // must produce no events, but also must not crash the detector. This
+        // proves the detector is byte-independent.
+        let mut det = VteBoundaryDetector::new();
+        let mut sink: Vec<BoundaryEvent> = Vec::new();
+        // 한 = ED 95 9C  →  split as [ED 95] [9C]
+        det.feed(&[0xED, 0x95], &mut sink);
+        det.feed(&[0x9C], &mut sink);
+        // 글 = EA B8 80  →  split as [EA] [B8 80]
+        det.feed(&[0xEA], &mut sink);
+        det.feed(&[0xB8, 0x80], &mut sink);
+        assert_eq!(sink, vec![]);
     }
 }

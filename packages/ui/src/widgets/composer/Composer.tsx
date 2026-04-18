@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CompositionEvent as ReactCompositionEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 
@@ -32,7 +33,10 @@ import { Kbd } from '../../shared/ui/kbd/index.js';
 import { Separator } from '../../shared/ui/separator/index.js';
 import { submitCommand, type ComposerMode } from '../../features/composer/index.js';
 import { cx } from '../../shared/lib/cx.js';
+import { createLogger } from '../../shared/lib/logger.js';
 import styles from './composer.module.css';
+
+const log = createLogger('composer');
 
 export interface ComposerProps {
   /** Phase 1: always 'shell'. Prop exists so the chip's state is explicit. */
@@ -56,14 +60,24 @@ export function Composer(props: ComposerProps) {
   const [focused, setFocused] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // IME composition: browsers fire keydown Enter DURING a composition (e.g.
+  // Japanese/Chinese candidate selection) and we must NOT submit in that
+  // window. React 17+ exposes `isComposing` on KeyboardEvent but jsdom does
+  // not set it consistently, so we track the state explicitly via the
+  // compositionstart/end events and gate on that.
+  const composingRef = useRef(false);
 
   // Auto-size. Measured from scrollHeight, clamped between MIN and MAX lines.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const desired = Math.min(MAX_ROWS, Math.max(MIN_ROWS, Math.ceil(el.scrollHeight / LINE_HEIGHT_PX)));
+    const desired = Math.min(
+      MAX_ROWS,
+      Math.max(MIN_ROWS, Math.ceil(el.scrollHeight / LINE_HEIGHT_PX)),
+    );
     el.style.height = `${desired * LINE_HEIGHT_PX}px`;
   }, [value]);
 
@@ -71,28 +85,65 @@ export function Composer(props: ComposerProps) {
     if (autoFocus) textareaRef.current?.focus();
   }, [autoFocus]);
 
-  const handleChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    setValue(e.target.value);
-    if (historyOpen) setHistoryOpen(false);
-  }, [historyOpen]);
+  const handleChange = useCallback(
+    (e: ChangeEvent<HTMLTextAreaElement>) => {
+      setValue(e.target.value);
+      if (historyOpen) setHistoryOpen(false);
+      // Typing after a failed submit clears the error message: the user is
+      // trying a new command, stale context only confuses them.
+      if (submitError) setSubmitError(null);
+    },
+    [historyOpen, submitError],
+  );
 
   const handleSubmit = useCallback(async () => {
     if (busy) return;
     if (value.trim().length === 0) return;
     setBusy(true);
+    setSubmitError(null);
     const result = await submitCommand({ text: value, mode });
     setBusy(false);
     if (result.ok) {
       onSubmitted?.(value);
       setValue('');
+      return;
     }
-    // On failure we keep the text so the user can retry; a future toast
-    // affordance will show the error string.
+    // Surface failure. Keep the text so the user can retry. Log every branch
+    // at `warn` — these are correctable conditions, not crashes.
+    if (result.reason === 'no-session') {
+      setSubmitError('composer.submit: no active session. Start a shell with ⌘T.');
+      log.warn('submit rejected: no active session');
+      return;
+    }
+    if (result.reason === 'no-bridge') {
+      setSubmitError('composer.submit: host bridge unavailable. Reload the app.');
+      log.warn('submit rejected: no host bridge');
+      return;
+    }
+    if (result.reason === 'empty') {
+      // Silent — the early-return guard above usually catches this path.
+      return;
+    }
+    const detail = result.error?.message ?? 'unknown failure';
+    setSubmitError(`composer.submit: bridge.write rejected (${detail})`);
+    log.warn('bridge.write rejected during composer submit', result.error);
   }, [busy, mode, onSubmitted, value]);
+
+  const handleCompositionStart = useCallback((_e: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    composingRef.current = true;
+  }, []);
+  const handleCompositionEnd = useCallback((_e: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    composingRef.current = false;
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        // Do not submit during an IME composition. Some browsers (Safari)
+        // also set `e.isComposing` natively; we check both.
+        if (composingRef.current || e.nativeEvent.isComposing) {
+          return;
+        }
         e.preventDefault();
         void handleSubmit();
         return;
@@ -122,11 +173,7 @@ export function Composer(props: ComposerProps) {
       data-testid="composer"
     >
       {historyOpen ? (
-        <div
-          className={styles.history}
-          role="listbox"
-          aria-label="Recent commands"
-        >
+        <div className={styles.history} role="listbox" aria-label="Recent commands">
           <div className={styles.historyEmpty}>
             No recent commands yet. Press <Kbd>Esc</Kbd> to close.
           </div>
@@ -152,10 +199,14 @@ export function Composer(props: ComposerProps) {
           placeholder="Type a command, then Enter"
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           aria-busy={busy}
           aria-multiline
+          aria-invalid={submitError !== null}
+          aria-describedby={submitError !== null ? 'quanta-composer-error' : undefined}
           disabled={busy}
         />
         <Separator />
@@ -163,6 +214,16 @@ export function Composer(props: ComposerProps) {
           {mode}
         </div>
       </div>
+      {submitError ? (
+        <div
+          id="quanta-composer-error"
+          className={styles.error}
+          role="alert"
+          data-testid="composer-error"
+        >
+          {submitError}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,0 +1,6 @@
+{
+  "description": "HOME is benign — no false positive on common env names.",
+  "key": "HOME",
+  "value": "/home/alice",
+  "expected": []
+}

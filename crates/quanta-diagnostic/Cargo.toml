@@ -1,0 +1,18 @@
+[package]
+name = "quanta-diagnostic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — diagnostic parser pipeline (ADR 0007). Phase 1 is a domain stub; parsers ship in later phases."
+
+[lints]
+workspace = true
+
+[dependencies]
+quanta-proto = { path = "../quanta-proto" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

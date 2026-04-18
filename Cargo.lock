@@ -104,6 +104,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "check-adr-compliance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "check-hex-imports"
 version = "0.1.0"
 dependencies = [
@@ -693,10 +700,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "quanta-diagnostic"
+version = "0.1.0"
+dependencies = [
+ "quanta-proto",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -714,8 +729,26 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "xxhash-rust",
  "zstd",
+]
+
+[[package]]
+name = "quanta-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "quanta-core",
+ "quanta-proto",
+ "quanta-protocol",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -774,6 +807,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "quanta-security"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "regex",
+ "rstest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "quanta-session"
 version = "0.1.0"
 dependencies = [
@@ -784,6 +828,7 @@ dependencies = [
  "quanta-output",
  "quanta-proto",
  "quanta-pty",
+ "quanta-security",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

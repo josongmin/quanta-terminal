@@ -1,0 +1,19 @@
+[package]
+name = "check-adr-compliance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — mechanical compliance check: one line per ADR."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-adr-compliance"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }

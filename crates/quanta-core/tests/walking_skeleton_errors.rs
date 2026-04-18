@@ -45,7 +45,7 @@ where
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_zero_exit_is_captured_on_block_completed() {
     let tmp = tempfile::tempdir().unwrap();
-    let engine = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
+    let (engine, _evrx) = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
         .await
         .expect("boot");
     let sid = engine
@@ -86,7 +86,7 @@ async fn non_zero_exit_is_captured_on_block_completed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn long_output_chunks_across_multiple_events() {
     let tmp = tempfile::tempdir().unwrap();
-    let engine = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
+    let (engine, _evrx) = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
         .await
         .expect("boot");
     // 64 cols / 24 rows means each line is bounded; we want a payload large
@@ -162,7 +162,7 @@ async fn cancel_block_does_not_regress_prior_events() {
     //   output) must survive unchanged. The session closes cleanly and
     //   eventually emits SessionEnded.
     let tmp = tempfile::tempdir().unwrap();
-    let engine = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
+    let (engine, _evrx) = Engine::boot(EngineConfig::new(tmp.path().to_path_buf()))
         .await
         .expect("boot");
     let sid = engine

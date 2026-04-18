@@ -1,0 +1,5 @@
+{
+  "description": "JWT-shaped token (three dot-separated base64url segments).",
+  "output": "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTYifQ.abcDEF_123-xyz",
+  "expected_rule_ids": ["jwt"]
+}

@@ -1,0 +1,6 @@
+{
+  "description": "Space-separated --token VALUE form.",
+  "command": "deploy --token abcdef123456 --name foo",
+  "expected_classes": ["command_arg_flag_secret"],
+  "forbidden_substring": "abcdef123456"
+}

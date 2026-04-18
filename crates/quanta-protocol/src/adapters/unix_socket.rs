@@ -33,6 +33,12 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// the port to expose a change-notifier).
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+/// Ceiling on the in-flight control-line buffer. A well-behaved client sends
+/// short JSON lines. A misbehaving or adversarial client that streams
+/// bytes without ever emitting a newline could otherwise drive our buffer
+/// arbitrarily large; we cap it and disconnect once exceeded.
+const MAX_CONTROL_LINE_BUFFER: usize = 1024 * 1024;
+
 use crate::domain::{decode_control, encode_control, encode_event, ControlMessage};
 use crate::ports::{ControlHandler, ProtocolError};
 
@@ -76,24 +82,47 @@ impl UnixSocketServer {
     /// NOTE: the current design accepts multiple concurrent connections.
     /// Each connection runs in its own spawned task; join handles are NOT
     /// tracked here — graceful shutdown of the server is currently process
-    /// termination. Tracking per-connection handles to await on shutdown
-    /// would require a shutdown signal + a join set, a small follow-up.
+    /// termination. Callers that need bounded shutdown should instead use
+    /// [`UnixSocketServer::serve_with_shutdown`].
     pub async fn serve(self) -> Result<(), ProtocolError> {
+        self.serve_with_shutdown(std::future::pending::<()>()).await
+    }
+
+    /// Accept connections until `shutdown` resolves. On shutdown, the
+    /// listener is dropped (releasing the socket path) and the function
+    /// returns `Ok(())`. In-flight connection tasks are NOT joined — they
+    /// wind down when the client disconnects or the process exits. Tracking
+    /// per-connection handles is a follow-up (see ADR 0014 §Phase 2).
+    pub async fn serve_with_shutdown<F: std::future::Future<Output = ()>>(
+        self,
+        shutdown: F,
+    ) -> Result<(), ProtocolError> {
         let _ = std::fs::remove_file(&self.path);
         let listener = UnixListener::bind(&self.path).map_err(ProtocolError::from)?;
+        tokio::pin!(shutdown);
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let handler = self.handler.clone();
-                    // Fire-and-forget: the connection task shuts itself down
-                    // when the client disconnects or the handshake times out.
-                    tokio::spawn(async move {
-                        if let Err(err) = handle_connection(stream, handler).await {
-                            warn!(?err, "connection error");
-                        }
-                    });
+            tokio::select! {
+                // biased: always poll shutdown first so an already-resolved
+                // shutdown wins over a flood of pending connections.
+                biased;
+                () = &mut shutdown => {
+                    tracing::info!(path = ?self.path, "unix socket server: shutdown signal received");
+                    return Ok(());
                 }
-                Err(err) => return Err(ProtocolError::from(err)),
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => {
+                        let handler = self.handler.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = handle_connection(stream, handler).await {
+                                warn!(?err, "connection error");
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        tracing::error!(?err, "unix socket accept failed");
+                        return Err(ProtocolError::from(err));
+                    }
+                }
             }
         }
     }
@@ -140,9 +169,62 @@ async fn handle_connection(
         core_protocol_version: our_ver,
         core_version: env!("CARGO_PKG_VERSION").to_string(),
         sidecar_id: "quanta-core".into(),
-        session_recovery_available: false,
+        // Phase 1: resume via replay is available when the handler supports
+        // it (ControlRegistry does). The handler itself may still return an
+        // empty vec if the log is gone; the client treats that as "no
+        // history" per ADR 0011.
+        session_recovery_available: true,
     });
     write_control(&writer, &ready).await?;
+
+    // --- Resume replay per ADR 0011 §Resume Cursor ---
+    //
+    // If the host sent `resume_cursors`, replay log events > cursor for each
+    // session BEFORE the live broadcast pump starts. This closes the
+    // reconnect gap where events emitted between disconnect and reconnect
+    // would otherwise be lost to the UI (the durable log still has them).
+    //
+    // We encode and push these envelopes through the same event-plane frame
+    // path as live events; the client cannot distinguish and doesn't need to.
+    // The `monotonic_seq` on each envelope lets the client dedupe if it
+    // happens to also receive an overlapping live event — standard
+    // at-least-once semantics per ADR 0011 §Dedupe Windows.
+    if !hello.resume_cursors.is_empty() {
+        for (sid_str, since_seq) in &hello.resume_cursors {
+            let Ok(session_id) = quanta_proto::ids::SessionId::parse(sid_str) else {
+                tracing::warn!(
+                    malformed_session_id = %sid_str,
+                    "resume cursor has non-ULID session id; skipping",
+                );
+                continue;
+            };
+            let replayed = handler.replay_since(session_id, *since_seq).await;
+            tracing::info!(
+                session_id = %session_id,
+                since_seq = *since_seq,
+                replayed_count = replayed.len(),
+                "resume cursor: replaying events",
+            );
+            for env in replayed {
+                match encode_event(&env) {
+                    Ok(frame) => {
+                        let mut w = writer.lock().await;
+                        if w.write_all(&[CHANNEL_EVENT]).await.is_err()
+                            || w.write_all(&frame).await.is_err()
+                        {
+                            tracing::warn!(
+                                "resume cursor: client disconnected mid-replay; aborting",
+                            );
+                            return Ok(());
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(?err, "resume cursor: encode failed; skipping envelope");
+                    }
+                }
+            }
+        }
+    }
 
     // --- Event pump ---
     // NOTE: this is a polling pump against `next_event()`. A proper
@@ -232,6 +314,15 @@ async fn read_one_control(
         // If we have a complete control line (channel byte + line to \n) in buf, return it.
         if let Some(msg) = try_take_control_line(buf)? {
             return Ok(msg);
+        }
+        // Cap the read buffer to defend against a client that streams bytes
+        // indefinitely without ever emitting a newline. At the ceiling we
+        // treat the stream as malformed and close the connection rather
+        // than growing memory without bound.
+        if buf.len() >= MAX_CONTROL_LINE_BUFFER {
+            return Err(ProtocolError::Codec(format!(
+                "control-line buffer exceeded {MAX_CONTROL_LINE_BUFFER} bytes without newline"
+            )));
         }
         let n = reader.read(tmp).await.map_err(ProtocolError::from)?;
         if n == 0 {
@@ -325,6 +416,7 @@ mod tests {
             host_protocol_version: ProtocolVersion::CURRENT,
             host_version: "test".into(),
             client_id: "c1".into(),
+            resume_cursors: std::collections::HashMap::new(),
         });
         let mut bytes = vec![CHANNEL_CONTROL];
         bytes.extend_from_slice(&encode_control(&hello).unwrap());

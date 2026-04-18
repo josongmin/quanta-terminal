@@ -44,9 +44,7 @@ export function installBannerDetectors(): DetectorHandle {
   // session surfaces the banner immediately.
   evaluate(useSessionStore.getState(), bannerStore);
 
-  const unsub = subscribeToStore(useSessionStore, (s) =>
-    evaluate(s, useBannerStore.getState()),
-  );
+  const unsub = subscribeToStore(useSessionStore, (s) => evaluate(s, useBannerStore.getState()));
 
   return { unsubscribe: unsub };
 }

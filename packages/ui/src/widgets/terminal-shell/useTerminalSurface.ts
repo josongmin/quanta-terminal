@@ -36,6 +36,7 @@ import { createWriteBatcher } from '../../shared/lib/write-batcher.js';
 import { TERMINAL_FONT, buildXtermTheme } from '../../shared/config/theme.js';
 import { connectSession } from '../../features/session/index.js';
 import type { ConnectedSession } from '../../features/session/index.js';
+import { useSessionStore } from '../../entities/session/index.js';
 
 const log = createLogger('term.surface');
 
@@ -96,6 +97,37 @@ export function useTerminalSurface(options: UseTerminalSurfaceOptions): void {
     // AND we coalesce: if fit() produces the same cols/rows as last time, we
     // skip the RPC entirely. Without this the host sees hundreds of resizes
     // during a single drag.
+    //
+    // Resize failures get one silent retry with exponential backoff (100ms,
+    // 300ms). After two failures we stop — the host PTY is likely gone and
+    // a future successful resize will reset the counter. A crash during
+    // resize must NEVER propagate because it runs on a ResizeObserver tick
+    // and there's no React boundary above us there.
+    let resizeRetryCount = 0;
+    const scheduleResizeRetry = (cols: number, rows: number): void => {
+      if (cancelled) return;
+      if (resizeRetryCount >= 2) {
+        log.warn('term.surface: bridge.resize failed twice; giving up until next change');
+        return;
+      }
+      const delay = resizeRetryCount === 0 ? 100 : 300;
+      resizeRetryCount += 1;
+      setTimeout(() => {
+        if (cancelled || !connected) return;
+        void doResize(cols, rows);
+      }, delay);
+    };
+    const doResize = async (cols: number, rows: number): Promise<void> => {
+      if (!connected) return;
+      try {
+        await connected.resize(cols, rows);
+        resizeRetryCount = 0;
+      } catch (err) {
+        log.warn('term.surface: bridge.resize rejected; will retry with backoff', err);
+        scheduleResizeRetry(cols, rows);
+      }
+    };
+
     const resizeDebouncer = createDebouncer(
       () => {
         if (cancelled) return;
@@ -109,7 +141,7 @@ export function useTerminalSurface(options: UseTerminalSurfaceOptions): void {
         if (connected && (cols !== lastCols || rows !== lastRows)) {
           lastCols = cols;
           lastRows = rows;
-          void connected.resize(cols, rows);
+          void doResize(cols, rows);
         }
         mark('term.resize-end');
         measure('term.resize', 'term.resize-start', 'term.resize-end');
@@ -136,11 +168,19 @@ export function useTerminalSurface(options: UseTerminalSurfaceOptions): void {
           void conn.write(data);
         });
       } catch (err) {
-        log.error('failed to attach to host bridge', err);
-        term.writeln(
-          '\u001b[31mquanta: failed to attach to host bridge:\u001b[0m ' +
-            (err instanceof Error ? err.message : String(err)),
-        );
+        log.error('term.surface: bridge.spawn rejected — session did not start', err);
+        // Surface failure at two layers:
+        //   (a) the terminal surface itself (red inline text) so users who
+        //       stare at the terminal still see the message;
+        //   (b) the session store's `health: 'error'`. The TerminalPage reads
+        //       this and swaps to `<ErrorState />`. Without (b) the page would
+        //       render a blank terminal.
+        const message = err instanceof Error ? err.message : String(err);
+        term.writeln('\u001b[31mquanta: bridge.spawn rejected:\u001b[0m ' + message);
+        useSessionStore.getState().setSession({
+          health: 'error',
+          exitCode: null,
+        });
       }
     })();
 

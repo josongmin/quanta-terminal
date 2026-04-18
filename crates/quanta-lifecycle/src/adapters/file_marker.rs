@@ -11,6 +11,8 @@ use crate::ports::{MarkerStore, MarkerStoreError};
 
 const MARKER_NAME: &str = "sidecar.shutdown-marker";
 
+/// Filesystem-backed [`MarkerStore`] that writes / removes a single marker
+/// file under the sidecar profile directory.
 #[derive(Debug, Clone)]
 pub struct FileMarker {
     path: PathBuf,

@@ -1,0 +1,6 @@
+{
+  "description": "Completely benign — detector must return no redactions.",
+  "command": "ls -la /tmp",
+  "expected_classes": [],
+  "forbidden_substring": null
+}

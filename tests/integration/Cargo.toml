@@ -1,0 +1,34 @@
+[package]
+name = "quanta-integration-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — workspace-spanning integration tests. Spawns `quanta-core`, speaks the real wire protocol, and asserts end-to-end event flow."
+publish = false
+
+[lints]
+workspace = true
+
+# Library-less crate: tests live under `tests/` and each file is a separate
+# test binary. Keeping the crate itself library-free (no `[lib]`) means the
+# helpers live in `tests/common/` and are re-imported per test file.
+# This is the standard Cargo pattern for integration harnesses.
+
+[dependencies]
+
+[dev-dependencies]
+# `quanta-core` is a dep so Cargo computes CARGO_BIN_EXE_quanta-core for us;
+# the integration harness spawns that binary.
+quanta-core = { path = "../../crates/quanta-core" }
+quanta-proto = { path = "../../crates/quanta-proto" }
+quanta-protocol = { path = "../../crates/quanta-protocol" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+base64 = { workspace = true }
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

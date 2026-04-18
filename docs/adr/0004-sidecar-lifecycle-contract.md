@@ -108,3 +108,9 @@ These events feed the debug panel and any support bundle export.
 - Support bundles include the host event timeline. Reproducing "it won't connect" gets concrete.
 - A visible "core status" indicator is a Phase 1 UI requirement, not a stretch goal.
 - Every long-running operation in the sidecar must be crash-safe via the event log. If it is not in the log, it did not happen.
+
+## Verification
+
+- `crates/quanta-protocol/tests/handshake.rs` — `Hello`/`Ready`/`Incompatible` codec and compatibility matrix.
+- `tests/integration/tests/end_to_end.rs::socket_handshake_and_create_session` — live handshake against the real binary over a Unix socket.
+- `tools/check-adr-compliance` ADR-0004 row.
