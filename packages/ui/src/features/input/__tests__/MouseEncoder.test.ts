@@ -190,23 +190,68 @@ describe('MouseEncoder — SGR 1006', () => {
     expect(out.bytes.length).toBe(0);
   });
 
-  it('wheel-up with tracking=off DECCKM off → 3× ArrowUp legacy with fallback flag', () => {
+  it('wheel-up with tracking=off emits zero bytes (browser scroll takes over)', () => {
+    // Per xterm, wheel is a mouse-tracking-only event. With tracking
+    // off the encoder must be a no-op so the DOM wheel event is left
+    // to the browser's native scroll (input-host also skips
+    // preventDefault in that mode).
     const { encoder, snapshot } = makeEncoder({ mouseTracking: 'off', decckm: false });
     const out = encoder.encode(
       { xCell: 0, yCell: 0, button: 'wheel-up', modifiers: NO_MODS, kind: 'wheel' },
       snapshot,
     );
-    expect(toHex(out.bytes)).toBe('1b5b411b5b411b5b41');
-    expect(out.diagnostics.deprecatedFallback).toBe(true);
+    expect(out.bytes.length).toBe(0);
+    expect(out.diagnostics.deprecatedFallback).toBe(false);
   });
 
-  it('wheel-down with tracking=off DECCKM on → 3× ESC O B', () => {
+  it('wheel-down with tracking=off emits zero bytes regardless of DECCKM', () => {
     const { encoder, snapshot } = makeEncoder({ mouseTracking: 'off', decckm: true });
     const out = encoder.encode(
       { xCell: 0, yCell: 0, button: 'wheel-down', modifiers: NO_MODS, kind: 'wheel' },
       snapshot,
     );
-    expect(toHex(out.bytes)).toBe('1b4f421b4f421b4f42');
+    expect(out.bytes.length).toBe(0);
+  });
+
+  it('negative xCell clamps to wire col=1 (xterm min is 1-based 1)', () => {
+    // Negative cell coords happen when a click lands outside the grid
+    // before input-host's screenToCell clamp catches them. The encoder
+    // must not emit negative or zero column numbers on the wire.
+    const { encoder, snapshot } = makeEncoder();
+    const out = encoder.encode(
+      { xCell: -5, yCell: 0, button: 'left', modifiers: NO_MODS, kind: 'press' },
+      snapshot,
+    );
+    expect(toHex(out.bytes)).toBe(sgr(0, 1, 1, 'M'));
+  });
+
+  it('negative yCell clamps to wire row=1', () => {
+    const { encoder, snapshot } = makeEncoder();
+    const out = encoder.encode(
+      { xCell: 0, yCell: -10, button: 'left', modifiers: NO_MODS, kind: 'press' },
+      snapshot,
+    );
+    expect(toHex(out.bytes)).toBe(sgr(0, 1, 1, 'M'));
+  });
+
+  it('both negative xCell and yCell clamp to wire (1,1)', () => {
+    const { encoder, snapshot } = makeEncoder();
+    const out = encoder.encode(
+      { xCell: -3, yCell: -7, button: 'right', modifiers: NO_MODS, kind: 'press' },
+      snapshot,
+    );
+    expect(toHex(out.bytes)).toBe(sgr(2, 1, 1, 'M'));
+  });
+
+  it('very large xCell passes through unclamped (upper bound is caller-owned)', () => {
+    // Encoder does not know the grid dimensions; input-host is
+    // responsible for clamping to cols/rows via screenToCell.
+    const { encoder, snapshot } = makeEncoder();
+    const out = encoder.encode(
+      { xCell: 65535, yCell: 65535, button: 'left', modifiers: NO_MODS, kind: 'press' },
+      snapshot,
+    );
+    expect(toHex(out.bytes)).toBe(sgr(0, 65536, 65536, 'M'));
   });
 
   it('x10 release emits empty bytes (x10 has no release)', () => {

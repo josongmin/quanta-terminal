@@ -87,10 +87,20 @@ export function __resetRawObserversForTests(): void {
  * `appendToActiveBlock` so a test can exercise the router-raw observer
  * surface (e.g. `installTuiDetector`) without standing up the full
  * session → block-store → router pipeline. Do not call from production.
+ *
+ * Mirrors the production fan-out's isolation semantics: if one observer
+ * throws, the router logs at `error` and keeps walking the rest. This
+ * keeps the test helper faithful to real behavior so a test that exercises
+ * multi-observer interaction does not have to reason about two different
+ * error-propagation rules.
  */
 export function __emitRawChunkForTests(chunk: Uint8Array): void {
   for (const observer of rawChunkObservers) {
-    observer(chunk);
+    try {
+      observer(chunk);
+    } catch (err) {
+      log.error('raw observer threw, isolating', err);
+    }
   }
 }
 
@@ -206,9 +216,21 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
   // detector) inspect the full raw chunk BEFORE boundary detection. The
   // mock prompt terminator never contains alt-screen bytes so passing the
   // full chunk cannot confuse the TUI detector.
+  //
+  // Robustness contract: observer exceptions MUST NOT break routing. A
+  // throwing observer is a programming error — if it propagated through
+  // this loop, every subsequent observer would be skipped AND the boundary
+  // detector below would never run, which leaves the active block stuck
+  // in "running" forever (never completes on its terminator). We isolate
+  // each observer with try/catch and surface the fault at `error` level so
+  // it is loud in dev/prod consoles but does not silently eat data.
   if (rawChunkObservers.size > 0) {
     for (const observer of rawChunkObservers) {
-      observer(chunk);
+      try {
+        observer(chunk);
+      } catch (err) {
+        log.error('raw observer threw, isolating', err);
+      }
     }
   }
 

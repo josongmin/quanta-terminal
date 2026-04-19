@@ -12,6 +12,35 @@ use crate::domain::cursor::CursorShape;
 use crate::domain::grid::Grid;
 use crate::ports::event::{ClipboardPayload, SyncUpdatePayload, TerminalEvent};
 
+/// Byte-level pre-filter state.
+///
+/// The upstream `vte` state machine does not accept BEL (0x07) as an ST
+/// surrogate inside DCS — unlike OSC, where BEL-termination is standard
+/// xterm practice. Some in-the-wild apps incorrectly terminate DCS with
+/// BEL, leaving the parser stuck in DCS state and silently swallowing
+/// follow-up output.
+///
+/// We work around the vte limitation by tracking DCS entry/exit on the
+/// raw byte stream *before* vte sees the bytes. When we observe a BEL
+/// while we believe we're inside a DCS envelope, we rewrite the BEL to
+/// the canonical ST sequence (`ESC \`) that vte does understand. vte's
+/// own FSM remains untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrefilterState {
+    /// Ground — no in-flight DCS from our perspective.
+    Ground,
+    /// We just saw an `ESC` in Ground; the next byte decides if this is
+    /// a DCS opener (`P`) or something else.
+    EscPending,
+    /// Inside a DCS envelope (we saw `ESC P`). BEL is a termination
+    /// candidate here.
+    DcsActive,
+    /// Inside DCS and we just saw `ESC` — it might be the start of an
+    /// ST (`ESC \`), or a nested ESC that aborts the DCS. Either way,
+    /// vte handles the transition; we just need to leave DCS state.
+    DcsEscPending,
+}
+
 /// Processor — holds the `vte::Parser` and a mutable grid borrow for the
 /// duration of a `feed()` call. Designed to be re-constructed per call so
 /// borrow lifetimes stay tight.
@@ -19,6 +48,7 @@ pub struct VteProcessor<'g> {
     grid: &'g mut Grid,
     parser: Parser,
     dcs: Option<DcsAccumulator>,
+    prefilter: PrefilterState,
 }
 
 impl std::fmt::Debug for VteProcessor<'_> {
@@ -34,15 +64,94 @@ impl<'g> VteProcessor<'g> {
             grid,
             parser: Parser::new(),
             dcs: None,
+            prefilter: PrefilterState::Ground,
         }
     }
 
     /// Feed bytes. All cell / mode mutations happen on the borrowed grid.
+    ///
+    /// A single-pass byte pre-filter rewrites `BEL` (0x07) inside a DCS
+    /// envelope to `ESC \` (ST) so the upstream vte FSM can close the
+    /// DCS cleanly. Everything else passes through untouched.
     pub fn feed(&mut self, bytes: &[u8]) {
-        let Self { grid, parser, dcs } = self;
+        let Self {
+            grid,
+            parser,
+            dcs,
+            prefilter,
+        } = self;
         let mut performer = Performer { grid, dcs };
         for &b in bytes {
-            parser.advance(&mut performer, b);
+            match (*prefilter, b) {
+                // ── Ground ──
+                (PrefilterState::Ground, 0x1b) => {
+                    *prefilter = PrefilterState::EscPending;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::Ground, _) => {
+                    parser.advance(&mut performer, b);
+                }
+                // ── Just saw ESC in Ground ──
+                (PrefilterState::EscPending, b'P') => {
+                    // ESC P → DCS opens.
+                    *prefilter = PrefilterState::DcsActive;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::EscPending, 0x1b) => {
+                    // Another ESC — stay in EscPending; vte handles it.
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::EscPending, _) => {
+                    // ESC <anything-but-P> — not a DCS. Back to Ground.
+                    *prefilter = PrefilterState::Ground;
+                    parser.advance(&mut performer, b);
+                }
+                // ── Inside DCS envelope ──
+                (PrefilterState::DcsActive, 0x07) => {
+                    // Non-standard BEL terminator. Rewrite to ESC\ so vte
+                    // closes the DCS cleanly. Emit both bytes to the
+                    // parser in order; update our prefilter state back
+                    // to Ground (matching vte's post-ST Ground).
+                    parser.advance(&mut performer, 0x1b);
+                    parser.advance(&mut performer, b'\\');
+                    *prefilter = PrefilterState::Ground;
+                }
+                (PrefilterState::DcsActive, 0x1b) => {
+                    // ESC inside DCS — either the start of ST or an
+                    // abort. Let vte decide; we watch the next byte.
+                    *prefilter = PrefilterState::DcsEscPending;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::DcsActive, 0x18 | 0x1a) => {
+                    // CAN (0x18) / SUB (0x1a) — ECMA-48 abort. vte drops
+                    // back to Ground on these too.
+                    *prefilter = PrefilterState::Ground;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::DcsActive, _) => {
+                    parser.advance(&mut performer, b);
+                }
+                // ── ESC seen inside DCS ──
+                (PrefilterState::DcsEscPending, b'\\') => {
+                    // ESC \ — real ST. DCS is closing.
+                    *prefilter = PrefilterState::Ground;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::DcsEscPending, b'P') => {
+                    // Nested ESC P — vte treats as a new DCS.
+                    *prefilter = PrefilterState::DcsActive;
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::DcsEscPending, 0x1b) => {
+                    // ESC ESC — stay pending.
+                    parser.advance(&mut performer, b);
+                }
+                (PrefilterState::DcsEscPending, _) => {
+                    // Any other byte — DCS ended (vte does the same).
+                    *prefilter = PrefilterState::Ground;
+                    parser.advance(&mut performer, b);
+                }
+            }
         }
     }
 }
@@ -193,20 +302,30 @@ impl Perform for Performer<'_, '_> {
                 }
             }
             52 => {
-                // Clipboard.
-                let selection = params
-                    .get(1)
-                    .and_then(|b| b.first().copied())
-                    .unwrap_or(b'c');
+                // Clipboard. xterm `Pc` may contain multiple selection
+                // chars (e.g. `pc` = primary + clipboard). We keep the
+                // first char as the primary selection and surface the
+                // remainder via `extra_selections` so host adapters can
+                // broadcast to every requested target.
+                let raw_pc: &[u8] = params.get(1).copied().unwrap_or(&[]);
+                let (selection, extra_selections) = if raw_pc.is_empty() {
+                    (b'c', Vec::new())
+                } else {
+                    (raw_pc[0], raw_pc[1..].to_vec())
+                };
                 let payload = params
                     .get(2)
                     .map(|b| String::from_utf8_lossy(b).into_owned())
                     .unwrap_or_default();
                 let clip = if payload == "?" {
-                    ClipboardPayload::Query { selection }
+                    ClipboardPayload::Query {
+                        selection,
+                        extra_selections,
+                    }
                 } else {
                     ClipboardPayload::Set {
                         selection,
+                        extra_selections,
                         data: payload,
                     }
                 };

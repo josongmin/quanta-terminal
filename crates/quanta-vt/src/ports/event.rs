@@ -193,13 +193,30 @@ pub struct ModeChangedPayload {
 }
 
 /// OSC 52 clipboard payload.
+///
+/// `selection` carries the primary selection code — the first char of the
+/// `Pc` field — and is kept as a scalar for ergonomic pattern-matching by
+/// downstream consumers. `extra_selections` captures any additional
+/// selection chars per the xterm spec (e.g. `OSC 52 ; pc ; …` targets
+/// both primary and clipboard). Consumers that care about multi-target
+/// writes (host clipboard adapters) should apply the operation to every
+/// char in `selection` plus `extra_selections`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ClipboardPayload {
     /// Set clipboard contents.
-    Set { selection: u8, data: String },
+    Set {
+        selection: u8,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extra_selections: Vec<u8>,
+        data: String,
+    },
     /// Query clipboard contents.
-    Query { selection: u8 },
+    Query {
+        selection: u8,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extra_selections: Vec<u8>,
+    },
 }
 
 /// Synchronized-update (DECSET 2026 / DCS BSU/ESU) transition.

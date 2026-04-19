@@ -17,6 +17,7 @@
  *     → `P` (DCS)    → IgnoreUntilSt  (swallow to ESC \ or BEL)
  *     → `_` (APC)    → IgnoreUntilSt
  *     → `^` (PM)     → IgnoreUntilSt
+ *     → `c` (RIS)    full reset — equivalent to internal `reset()`.
  *     → anything else: silently drop, return to Ground. (Charset selects
  *                    `( ) * +` + one byte, cursor-save `7`, etc. — we don't
  *                    care about the payload because blocks aren't a screen.)
@@ -191,6 +192,23 @@ export class AnsiParser {
       case 0x5c: // \ (ST) — stray ST has no effect here.
         this.state = 'Ground';
         return;
+      case 0x63: // c — RIS (Full Reset / Reset to Initial State).
+        // xterm / ECMA-48 semantics: ESC c returns the terminal to its
+        // power-on defaults — SGR reset, no active hyperlink, no half-
+        // consumed escape sequences, no pending partial UTF-8 codepoint.
+        // Internally this is exactly what `reset()` does, so we call it
+        // directly. The FSM state switch back to Ground is implicit in
+        // `reset()` as well.
+        //
+        // Note: RIS does not emit a side-channel mode event here — the
+        // `AnsiModeEvent` union reports CSI-driven DEC private-mode
+        // transitions, not global terminal resets, and consumers already
+        // apply their own "reset mirror on RIS" policy at a higher layer.
+        // Block-level state (cursor origin, tab stops, etc.) is not modeled
+        // by this parser, so the style/link/FSM reset covers everything the
+        // parser owns.
+        this.reset();
+        return;
       default:
         // Two-char escapes like `ESC 7` (save cursor), `ESC M` (reverse index),
         // charset selects `ESC ( B`. We don't model any of these — blocks
@@ -230,9 +248,11 @@ export class AnsiParser {
 
   private dispatchCsi(final: number, out: AnsiSpan[]): void {
     // Private-mode markers like `?1049h` start with `?`. Alt-screen
-    // enter/exit fans out to `onMode` when configured (Phase 3 TUI fallback);
-    // every other private-mode (cursor keys, mouse, bracketed-paste) stays
-    // dropped. Style updates (`m`) are the only other CSI we act on.
+    // enter/exit fans out to `onMode` when configured (Phase 3 TUI fallback),
+    // and Phase 4 extends `onMode` to cover cursor visibility, bracketed
+    // paste, mouse tracking/encoding, focus reporting, cursor blink, and
+    // origin mode. Anything else stays dropped. Style updates (`m`) are the
+    // only other CSI we act on.
     if (final === 0x68 /* h */ || final === 0x6c /* l */) {
       this.maybeDispatchMode(final);
       return;
@@ -252,29 +272,108 @@ export class AnsiParser {
   }
 
   /**
-   * Emit an alt-screen `onMode` event when the CSI we just consumed was a
-   * DEC private-mode set/reset for 1049 / 1047 / 47. Multiple parameters in
-   * a single CSI (e.g. `ESC[?1049;25h`) are tolerated: we scan each `;`-
-   * separated value and fire at most one event for the chunk, which matches
-   * how real xterm handles batched private-mode changes.
+   * Fan out `onMode` events for the DEC private-mode set/reset we just
+   * consumed. Multiple parameters in a single CSI (e.g. `ESC[?25;2004h`)
+   * are tolerated: we scan each `;`-separated value and dispatch one event
+   * per recognized mode, in source order — matching how real xterm handles
+   * batched private-mode changes.
+   *
+   * Alt-screen transitions (1049 / 1047 / 47) intentionally coalesce to a
+   * single `alt_screen_enter` / `alt_screen_exit` per CSI so the pre-Phase-4
+   * contract is preserved byte-for-byte. All other recognized modes emit one
+   * event each. Unknown codes are ignored (the CSI itself is still consumed
+   * by the FSM).
+   *
+   * Mode-to-event mapping mirrors EPIC-E's `TerminalModeSnapshot` vocabulary
+   * (see `packages/ui/src/features/input/types.ts`) so consumers can apply
+   * events 1:1 against the mirror without translating names.
    */
   private maybeDispatchMode(final: number): void {
     if (this.onMode === undefined) return;
     if (!this.seqBuf.startsWith('?')) return;
     // `?1049;25` → `1049;25`, stripping the leading marker only.
     const body = this.seqBuf.slice(1);
-    let hasAltScreen = false;
+    const isSet = final === 0x68; /* h */
+    const emit = this.onMode;
+    // Fire alt-screen at most once per CSI, regardless of how many of the
+    // three alt-screen codes appear. Pathological `?1049;1047h` still
+    // produces exactly one event, preserving Phase-3 semantics.
+    let altScreenFired = false;
     for (const raw of body.split(';')) {
       // Trim intermediates like 0x20 in case a terminal emits `?1049 h`.
-      const trimmed = raw.trim();
-      if (trimmed === '1049' || trimmed === '1047' || trimmed === '47') {
-        hasAltScreen = true;
-        break;
+      const code = raw.trim();
+      if (code === '') continue;
+      if (code === '1049' || code === '1047' || code === '47') {
+        if (altScreenFired) continue;
+        altScreenFired = true;
+        emit({ kind: isSet ? 'alt_screen_enter' : 'alt_screen_exit' });
+        continue;
+      }
+      switch (code) {
+        case '6':
+          emit({ kind: 'origin_mode_set', value: isSet });
+          continue;
+        case '9':
+          // Pre-VT200 X10 compatibility mouse reporting. Rarely seen today,
+          // but included so a `TerminalModeSnapshot` rehydrator has a place
+          // to land the `'x10'` variant of `mouseTracking`.
+          emit({
+            kind: 'mouse_tracking_set',
+            mode: isSet ? 'x10' : 'off',
+          });
+          continue;
+        case '12':
+          emit({ kind: 'cursor_blinking_set', value: isSet });
+          continue;
+        case '25':
+          emit({ kind: 'cursor_visible_set', value: isSet });
+          continue;
+        case '1000':
+        case '1002':
+          // EPIC-C's mirror collapses 1000 (button reporting) and 1002
+          // (button + drag) into `'button_event'`. We follow that
+          // vocabulary so events can be applied without translation.
+          emit({
+            kind: 'mouse_tracking_set',
+            mode: isSet ? 'button_event' : 'off',
+          });
+          continue;
+        case '1003':
+          emit({
+            kind: 'mouse_tracking_set',
+            mode: isSet ? 'any_event' : 'off',
+          });
+          continue;
+        case '1004':
+          emit({ kind: 'focus_reporting_set', value: isSet });
+          continue;
+        case '1005':
+          emit({
+            kind: 'mouse_encoding_set',
+            encoding: isSet ? 'utf8' : 'default',
+          });
+          continue;
+        case '1006':
+          emit({
+            kind: 'mouse_encoding_set',
+            encoding: isSet ? 'sgr' : 'default',
+          });
+          continue;
+        case '1015':
+          emit({
+            kind: 'mouse_encoding_set',
+            encoding: isSet ? 'url_xterm' : 'default',
+          });
+          continue;
+        case '2004':
+          emit({ kind: 'bracketed_paste_set', value: isSet });
+          continue;
+        default:
+          // Unknown private mode — dropped. Keeps the side-channel
+          // conservative: we never surface a mode we can't name.
+          continue;
       }
     }
-    if (!hasAltScreen) return;
-    const kind = final === 0x68 /* h */ ? 'alt_screen_enter' : 'alt_screen_exit';
-    this.onMode({ kind });
   }
 
   private stepOsc(b: number, out: AnsiSpan[]): void {

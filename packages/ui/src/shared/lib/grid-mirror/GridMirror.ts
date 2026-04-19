@@ -84,12 +84,23 @@ export type ResyncRowResponse =
 export class GridMirror {
   /* eslint-disable @typescript-eslint/prefer-readonly -- mutated on apply */
   private epoch = 0;
+  /**
+   * True once at least one `grid_snapshot` has been applied. The initial
+   * `epoch = 0` is a default placeholder, not an observed epoch, so the
+   * `onEpochMismatch` hook must NOT fire for the very first snapshot even
+   * when its `grid_epoch !== 0`. Public getter `getAppliedEpoch()` still
+   * returns `0n` pre-apply (consumer contract, docs/plans §DoD-C-22).
+   */
+  private hasAppliedSnapshot = false;
   private appliedSequence = 0;
   private resizeGeneration = 0;
   private rowCount = 0;
   private colCount = 0;
   private rows: Row[] = [];
   private rowRevisions: Uint32Array = new Uint32Array(0);
+  /** Monotonic counter of rows appended to scrollback since the mirror was
+   *  seeded. Bumped by `grid_delta.scrollback_appended` on the main buffer. */
+  private scrollbackAppendedTotal = 0;
   private cursor: CursorState = {
     row: 0,
     col: 0,
@@ -171,6 +182,13 @@ export class GridMirror {
     return this.bufferKind;
   }
 
+  /** Count of rows the engine has appended to scrollback since this mirror
+   *  was last seeded by a snapshot. Consumers use this to drive a
+   *  scrollback view. */
+  getScrollbackAppendedTotal(): number {
+    return this.scrollbackAppendedTotal;
+  }
+
   /** Latest applied `sequence_no` within the current epoch (bigint for parity
    *  with the EPIC-E `ModeSnapshot` diagnostic). */
   getAppliedSequence(): bigint {
@@ -230,10 +248,15 @@ export class GridMirror {
       this.telemetry.incr('stale_epoch_drop');
       return { outcome: 'discarded', reason: 'stale_epoch' };
     }
-    if (env.grid_epoch !== this.epoch) {
+    // Only fire onEpochMismatch when we have previously applied a snapshot
+    // and the new epoch differs from the prior applied one. The initial
+    // `this.epoch = 0` is a placeholder — not an observed epoch — so the
+    // very first snapshot must NOT be reported as a mismatch.
+    if (this.hasAppliedSnapshot && env.grid_epoch !== this.epoch) {
       this.onEpochMismatchFn?.({ expected: this.epoch, observed: env.grid_epoch });
     }
     const { payload } = env;
+    this.hasAppliedSnapshot = true;
     this.epoch = env.grid_epoch;
     this.appliedSequence = env.sequence_no;
     this.resizeGeneration = env.resize_generation;
@@ -256,9 +279,18 @@ export class GridMirror {
     }
     this.mode = { ...payload.mode_state };
     this.meta = { ...(payload.meta ?? {}) };
+    // Hyperlink table is part of the authoritative grid state that the
+    // snapshot replaces. Leaving stale entries would let a pre-reseed id
+    // (from a now-discarded epoch, or a re-used id within the same epoch)
+    // resolve after the reseed — misrouting OSC 8 clicks to URIs the engine
+    // no longer owns. A snapshot carries its own `hyperlink_refs` inside
+    // each row_delta, and the engine will re-emit `hyperlink_added` for any
+    // URI that survives the reseed, so clearing here is safe.
+    this.hyperlinks.clear();
     // Clear mismatch / resync gating — the mirror is fresh.
     this.mismatchLog = [];
     this.awaitingSnapshot = false;
+    this.scrollbackAppendedTotal = 0;
     this.syncWindow.reset();
     this.dispatchChange(new Set(this.rows.map((_, i) => i)));
     return { outcome: 'applied' };
@@ -370,7 +402,17 @@ export class GridMirror {
         if (gate) return gate;
         const entry = this.hyperlinks.get(payload.id);
         if (entry) {
-          entry.refcount -= 1;
+          // Underflow guard: a malformed engine stream could emit more
+          // `hyperlink_removed` than `hyperlink_added` (bug, stale replay,
+          // or a race during reseed). If we blindly decremented below 0
+          // the eviction check below would fire and remove an entry whose
+          // live references are still painted on the grid — the next
+          // `resolveHyperlink` would then return `null` for a cell that
+          // is still visibly linked. Clamp at 0 and only evict once the
+          // last live reference is gone.
+          if (entry.refcount > 0) {
+            entry.refcount -= 1;
+          }
           if (entry.refcount <= 0) {
             this.hyperlinks.delete(payload.id);
           }

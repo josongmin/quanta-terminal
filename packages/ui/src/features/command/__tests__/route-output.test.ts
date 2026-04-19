@@ -1,0 +1,920 @@
+/**
+ * SOTA unit coverage for `features/command/route-output.ts`.
+ *
+ * This file complements the pre-existing `route-output-multi-session.test.ts`
+ * sibling by exercising the full public surface of the router module:
+ * install / dispose lifecycle, boundary detection (including the cross-chunk
+ * partial-terminator case), raw-chunk observers, finalize semantics on
+ * pty_exit, multi-session pointer hygiene, and the test-only helpers.
+ *
+ * Design notes
+ * ------------
+ * - The router binds to `entities/block` through a named port. Tests never
+ *   touch the real Zustand store; instead they install a hand-rolled
+ *   `BlockStoreActions` recorder through `bindBlockStore()`. The recorder
+ *   is a stateful fake, not a mock — we read `getActiveBlockId()` back to
+ *   assert pointer hygiene, and record calls for assertion.
+ * - `__resetRouterForTests()` is the single source of truth for test reset.
+ *   We call it in both beforeEach AND afterEach so a failing test cannot
+ *   leak router state (per-session handles, raw observers, lookup port,
+ *   store active pointer) into the next one.
+ * - The mock boundary terminator is `MOCK_PROMPT_BYTES` (11 bytes:
+ *   ESC [36m $ ESC [0m SPACE). Base64 fixtures below were precomputed so
+ *   they match exactly what the mock bridge would emit.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BlockId, SessionId } from '../../../shared/types/generated/index.js';
+import {
+  __resetRouterForTests,
+  __resetRawObserversForTests,
+  __emitRawChunkForTests,
+  addRouterRawObserver,
+  appendToActiveBlock,
+  finalizeActiveBlock,
+  getActiveBlockId,
+  installCommandRouter,
+  isCommandRouterInstalled,
+  setRouterBlockSessionLookup,
+} from '../route-output.js';
+import { bindBlockStore, type BlockStoreActions } from '../block-store-port.js';
+
+// ----- Test fixtures: precomputed base64 for mock-terminator scenarios -----
+
+/** "foo" — 3 plain bytes, no terminator. */
+const B64_FOO = 'Zm9v';
+/** "bar" — 3 plain bytes, no terminator. */
+const B64_BAR = 'YmFy';
+/** "hello" + full MOCK_PROMPT_BYTES terminator, in one chunk. */
+const B64_HELLO_TERM = 'aGVsbG8bWzM2bSQbWzBtIA==';
+/** "hello" + first 5 bytes of terminator (ESC [ 3 6 m). Exercises cross-chunk carry. */
+const B64_HELLO_PARTIAL_TERM = 'aGVsbG8bWzM2bQ==';
+/** The rest of the terminator: $ ESC [ 0 m SPACE. Completes the match on feed #2. */
+const B64_TERM_REST = 'JBtbMG0g';
+/** "hello" + terminator + "ignored" trailing — checks bytes-after-terminator are dropped. */
+const B64_HELLO_TERM_TRAIL = 'aGVsbG8bWzM2bSQbWzBtIGlnbm9yZWQ=';
+
+function bytesToText(bytes: Uint8Array): string {
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+// ----- Recorder: stateful fake BlockStoreActions -----
+
+interface Recorder {
+  readonly store: BlockStoreActions;
+  readonly appends: Array<{ id: BlockId; bytes: Uint8Array }>;
+  readonly completes: Array<{ id: BlockId; exitCode: number | null }>;
+  readonly cancels: BlockId[];
+  readonly errors: Array<{ id: BlockId; message: string }>;
+  setActive: (id: BlockId | null) => void;
+  setRunning: (ids: readonly BlockId[]) => void;
+  bindBlockToSession: (id: BlockId, session: SessionId) => void;
+  lookup: (id: BlockId) => SessionId | undefined;
+}
+
+function makeRecorder(): Recorder {
+  let active: BlockId | null = null;
+  let running: readonly BlockId[] = [];
+  const blockToSession = new Map<BlockId, SessionId>();
+  const appends: Array<{ id: BlockId; bytes: Uint8Array }> = [];
+  const completes: Array<{ id: BlockId; exitCode: number | null }> = [];
+  const cancels: BlockId[] = [];
+  const errors: Array<{ id: BlockId; message: string }> = [];
+
+  const store: BlockStoreActions = {
+    createBlock: vi.fn(() => 'blk-created' as BlockId),
+    startBlock: vi.fn(() => 'blk-started' as BlockId),
+    setActiveBlockId: (id) => {
+      active = id;
+    },
+    getActiveBlockId: () => active,
+    appendBlockOutput: (id, chunk) => {
+      appends.push({ id, bytes: new Uint8Array(chunk) });
+    },
+    completeBlock: (id, exitCode) => {
+      completes.push({ id, exitCode });
+      if (active === id) active = null;
+    },
+    cancelBlock: (id) => {
+      cancels.push(id);
+      if (active === id) active = null;
+    },
+    errorBlock: (id, message) => {
+      errors.push({ id, message });
+    },
+    getRunningBlockIds: () => running,
+  };
+
+  return {
+    store,
+    appends,
+    completes,
+    cancels,
+    errors,
+    setActive: (id) => {
+      active = id;
+    },
+    setRunning: (ids) => {
+      running = ids;
+    },
+    bindBlockToSession: (id, session) => {
+      blockToSession.set(id, session);
+    },
+    lookup: (id) => blockToSession.get(id),
+  };
+}
+
+// ----- Suite-wide setup / teardown -----
+
+let unbindStore: (() => void) | undefined;
+
+beforeEach(() => {
+  __resetRouterForTests();
+  __resetRawObserversForTests();
+});
+
+afterEach(() => {
+  if (unbindStore) unbindStore();
+  unbindStore = undefined;
+  __resetRouterForTests();
+  __resetRawObserversForTests();
+  setRouterBlockSessionLookup(null);
+  vi.restoreAllMocks();
+});
+
+// =====================================================================
+// A. Install / dispose lifecycle
+// =====================================================================
+
+describe('installCommandRouter — install & dispose lifecycle', () => {
+  it('marks the session as installed after install', () => {
+    const A = 'sess-a' as SessionId;
+    expect(isCommandRouterInstalled(A)).toBe(false);
+    installCommandRouter(A);
+    expect(isCommandRouterInstalled(A)).toBe(true);
+  });
+
+  it('dispose() removes the install flag for that session', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    const handle = installCommandRouter(A);
+    expect(isCommandRouterInstalled(A)).toBe(true);
+    handle.dispose();
+    expect(isCommandRouterInstalled(A)).toBe(false);
+  });
+
+  it('two concurrent sessions remain independently installed', () => {
+    const A = 'sess-a' as SessionId;
+    const B = 'sess-b' as SessionId;
+    const ra = installCommandRouter(A);
+    installCommandRouter(B);
+
+    expect(isCommandRouterInstalled(A)).toBe(true);
+    expect(isCommandRouterInstalled(B)).toBe(true);
+
+    ra.dispose();
+    expect(isCommandRouterInstalled(A)).toBe(false);
+    expect(isCommandRouterInstalled(B)).toBe(true);
+  });
+
+  it('re-install on same session id replaces the detector without leaking', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const first = installCommandRouter(A);
+
+    // Seed a carry: feed partial terminator through `first`.
+    rec.bindBlockToSession('blk-a' as BlockId, A);
+    rec.setActive('blk-a' as BlockId);
+    appendToActiveBlock(A, B64_HELLO_PARTIAL_TERM);
+    // After a partial-terminator feed, carry is held in `first`'s detector.
+    // With no boundary yet, "hello" went downstream but 5 bytes of terminator
+    // are carried inside the detector.
+    expect(rec.appends.length).toBeGreaterThanOrEqual(1);
+
+    const appendsBefore = rec.appends.length;
+
+    // Install again — the new handle replaces the detector. The second half
+    // of the terminator alone must NOT complete the boundary (because the
+    // carry was blown away), i.e. those 6 bytes land as raw output.
+    installCommandRouter(A);
+    appendToActiveBlock(A, B64_TERM_REST);
+    // No boundary → no completeBlock call.
+    expect(rec.completes).toHaveLength(0);
+    // Those 6 bytes should have been forwarded as output on the new detector.
+    expect(rec.appends.length).toBeGreaterThan(appendsBefore);
+
+    // The stale `first` handle must NOT delete the live router on dispose.
+    first.dispose();
+    expect(isCommandRouterInstalled(A)).toBe(true);
+  });
+
+  it('dispose() on a stale handle is a no-op', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const first = installCommandRouter(A);
+    installCommandRouter(A); // replaces `first` silently
+
+    rec.bindBlockToSession('blk-a' as BlockId, A);
+    rec.setActive('blk-a' as BlockId);
+
+    first.dispose();
+
+    // Active pointer untouched (stale handle defers to the live one).
+    expect(rec.store.getActiveBlockId()).toBe('blk-a');
+    // Router still installed under A.
+    expect(isCommandRouterInstalled(A)).toBe(true);
+  });
+});
+
+// =====================================================================
+// B. appendToActiveBlock — baseline paths
+// =====================================================================
+
+describe('appendToActiveBlock — baseline routing paths', () => {
+  it('is a silent no-op when no router is installed for the session', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    rec.setActive('blk-nope' as BlockId);
+
+    appendToActiveBlock('sess-ghost' as SessionId, B64_FOO);
+    expect(rec.appends).toHaveLength(0);
+  });
+
+  it('is a silent no-op when the block store is not bound', () => {
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    // Deliberately do NOT bindBlockStore — emulates pre-bootstrap ordering.
+    expect(() => appendToActiveBlock(A, B64_FOO)).not.toThrow();
+  });
+
+  it('drops the chunk when no block is active (shell greeting case)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    // active stays null.
+    appendToActiveBlock(A, B64_FOO);
+    expect(rec.appends).toHaveLength(0);
+    expect(rec.completes).toHaveLength(0);
+  });
+
+  it('normal path: bytes without a terminator flow to appendBlockOutput on the active block', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    expect(rec.appends).toHaveLength(1);
+    expect(rec.appends[0]?.id).toBe('blk-a');
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('foo');
+    expect(rec.completes).toHaveLength(0);
+  });
+
+  it('delivers bytes to the currently-active block even after the active pointer changes mid-stream', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-1' as BlockId);
+    appendToActiveBlock(A, B64_FOO);
+
+    rec.setActive('blk-2' as BlockId);
+    appendToActiveBlock(A, B64_BAR);
+
+    expect(rec.appends).toHaveLength(2);
+    expect(rec.appends[0]?.id).toBe('blk-1');
+    expect(rec.appends[1]?.id).toBe('blk-2');
+  });
+
+  it('re-exports getActiveBlockId and it reflects the bound store', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    rec.setActive('blk-x' as BlockId);
+    expect(getActiveBlockId()).toBe('blk-x');
+  });
+});
+
+// =====================================================================
+// C. Boundary detection
+// =====================================================================
+
+describe('appendToActiveBlock — boundary detection', () => {
+  it('full-terminator chunk: preBoundary bytes appended, completeBlock called with exitCode 0', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_TERM);
+
+    expect(rec.appends).toHaveLength(1);
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('hello');
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+  });
+
+  it('bytes after the terminator are discarded (no second block is active yet)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_TERM_TRAIL);
+
+    // Pre-boundary = "hello"; the mock terminator closes the block; the
+    // "ignored" bytes past the terminator are dropped because there is no
+    // follow-up active block to receive them.
+    expect(rec.appends).toHaveLength(1);
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('hello');
+    expect(rec.completes).toHaveLength(1);
+  });
+
+  it('partial-terminator split across chunks: boundary resolves on the second feed', () => {
+    // This is the "treacherous" case — a naive stateless suffix-match would
+    // miss the cross-chunk terminator and leak the next block's leading
+    // bytes into the closing block. The stateful detector must hold carry.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_PARTIAL_TERM);
+    // First feed: "hello" forwarded; last 5 bytes (start of terminator)
+    // carried internally as pending match.
+    expect(rec.completes).toHaveLength(0);
+    // We assert the visible bytes so far concatenate to "hello".
+    const soFar = rec.appends.map((a) => bytesToText(a.bytes)).join('');
+    expect(soFar).toBe('hello');
+
+    appendToActiveBlock(A, B64_TERM_REST);
+    // Second feed completes the terminator → block closes. No extra bytes
+    // (the second chunk was entirely terminator tail).
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+    const finalText = rec.appends.map((a) => bytesToText(a.bytes)).join('');
+    expect(finalText).toBe('hello');
+  });
+
+  it('detector is replaced on boundary — carry from the prior block does NOT leak', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    // Close block A with full terminator.
+    appendToActiveBlock(A, B64_HELLO_TERM);
+    expect(rec.completes).toHaveLength(1);
+
+    // Start a new block and feed only the back-half of a terminator. The
+    // new detector must NOT treat the stale carry as a match — these 6
+    // bytes should just land as output.
+    rec.setActive('blk-b' as BlockId);
+    appendToActiveBlock(A, B64_TERM_REST);
+
+    expect(rec.completes).toHaveLength(1); // still just the first close
+    // The new block received the 6 bytes as plain output.
+    const forBlkB = rec.appends.filter((a) => a.id === 'blk-b');
+    expect(forBlkB.length).toBe(1);
+    expect(forBlkB[0]!.bytes.length).toBe(6);
+  });
+
+  it('empty chunk (empty base64) is a no-op when active', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, '');
+    // Empty chunk → detector emits empty preBoundary → no appendBlockOutput
+    // (router guards with preBoundary.length > 0).
+    expect(rec.appends).toHaveLength(0);
+    expect(rec.completes).toHaveLength(0);
+  });
+});
+
+// =====================================================================
+// D. Raw chunk observers (side-channel)
+// =====================================================================
+
+describe('raw chunk observers', () => {
+  it('addRouterRawObserver fires on each append', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const seen: Uint8Array[] = [];
+    addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+
+    appendToActiveBlock(A, B64_FOO);
+    appendToActiveBlock(A, B64_BAR);
+
+    expect(seen).toHaveLength(2);
+    expect(bytesToText(seen[0]!)).toBe('foo');
+    expect(bytesToText(seen[1]!)).toBe('bar');
+  });
+
+  it('returned unsubscribe stops delivery', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const seen: Uint8Array[] = [];
+    const off = addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+
+    appendToActiveBlock(A, B64_FOO);
+    off();
+    appendToActiveBlock(A, B64_BAR);
+
+    expect(seen).toHaveLength(1);
+    expect(bytesToText(seen[0]!)).toBe('foo');
+  });
+
+  it('multiple observers all fire in insertion order', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const order: string[] = [];
+    addRouterRawObserver(() => order.push('one'));
+    addRouterRawObserver(() => order.push('two'));
+    addRouterRawObserver(() => order.push('three'));
+
+    appendToActiveBlock(A, B64_FOO);
+
+    // Set iteration order is insertion order in modern JS engines, and the
+    // router uses a Set so we can lock this contract in.
+    expect(order).toEqual(['one', 'two', 'three']);
+  });
+
+  it('observer is NOT fired when the router is installed but no block is active (early-drop path)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    // active stays null — router bails out before observer fan-out.
+
+    const seen: Uint8Array[] = [];
+    addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+    appendToActiveBlock(A, B64_FOO);
+
+    expect(seen).toHaveLength(0);
+  });
+
+  it('__emitRawChunkForTests fans out to every registered observer directly', () => {
+    const seen: Uint8Array[] = [];
+    addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+    addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+
+    const payload = new Uint8Array([1, 2, 3]);
+    __emitRawChunkForTests(payload);
+
+    expect(seen).toHaveLength(2);
+    expect(Array.from(seen[0]!)).toEqual([1, 2, 3]);
+    expect(Array.from(seen[1]!)).toEqual([1, 2, 3]);
+  });
+
+  it('a throwing observer is isolated: append does NOT throw, the error is logged at error level', () => {
+    // Robustness contract: a buggy observer (programming error) must NOT
+    // bring down the whole routing pipeline. The router wraps each observer
+    // in try/catch, logs at `error`, and keeps going. This replaces the
+    // prior "unwrapped fan-out" behavior that was pinned here — see the
+    // comment on `appendToActiveBlock`'s observer loop for the rationale.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    addRouterRawObserver(() => {
+      throw new Error('observer exploded');
+    });
+
+    expect(() => appendToActiveBlock(A, B64_FOO)).not.toThrow();
+
+    // Exactly one error log for the one throw; logger tag prefix is the
+    // first arg so the throw message shows up in a later arg. We assert
+    // the error was logged without over-constraining the exact shape.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const firstCall = errorSpy.mock.calls[0] ?? [];
+    expect(firstCall.some((arg) => arg instanceof Error && /observer exploded/u.test(arg.message))).toBe(true);
+  });
+
+  it('throwing observer does NOT block boundary detection on the same chunk', () => {
+    // Pre-fix, a throwing observer bubbled out of appendToActiveBlock and
+    // the `detector.feed(chunk)` + `completeBlock` code below never ran,
+    // stranding the block in "running" forever. This test is the
+    // regression guard: with isolation, the terminator in the chunk still
+    // closes the block.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    addRouterRawObserver(() => {
+      throw new Error('observer exploded mid-stream');
+    });
+
+    appendToActiveBlock(A, B64_HELLO_TERM);
+
+    // Boundary detector still saw the chunk → preBoundary "hello" appended,
+    // block completed with exitCode 0.
+    expect(rec.appends).toHaveLength(1);
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('hello');
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+  });
+
+  it('throwing observer in the middle of the chain does not block sibling observers before or after', () => {
+    // Insertion-ordered fan-out means the failing observer sits between
+    // siblings. The try/catch wrap must let both the pre-throw and
+    // post-throw observers still fire for the same chunk.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const order: string[] = [];
+    addRouterRawObserver(() => order.push('first'));
+    addRouterRawObserver(() => {
+      order.push('second-before-throw');
+      throw new Error('middle observer exploded');
+    });
+    addRouterRawObserver(() => order.push('third'));
+
+    appendToActiveBlock(A, B64_FOO);
+
+    expect(order).toEqual(['first', 'second-before-throw', 'third']);
+  });
+
+  it('__emitRawChunkForTests isolates throwing observers the same way as production fan-out', () => {
+    // The test helper must mirror real semantics, otherwise tests that use
+    // it to exercise observer integrations could silently diverge from
+    // production behavior.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const seen: string[] = [];
+    addRouterRawObserver(() => seen.push('a'));
+    addRouterRawObserver(() => {
+      throw new Error('helper-side observer exploded');
+    });
+    addRouterRawObserver(() => seen.push('c'));
+
+    expect(() => __emitRawChunkForTests(new Uint8Array([1]))).not.toThrow();
+    expect(seen).toEqual(['a', 'c']);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('repeated fires of the same chunk with a throwing observer do not leak state between calls', () => {
+    // A throw on call N must not poison call N+1: observer membership is
+    // unchanged, sibling observers still run, and the error count grows
+    // by exactly one per fire (no accidental double-log or swallow).
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+
+    const seen: number[] = [];
+    addRouterRawObserver(() => {
+      throw new Error('flaky');
+    });
+    addRouterRawObserver(() => seen.push(1));
+
+    appendToActiveBlock(A, B64_FOO);
+    appendToActiveBlock(A, B64_FOO);
+    appendToActiveBlock(A, B64_FOO);
+
+    // Sibling observer ran on every fire.
+    expect(seen).toEqual([1, 1, 1]);
+    // One error log per fire — no silent-swallow, no double-log.
+    expect(errorSpy).toHaveBeenCalledTimes(3);
+    // Boundary detection also ran three times (no terminator → no complete,
+    // but append happened each time).
+    expect(rec.appends).toHaveLength(3);
+    expect(rec.completes).toHaveLength(0);
+  });
+});
+
+// =====================================================================
+// E. Multi-session dispose hygiene (Audit P0 fix 1)
+// =====================================================================
+//
+// NOTE: the sibling `route-output-multi-session.test.ts` covers the P0
+// regression cases. The assertions below OVERLAP intentionally so this
+// file stands alone as the module's complete coverage — if the sibling
+// file is ever deleted or folded away, the critical guarantees survive.
+
+describe('dispose() multi-session pointer hygiene', () => {
+  it('does NOT clear the active pointer when the active block is owned by another session', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const B = 'sess-b' as SessionId;
+    const ra = installCommandRouter(A);
+    installCommandRouter(B);
+
+    rec.bindBlockToSession('blk-b' as BlockId, B);
+    rec.setActive('blk-b' as BlockId);
+
+    ra.dispose();
+    expect(rec.store.getActiveBlockId()).toBe('blk-b');
+  });
+
+  it('DOES clear the active pointer when the active block belongs to the disposing session', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    rec.bindBlockToSession('blk-a' as BlockId, A);
+    rec.setActive('blk-a' as BlockId);
+
+    ra.dispose();
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('leaves the pointer alone when the lookup port is not registered (race safety)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    // Lookup port intentionally NOT set.
+
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    rec.setActive('blk-unknown' as BlockId);
+
+    ra.dispose();
+    // Positive-confirmation posture: unknown ownership = leave it.
+    expect(rec.store.getActiveBlockId()).toBe('blk-unknown');
+  });
+
+  it('leaves the pointer alone when the lookup returns undefined (block id not bound to any session)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    // Active block is set but NOT bound in the recorder's blockToSession map,
+    // so `lookup` returns undefined.
+    rec.setActive('blk-orphan' as BlockId);
+
+    ra.dispose();
+    expect(rec.store.getActiveBlockId()).toBe('blk-orphan');
+  });
+
+  it('no store bound → dispose is a silent no-op', () => {
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    // No bindBlockStore call. dispose must not throw and must still detach.
+    expect(() => ra.dispose()).not.toThrow();
+    expect(isCommandRouterInstalled(A)).toBe(false);
+  });
+
+  it('active pointer already null → dispose leaves it null (early-return path)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    // active stays null.
+
+    ra.dispose();
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+});
+
+// =====================================================================
+// F. finalizeActiveBlock (pty_exit)
+// =====================================================================
+
+describe('finalizeActiveBlock — pty_exit handling', () => {
+  it('no router for session → no-op (even with a live store and running blocks)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    rec.setRunning(['blk-x' as BlockId]);
+
+    finalizeActiveBlock('sess-ghost' as SessionId, 0, null);
+
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.cancels).toHaveLength(0);
+  });
+
+  it('no store bound → no-op (router installed but store missing)', () => {
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    expect(() => finalizeActiveBlock(A, 0, null)).not.toThrow();
+  });
+
+  it('completes the active block with the given exit code', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+    rec.setRunning(['blk-a' as BlockId]);
+
+    finalizeActiveBlock(A, 42, null);
+
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 42 }]);
+    expect(rec.cancels).toHaveLength(0);
+  });
+
+  it('propagates a null exit code (signal-only exit)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+    rec.setRunning(['blk-a' as BlockId]);
+
+    finalizeActiveBlock(A, null, 'SIGHUP');
+
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: null }]);
+  });
+
+  it('cancels every running block that is NOT the active one', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-active' as BlockId);
+    rec.setRunning([
+      'blk-active' as BlockId,
+      'blk-ghost-1' as BlockId,
+      'blk-ghost-2' as BlockId,
+    ]);
+
+    finalizeActiveBlock(A, 0, null);
+
+    expect(rec.completes).toEqual([{ id: 'blk-active', exitCode: 0 }]);
+    expect(rec.cancels).toEqual(['blk-ghost-1', 'blk-ghost-2']);
+  });
+
+  it('clears the active pointer after finalizing (unconditional null write)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+    rec.setRunning(['blk-a' as BlockId]);
+
+    finalizeActiveBlock(A, 0, null);
+
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('no running blocks at all → simply clears the active pointer', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive('blk-stale' as BlockId);
+    rec.setRunning([]);
+
+    finalizeActiveBlock(A, 0, null);
+
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.cancels).toHaveLength(0);
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('running blocks with NO active pointer → every running block is cancelled', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    rec.setActive(null);
+    rec.setRunning(['blk-1' as BlockId, 'blk-2' as BlockId]);
+
+    finalizeActiveBlock(A, 0, null);
+
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.cancels).toEqual(['blk-1', 'blk-2']);
+  });
+});
+
+// =====================================================================
+// G. Test helpers self-check
+// =====================================================================
+
+describe('__resetRouterForTests & friends', () => {
+  it('clears router handles across all sessions', () => {
+    const A = 'sess-a' as SessionId;
+    const B = 'sess-b' as SessionId;
+    installCommandRouter(A);
+    installCommandRouter(B);
+    expect(isCommandRouterInstalled(A)).toBe(true);
+    expect(isCommandRouterInstalled(B)).toBe(true);
+
+    __resetRouterForTests();
+
+    expect(isCommandRouterInstalled(A)).toBe(false);
+    expect(isCommandRouterInstalled(B)).toBe(false);
+  });
+
+  it('clears raw chunk observers', () => {
+    const seen: number[] = [];
+    addRouterRawObserver(() => seen.push(1));
+    __emitRawChunkForTests(new Uint8Array([0]));
+    expect(seen).toHaveLength(1);
+
+    __resetRouterForTests();
+
+    __emitRawChunkForTests(new Uint8Array([0]));
+    expect(seen).toHaveLength(1);
+  });
+
+  it('clears the block-session lookup port so a subsequent dispose reverts to no-lookup behavior', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    __resetRouterForTests();
+
+    // Re-install and verify dispose now takes the "no lookup" conservative
+    // branch: with active pointer set but lookup cleared, pointer survives.
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A);
+    rec.setActive('blk-a' as BlockId);
+    ra.dispose();
+
+    expect(rec.store.getActiveBlockId()).toBe('blk-a');
+  });
+
+  it('clears the store active pointer when the store is bound at reset time', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    rec.setActive('blk-will-be-cleared' as BlockId);
+
+    __resetRouterForTests();
+
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('__resetRawObserversForTests removes all observers without touching router handles', () => {
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A);
+    const seen: number[] = [];
+    addRouterRawObserver(() => seen.push(1));
+
+    __resetRawObserversForTests();
+
+    // Observer gone…
+    __emitRawChunkForTests(new Uint8Array([0]));
+    expect(seen).toHaveLength(0);
+    // …but router still installed.
+    expect(isCommandRouterInstalled(A)).toBe(true);
+  });
+});

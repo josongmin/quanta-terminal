@@ -683,6 +683,8 @@ const SPEC_ECHO: RecordSpec = RecordSpec {
     // $BASH_VERSION'` via the probe would be overkill. Leave blank →
     // `unknown`; the scenario.md still records the capture host OS.
     version_arg: "",
+    // `program` already points at the binary under test.
+    version_program: "",
     scenario: "Trivial baseline: `echo` writes a single line and exits. \
 Proves the recorder spawn / drain / write path. If this fixture regresses, \
 the recorder itself is broken.",
@@ -703,6 +705,9 @@ const SPEC_CAT_UTF8: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(200),
     exit_wait: Duration::from_secs(2),
     version_arg: "--version",
+    // `program` is `sh -c 'printf …'`; the byte-producing binary is
+    // `printf`, so probe its version rather than the shell wrapper.
+    version_program: "printf",
     scenario: "UTF-8 multi-byte line feed — ASCII, Korean (한글), Japanese (日本語). \
 Exercises grapheme width classification on a real-program byte stream.",
 };
@@ -720,6 +725,8 @@ const SPEC_LS_COLOR: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(500),
     exit_wait: Duration::from_secs(3),
     version_arg: "--version",
+    // `program` already points at the binary under test.
+    version_program: "",
     scenario: "Colorised long-form `ls` listing of `/`. Exercises SGR color \
 sequences (8-bit / 24-bit) emitted by a real `ls` build.",
 };
@@ -738,6 +745,9 @@ const SPEC_LESS: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(800),
     exit_wait: Duration::from_secs(3),
     version_arg: "--version",
+    // `program` is `sh -c '… | less'`; probe the inner pager binary so
+    // the recorded version line identifies `less`, not `sh`.
+    version_program: "less",
     scenario: "`less` opens a 3-line corpus, draws its pager (alt-screen), \
 then receives `q` and exits. Exercises DECSET 1049 enter → content → exit.",
 };
@@ -754,6 +764,8 @@ const SPEC_NANO: RecordSpec = RecordSpec {
     warmup: Duration::from_secs(1),
     exit_wait: Duration::from_secs(3),
     version_arg: "--version",
+    // `program` already points at the binary under test.
+    version_program: "",
     scenario: "`nano --restricted` opens an empty file, paints its menu + status \
 bars (alt-screen), receives Ctrl-X with no changes pending, exits cleanly.",
 };
@@ -780,6 +792,8 @@ const SPEC_VIM: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(800),
     exit_wait: Duration::from_secs(4),
     version_arg: "--version",
+    // `program` already points at the binary under test.
+    version_program: "",
     scenario: "`vim -u NONE -N -c 'q!'` — loads with no user config, queues \
 an immediate force-quit. Exercises vim's alt-screen enter sequence even \
 though the session is effectively zero-length.",
@@ -797,6 +811,8 @@ const SPEC_TMUX: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(200),
     exit_wait: Duration::from_secs(2),
     version_arg: "-V",
+    // `program` already points at the binary under test.
+    version_program: "",
     scenario: "`tmux -f /dev/null -V` prints the version banner and exits. \
 Non-interactive smoke — proves the tmux binary plus recorder plumbing.",
 };
@@ -812,6 +828,9 @@ const SPEC_MAN: RecordSpec = RecordSpec {
     warmup: Duration::from_millis(1200),
     exit_wait: Duration::from_secs(4),
     version_arg: "--version",
+    // `program` already points at the binary under test; the pager it
+    // spawns internally (less on macOS) is versioned separately.
+    version_program: "",
     scenario: "`man ls` opens the `ls(1)` manpage in the configured pager \
 (less on macOS). `q` exits. Exercises bold + underline SGR on real prose.",
 };

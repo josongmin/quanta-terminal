@@ -1,6 +1,9 @@
 /**
- * Mouse encoder — SGR 1006 primary path, wheel fallback to cursor keys
- * when mouse tracking is off. EPIC-E §4.
+ * Mouse encoder — SGR 1006 primary path. When mouse tracking is off,
+ * clicks and wheel are no-ops on the wire: wheel delegates to the
+ * browser's native scroll (input-host does not preventDefault), in
+ * line with xterm's standard where wheel is a mouse-tracking-only
+ * event. EPIC-E §4.
  */
 import type { ModeSnapshot } from './ModeSnapshot';
 import type {
@@ -46,24 +49,20 @@ function buildCb(event: MouseEvent): number | null {
 }
 
 function buildSgr(cb: number, xCell: number, yCell: number, terminator: 'M' | 'm'): Uint8Array {
-  const params = `<${cb};${xCell + 1};${yCell + 1}`;
+  // xterm SGR 1006 columns/rows are 1-based with a minimum of 1.
+  // Negative cell coords (e.g. clicks dispatched outside the grid) are
+  // nonsense on the wire; clamp to 0 before the +1 so the wire value
+  // bottoms out at 1. Upper bound is the caller's responsibility
+  // (input-host clamps to cols/rows via `screenToCell`).
+  const safeX = xCell < 0 ? 0 : xCell;
+  const safeY = yCell < 0 ? 0 : yCell;
+  const params = `<${cb};${safeX + 1};${safeY + 1}`;
   const encoded = utf8Encoder.encode(params);
   const out = new Uint8Array(2 + encoded.length + 1);
   out[0] = 0x1b;
   out[1] = 0x5b;
   out.set(encoded, 2);
   out[out.length - 1] = terminator === 'M' ? 0x4d : 0x6d;
-  return out;
-}
-
-function wheelFallbackBytes(button: 'wheel-up' | 'wheel-down', snapshot: TerminalModeSnapshot): Uint8Array {
-  const final = button === 'wheel-up' ? 0x41 /* A */ : 0x42; /* B */
-  const intro = snapshot.decckm ? [0x1b, 0x4f] : [0x1b, 0x5b]; // ESC O / ESC [
-  const single = Uint8Array.of(intro[0]!, intro[1]!, final);
-  const out = new Uint8Array(single.length * 3);
-  out.set(single, 0);
-  out.set(single, single.length);
-  out.set(single, single.length * 2);
   return out;
 }
 
@@ -87,18 +86,11 @@ export class MouseEncoder {
 
     const tracking = used.mouseTracking;
 
-    // Tracking off → wheel falls back to cursor keys; clicks no-op.
+    // Tracking off → clicks and wheel are both no-ops on the wire.
+    // Per xterm, wheel is a mouse-tracking-only event; when tracking is
+    // off we emit zero bytes and input-host leaves the DOM event un-
+    // prevented so the browser's native scroll handles it.
     if (tracking === 'off') {
-      if (event.kind === 'wheel' && (event.button === 'wheel-up' || event.button === 'wheel-down')) {
-        return {
-          bytes: wheelFallbackBytes(event.button, used),
-          diagnostics: {
-            modeReadInconsistency: false,
-            deprecatedFallback: true,
-            snapshotEpoch: used.snapshotEpoch,
-          },
-        };
-      }
       return empty(false);
     }
 
