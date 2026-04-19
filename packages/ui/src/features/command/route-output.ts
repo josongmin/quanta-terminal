@@ -81,6 +81,19 @@ export function __resetRawObserversForTests(): void {
   rawChunkObservers.clear();
 }
 
+/**
+ * Test helper: synchronously fan out `chunk` to every currently-registered
+ * raw-chunk observer. Mirrors the internal fan-out inside
+ * `appendToActiveBlock` so a test can exercise the router-raw observer
+ * surface (e.g. `installTuiDetector`) without standing up the full
+ * session → block-store → router pipeline. Do not call from production.
+ */
+export function __emitRawChunkForTests(chunk: Uint8Array): void {
+  for (const observer of rawChunkObservers) {
+    observer(chunk);
+  }
+}
+
 // ----- Install / dispose -----
 
 /**

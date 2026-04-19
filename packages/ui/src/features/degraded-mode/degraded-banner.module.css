@@ -1,0 +1,60 @@
+/*
+ * DegradedBanner — single-line banner rendered ON TOP of the terminal chrome
+ * when the engine dies. Per RFC §20 and ADR 0010:
+ *
+ *   - The banner is the ONLY interactive element while degraded. All other
+ *     pointer events on the page are disabled — the only way out is the
+ *     Restart session button. This is why the banner is `position: sticky`
+ *     at the top and sits over the title bar's tabs.
+ *   - The last GridSnapshot is kept visible behind the banner; no black
+ *     screen (invariant I-8).
+ *   - Copy comes from the localization table (`degraded.engine_crashed`)
+ *     — ADR 0010 §Copy Discipline forbids hard-coded strings.
+ */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  padding: var(--q-space-2) var(--q-space-3);
+  background: rgba(255, 107, 107, 0.12);
+  border-bottom: 1px solid rgba(255, 107, 107, 0.35);
+  color: var(--q-fg);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  /* Keep the banner above the terminal layer but below a full-screen modal
+     like the settings panel so the user can still reach Ctrl+, to change
+     preferences during a degraded session. */
+  z-index: 6;
+}
+
+.message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.restart {
+  appearance: none;
+  border: 1px solid var(--q-border-strong);
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  padding: var(--q-space-1) var(--q-space-3);
+  border-radius: var(--q-radius-md);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  cursor: pointer;
+  transition: background 140ms ease-out, border-color 140ms ease-out;
+}
+
+.restart:hover,
+.restart:focus-visible {
+  background: var(--q-accent);
+  color: var(--q-bg);
+  border-color: var(--q-accent);
+  outline: none;
+}
+
+.restart:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

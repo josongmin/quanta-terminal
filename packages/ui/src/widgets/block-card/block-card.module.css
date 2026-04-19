@@ -24,7 +24,45 @@
   font-family: var(--q-font-sans);
   color: var(--q-fg);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
-  transition: border-color var(--q-dur-fast) var(--q-ease-out);
+  /* EPIC-H §4.2: combine the existing border-colour hover with a 160 ms fade
+     of the chrome padding/opacity on alt-screen transitions. The duration
+     is pinned to the RFC §7.7 constant; reduced-motion short-circuits via
+     the media query below. */
+  transition:
+    border-color var(--q-dur-fast) var(--q-ease-out),
+    padding 160ms var(--q-ease-out),
+    opacity 160ms var(--q-ease-out);
+}
+
+/* Alt-screen chrome collapse (EPIC-H §4.2). The card keeps rendering so its
+ * children (the running status header, the body) can continue streaming;
+ * the chrome pads/fades to a status-line footprint. The AltScreenStatusBar
+ * widget renders the authoritative label on top of the terminal canvas. */
+.card.altScreenCollapsed .header {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  opacity: 0.4;
+}
+.card.altScreenCollapsed .body,
+.card.altScreenCollapsed .peek {
+  display: none;
+}
+.card.altScreenCollapsed .actions[data-alt-collapsed='true'] {
+  opacity: 0.6;
+}
+
+.card.altScreenCrashed {
+  border-color: var(--q-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+  .card.altScreenCollapsed .header {
+    /* Still collapse, but no fade. */
+    transition: none;
+  }
 }
 .card:hover {
   border-color: var(--q-border-strong);

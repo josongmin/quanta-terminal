@@ -29,6 +29,18 @@ quanta-protocol = { path = "../../crates/quanta-protocol" }
 # fed the same bytes. See `tests/resume_vt.rs`.
 quanta-vt = { path = "../../crates/quanta-vt" }
 quanta-vt-width = { path = "../../crates/quanta-vt-width" }
+# EPIC-G scripted compat runner spawns real programs under a PTY; we lean
+# on `portable-pty` directly so the harness does not need an in-tree
+# PtyPort adapter (which is tokio-async only today).
+portable-pty = { workspace = true }
+# Final E2E full-stack suite (`full_stack_e2e.rs`) exercises the real
+# `SessionActor` with a scripted `PtyPort` + a failing `EventSink`. That
+# requires the session + events + pty crates and `async-trait` for the
+# mock impls.
+quanta-session = { path = "../../crates/quanta-session" }
+quanta-events = { path = "../../crates/quanta-events" }
+quanta-pty = { path = "../../crates/quanta-pty" }
+async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,3 +49,18 @@ base64 = { workspace = true }
 tempfile = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+# EPIC-G programmatic fixture recorder. The Rust source lives under the
+# vt crate's test tree per plan §4.2 ("fixtures + recorder co-located
+# with the engine under test") but the *test binary* is built here so it
+# can pull `portable-pty` + `tokio` without polluting quanta-vt's dev
+# surface. Invoked as:
+#
+#   cargo test -p quanta-integration-tests --test fixtures_programmatic
+#
+# With QUANTA_RECORD_COMPAT=1 it (re)records real-program fixtures under
+# crates/quanta-vt/tests/compat/<program>/; without it, it verifies the
+# committed goldens are internally consistent.
+[[test]]
+name = "fixtures_programmatic"
+path = "../../crates/quanta-vt/tests/fixtures_programmatic/record.rs"

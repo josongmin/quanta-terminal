@@ -175,11 +175,11 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     if (ended) return;
     if (isEventOfKind(event, 'pty_data')) {
       if (sessionId !== undefined) {
-        // Dual-fanout: the xterm fallback path (onData callback) must see
-        // the raw base64 so alt-screen / TUI rendering keeps working, AND
-        // the command router must see the same bytes so the active block
-        // accrues output. Order: router first, so TUI detection observes
-        // the chunk before the xterm surface writes (alt-screen flip).
+        // Fanout: the command router must see the bytes so the active
+        // block accrues output. The `onData` callback is an inert hook
+        // retained for call-site stability (historical-xterm-reference:
+        // pre-EPIC-I it fed the xterm fallback surface; the custom VT
+        // engine now owns rendering end-to-end).
         appendToActiveBlock(sessionId, event.bytesB64);
       }
       onData(event.bytesB64);

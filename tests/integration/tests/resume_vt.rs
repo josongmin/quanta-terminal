@@ -87,9 +87,10 @@ fn concat_output_chunks(envs: &[Envelope<Event>]) -> Vec<u8> {
     let mut records: Vec<(u64, Vec<u8>)> = envs
         .iter()
         .filter_map(|e| match &e.payload {
-            Event::OutputChunk(c) => {
-                BASE64.decode(&c.bytes_b64).ok().map(|b| (e.monotonic_seq, b))
-            }
+            Event::OutputChunk(c) => BASE64
+                .decode(&c.bytes_b64)
+                .ok()
+                .map(|b| (e.monotonic_seq, b)),
             _ => None,
         })
         .collect();
@@ -170,9 +171,7 @@ async fn resume_with_full_replay_reconstructs_equivalent_grid() -> Result<()> {
     // Sanity: the session_id is preserved and the replay includes
     // BlockCompleted.
     assert!(
-        replayed
-            .iter()
-            .all(|e| e.session_id == session_id || e.session_id == session_id),
+        replayed.iter().all(|e| e.session_id == session_id),
         "all replayed envelopes must carry the original session_id"
     );
     assert!(
@@ -186,7 +185,8 @@ async fn resume_with_full_replay_reconstructs_equivalent_grid() -> Result<()> {
     // --- Byte parity: replayed OutputChunks reconstitute into the same grid ---
     let replay_bytes = concat_output_chunks(&replayed);
     assert_eq!(
-        replay_bytes, live_bytes,
+        replay_bytes,
+        live_bytes,
         "replayed PTY byte stream must be byte-identical to the live stream \
          (event log is authoritative per RFC §7.9); \
          live.len={} replay.len={}",
@@ -245,7 +245,10 @@ async fn resume_with_midstream_cursor_replays_contiguous_tail() -> Result<()> {
             .await?;
         (events, created.session_id)
     };
-    assert!(!live_events.is_empty(), "host A must see at least one event");
+    assert!(
+        !live_events.is_empty(),
+        "host A must see at least one event"
+    );
 
     // Pick a mid-point cursor roughly halfway through the envelope stream.
     // Skipping seq=0 guarantees we advance over at least `SessionCreated`.
@@ -322,7 +325,9 @@ async fn consecutive_reconnects_see_identical_replay() -> Result<()> {
         let created = host
             .create_session(common::pick_shell(), Some(std::path::Path::new("/tmp")))
             .await?;
-        let _ = host.submit(created.session_id, "printf 'x\\n'; exit 0").await?;
+        let _ = host
+            .submit(created.session_id, "printf 'x\\n'; exit 0")
+            .await?;
         let events = host
             .collect_events_until(
                 |events| {
@@ -336,7 +341,7 @@ async fn consecutive_reconnects_see_identical_replay() -> Result<()> {
         (events, created.session_id)
     };
 
-    let mut run_full_replay = || -> HashMap<String, u64> {
+    let run_full_replay = || -> HashMap<String, u64> {
         let mut cursors = HashMap::new();
         cursors.insert(session_id.to_string(), 0u64);
         cursors
@@ -376,7 +381,8 @@ async fn consecutive_reconnects_see_identical_replay() -> Result<()> {
     let bytes_1 = concat_output_chunks(&rep_1);
     let bytes_2 = concat_output_chunks(&rep_2);
     assert_eq!(
-        bytes_1, bytes_2,
+        bytes_1,
+        bytes_2,
         "consecutive full replays must produce identical byte streams; \
          first.len={} second.len={}",
         bytes_1.len(),

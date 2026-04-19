@@ -1019,6 +1019,24 @@ async fn emitter_loop(
             }
             _ = &mut shutdown => {
                 // Drain any already-queued requests so we don't lose them.
+                //
+                // BUG 2 FIX — shutdown-drain sink-failure used to `debug!`-and-
+                // continue here for fire-and-forget requests. That path BURNED
+                // a seq via `assign_seq` without flipping `sink_failed`, which
+                // left a gap in the durable log that `replay_session` surfaces
+                // as `EventLogError::SeqGap`. Under heavy parallel test load
+                // this flaked `multibyte_chunks::invalid_utf8_bytes_pass_through_pty_without_loss`
+                // because close() can race a tail-end OutputChunk that fails
+                // to append (sink in the process of tearing down), leaving the
+                // reader's assumed-contiguous seq space corrupt.
+                //
+                // Fix: treat drain-path append errors the same as regular-path
+                // errors — log at `error!`, flip `sink_failed`, break out of
+                // the drain. The fail-closed contract already guarantees a
+                // clean `SessionEnded(SinkFailure)` was emitted for the
+                // regular-path failure; in the drain case, the log tail is
+                // simply truncated at the last successfully-appended record,
+                // which is the same invariant replay already relies on.
                 while let Ok(req) = rx.try_recv() {
                     let seq = assign_seq(&mut next_seq);
                     let mut env = Envelope::new(
@@ -1040,17 +1058,31 @@ async fn emitter_loop(
                     if result.is_ok() {
                         recorder.inc_counter(METRIC_ENVELOPE_APPENDED);
                     }
-                    if let Some(ack) = req.ack {
-                        let _ = ack.send(result);
-                    } else if let Err(ref err) = result {
-                        debug!(
+                    if let Err(ref err) = result {
+                        // BUG 2 FIX: a burned seq with a failed append would
+                        // poison `replay_session` with a SeqGap. Promote the
+                        // error so the operator can correlate, flip the
+                        // failed flag so downstream callers fast-fail, and
+                        // stop draining — every remaining queued req gets
+                        // dropped (their acks, if any, fall back to the
+                        // `if failed` pass below which sends `Closed`).
+                        error!(
                             session_id = %session_id,
                             seq,
                             %event_id,
                             ?causation_id,
                             ?err,
-                            "session.actor.emitter: event sink append failed during drain"
+                            "session.actor.emitter: sink append failed during shutdown drain; session is fail-closed"
                         );
+                        if let Some(ack) = req.ack {
+                            let _ = ack.send(result);
+                        }
+                        sink_failed.store(true, Ordering::Release);
+                        failed = true;
+                        break;
+                    }
+                    if let Some(ack) = req.ack {
+                        let _ = ack.send(result);
                     }
                 }
                 break;
@@ -1120,13 +1152,66 @@ async fn read_loop(
         // Scrollback cap of 10_000 rows matches RFC §13.12 memory budget
         // (22 MB for 10k scrollback × 120 cols). Revisit once a session-level
         // config carries a user-chosen cap.
-        Some(Grid::new(grid_cell_rows, grid_cell_cols, 10_000, classifier))
+        Some(Grid::new(
+            grid_cell_rows,
+            grid_cell_cols,
+            10_000,
+            classifier,
+        ))
     } else {
         None
     };
-    // Mark the initial receiver value as seen so a spurious "changed"
-    // wake-up on the first tick doesn't trigger a no-op resize.
-    resize_rx.mark_unchanged();
+    // BUG 1 FIX — resize-race on reader start-up.
+    //
+    // Previously this was `resize_rx.mark_unchanged()`. That had a race: the
+    // input task can process a `Resize` command (and call `resize_tx.send`)
+    // between `watch::channel(initial_size)` construction in `spawn_inner`
+    // and the reader reaching this line. `mark_unchanged()` then clears the
+    // dirty bit WITHOUT the reader having observed the new value, so
+    // `has_changed()` stays false until the NEXT resize arrives — effectively
+    // swallowing the first post-spawn resize.
+    //
+    // `borrow_and_update()` observes the CURRENT value and clears the dirty
+    // bit atomically, so we can apply it on the fly. If it matches
+    // `initial_size` the grid is already that geometry and we do nothing; if
+    // it differs (a resize raced ahead of us), we apply it immediately and
+    // the engine bumps `resize_generation` accordingly. Subsequent
+    // `has_changed()` calls in the loop then reliably return true for every
+    // NEW resize.
+    let startup_size = *resize_rx.borrow_and_update();
+    if use_vt_engine && startup_size != initial_size {
+        if let Some(g) = grid.as_mut() {
+            match g.resize(startup_size.rows, startup_size.cols) {
+                Ok(events) => {
+                    let new_gen = g.resize_generation();
+                    resize_generation.store(new_gen, Ordering::Release);
+                    let session_grid_epoch = grid_epoch.load(Ordering::Acquire);
+                    let buffer_kind = g.active_buffer();
+                    for ev in events {
+                        if let Err(err) =
+                            emit_vt_event(&emit_tx, session_grid_epoch, new_gen, buffer_kind, ev)
+                                .await
+                        {
+                            warn!(
+                                session_id = %session_id_for_log,
+                                ?err,
+                                "session.actor.reader: VT startup-resize event emit failed"
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        session_id = %session_id_for_log,
+                        ?err,
+                        new_rows = startup_size.rows,
+                        new_cols = startup_size.cols,
+                        "session.actor.reader: grid.resize rejected start-up geometry"
+                    );
+                }
+            }
+        }
+    }
     // Reusable base64 encode target to avoid per-chunk String allocations.
     // Capacity chosen to fit `encoded_len(PTY_READ_CHUNK_BYTES)` without realloc.
     let mut b64_scratch: Vec<u8> = Vec::with_capacity(PTY_READ_CHUNK_BYTES.div_ceil(3) * 4 + 4);
@@ -1288,9 +1373,14 @@ async fn read_loop(
             let buffer_kind = g.active_buffer();
             let new_resize_gen = g.resize_generation();
             for ev in events {
-                if let Err(err) =
-                    emit_vt_event(&emit_tx, session_grid_epoch, new_resize_gen, buffer_kind, ev)
-                        .await
+                if let Err(err) = emit_vt_event(
+                    &emit_tx,
+                    session_grid_epoch,
+                    new_resize_gen,
+                    buffer_kind,
+                    ev,
+                )
+                .await
                 {
                     warn!(
                         session_id = %session_id_for_log,

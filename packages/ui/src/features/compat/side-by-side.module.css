@@ -1,0 +1,75 @@
+/*
+ * SideBySideHarness — dev-only split view for canvas + xterm. Rendered only
+ * when `preferences.renderer === 'side-by-side'` (and `import.meta.env.DEV`).
+ *
+ * Layout: a CSS grid with 2 columns on the terminal row and a full-width
+ * diff row below. The harness is mounted INSIDE the terminal-page main
+ * region, so it does not own page chrome — only its own split.
+ */
+
+.root {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr auto;
+  gap: var(--q-space-2);
+  height: 100%;
+  min-height: 0;
+  background: var(--q-bg);
+}
+
+.pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px dashed var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  overflow: hidden;
+  background: var(--q-bg-elev-1);
+}
+
+.paneLabel {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  padding: 2px 6px;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: var(--q-radius-sm);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.overlay {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+  padding: var(--q-space-2) var(--q-space-3);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  background: var(--q-bg-elev-2);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+}
+
+.button {
+  appearance: none;
+  padding: 4px 10px;
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+  cursor: pointer;
+}
+
+.button:hover,
+.button:focus-visible {
+  background: var(--q-accent);
+  color: var(--q-bg);
+  border-color: var(--q-accent);
+  outline: none;
+}

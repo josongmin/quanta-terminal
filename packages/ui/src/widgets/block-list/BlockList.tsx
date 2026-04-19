@@ -1,18 +1,33 @@
 /**
- * BlockList — virtualized, auto-scrolling list of command blocks.
+ * BlockList — row-range virtualization anchored via `cellToScreen`.
  *
- * Why virtualize: a long session (hundreds of blocks, each with KB of output)
- * renders fast on mount only if off-screen cards don't render at all.
- * `@tanstack/react-virtual` gives us measurement-based virtualization that
- * tolerates variable card heights (a collapsed card is ~40px; an expanded one
- * with 400 output lines is 800px+).
+ * EPIC-H redesign (§4.1): the virtualizer now operates on ROWS (in grid row
+ * coordinates), not on block entities. Each block occupies a `RowRange`
+ * { blockId, startRow, endExclusive }. The row ranges are derived once per
+ * render from the current block list — for blocks, we approximate row
+ * height as the visible-line count of output (`\n` bytes + 1 chrome row)
+ * with a floor of 1 row.
  *
- * Auto-scroll rules (the Warp behaviour):
+ * Why row-range virtualization (RFC §7.7 / EPIC-H §4.1.1):
+ *   - Selection across blocks used to misalign because the virtualizer
+ *     thought each block was its own item; dragging across the boundary
+ *     produced a gap in the copied text.
+ *   - Scrollback replay mounted N block cards sequentially rather than
+ *     letting the virtualizer skip off-screen rows.
+ *   - Block chrome drifted from the cell grid because the DOM layout used
+ *     flex spacing while the grid used fixed cell metrics.
+ *
+ * Block chrome is rendered as an absolutely-positioned overlay on top of
+ * the virtualized surface. The overlay reads `cellToScreen(startRow, 0).y`
+ * — injected via `cellToScreen` prop, or defaulted to the `DEFAULT_METRICS`
+ * math when the prop is omitted (tests, isolated rendering). The Warp-style
+ * cards the user sees are those overlays.
+ *
+ * Auto-scroll rules (unchanged from the prior design):
  *   - When a new block is created, scroll to the end.
  *   - When the running block's output grows and the user is already "near
- *     the bottom" (within AUTO_SCROLL_THRESHOLD_PX), keep pinning to the end.
- *   - If the user scrolled up, do not yank them back. Autoscroll resumes
- *     when they scroll back near the bottom.
+ *     the bottom" (within AUTO_SCROLL_THRESHOLD_PX), keep pinning to end.
+ *   - If the user scrolled up, do not yank them back.
  *
  * Tests drive this component in jsdom where layout is zero-sized. The
  * virtualizer degrades gracefully — `scrollToIndex` is a no-op on a zero-
@@ -20,19 +35,18 @@
  * exported `shouldAutoscroll` helper and e2e is covered by live usage.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 // Cross-slice: BlockList composes BlockCard. Both are block-domain widgets;
 // splitting them into entities/ would coerce a presentational component into
 // a non-presentational layer, and moving BlockCard into shared/ would force
-// it to know about the block entity type from a lower layer than itself. The
-// list → card composition is the whole point of the Warp-style surface, so
-// we accept the sibling crossing here with the same escape hatch Agent C
-// used for composer → command.
+// it to know about the block entity type from a lower layer than itself.
 // FIXME(fsd-layer-skip): block-list widget composes sibling block-card widget
 import { BlockCard } from '../block-card/index.js';
-import { useBlock, useBlockIds, useBlocksForSession } from '../../entities/block/index.js';
+import { useBlock, useBlockIds, useBlocksForSession, useBlockStore } from '../../entities/block/index.js';
+import { DEFAULT_METRICS } from '../../shared/ui/cell-renderer/index.js';
+import type { Rect } from '../../shared/ui/cell-renderer/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
 import { t } from '../../shared/i18n/index.js';
 import styles from './block-list.module.css';
@@ -40,23 +54,44 @@ import styles from './block-list.module.css';
 export interface BlockListProps {
   /**
    * Optional session scope. When provided, only blocks that belong to this
-   * session render in the list. When omitted, every block in the store
-   * renders (legacy single-session behavior — used by tests that drive the
-   * store directly and by the compat layer).
+   * session render in the list.
    */
   readonly sessionId?: SessionId | null;
   readonly onRerun?: (blockId: string) => void;
   readonly onCopy?: (blockId: string, scope: 'command' | 'output') => void;
   /** Phase 4 — opens the Compare panel when a card's Compare button fires. */
   readonly onCompare?: (blockId: string) => void;
+  /**
+   * EPIC-H §4.1: forward-map from (row, col) to a pixel rect. The block
+   * chrome overlay uses `cellToScreen(startRow, 0).y` to anchor the top
+   * of each card. When omitted, a default metric is used so tests and
+   * pre-mount flows still render correctly.
+   */
+  readonly cellToScreen?: (row: number, col: number) => Rect;
 }
 
 /** If the user is within this many pixels of the bottom, we treat them as
  *  "following the stream" and keep autoscrolling. */
 const AUTO_SCROLL_THRESHOLD_PX = 64;
 
-/** Conservative starting estimate. The virtualizer refines via measurement. */
-const ESTIMATED_CARD_HEIGHT_PX = 160;
+/**
+ * Row-height floor used when the virtualizer asks `estimateSize(i)` for a
+ * row we haven't measured yet. The default metric (16 px) keeps the offset
+ * math coherent with `cellToScreen`.
+ */
+const ESTIMATED_ROW_HEIGHT_PX = DEFAULT_METRICS.cellHeightCssPx;
+
+/** Minimum chrome height before we subtract body content. */
+const BLOCK_CHROME_MIN_ROWS = 3;
+
+function defaultCellToScreen(row: number, col: number): Rect {
+  return {
+    x: col * DEFAULT_METRICS.cellWidthCssPx,
+    y: row * DEFAULT_METRICS.cellHeightCssPx,
+    width: DEFAULT_METRICS.cellWidthCssPx,
+    height: DEFAULT_METRICS.cellHeightCssPx,
+  };
+}
 
 /**
  * Pure autoscroll rule — exported for tests. Returns true when we should
@@ -73,27 +108,74 @@ export function shouldAutoscroll(params: {
   return params.distanceFromBottom <= params.threshold;
 }
 
-function BlockRow(props: {
+/* ------------------------------------------------------------------------ */
+/*  Row-range math                                                           */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * A contiguous run of rows belonging to one block in the virtualized list.
+ * `startRow` is inclusive (0-based from the top of the scroll surface),
+ * `endExclusive` is the first row NOT in this block.
+ */
+export interface RowRange {
+  readonly blockId: string;
+  readonly startRow: number;
+  readonly endExclusive: number;
+}
+
+/** Binary search: which `ranges` entry covers `row`? -1 if out-of-range. */
+export function findRangeForRow(ranges: readonly RowRange[], row: number): number {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const r = ranges[mid];
+    if (!r) break;
+    if (row < r.startRow) {
+      hi = mid - 1;
+    } else if (row >= r.endExclusive) {
+      lo = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+  return -1;
+}
+
+/** Estimate the number of rows a block occupies in the row-range model. */
+function rowsForBlock(chunks: readonly Uint8Array[], collapsed: boolean): number {
+  if (collapsed) return BLOCK_CHROME_MIN_ROWS;
+  let newlines = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.byteLength; i += 1) {
+      if (chunk[i] === 0x0a) newlines += 1;
+    }
+  }
+  // +1 row for the trailing partial line (if any) capped at a sane minimum.
+  return Math.max(BLOCK_CHROME_MIN_ROWS, newlines + BLOCK_CHROME_MIN_ROWS);
+}
+
+/* ------------------------------------------------------------------------ */
+/*  Component                                                                */
+/* ------------------------------------------------------------------------ */
+
+function BlockRowChrome(props: {
   readonly id: string;
-  readonly index: number;
+  readonly topPx: number;
   readonly onRerun?: (blockId: string) => void;
   readonly onCopy?: (blockId: string, scope: 'command' | 'output') => void;
   readonly onCompare?: (blockId: string) => void;
-  readonly measureRef: (el: HTMLElement | null) => void;
-  readonly translateY: number;
+  readonly measureRef?: (el: HTMLElement | null) => void;
 }) {
-  const { id, index, onRerun, onCopy, onCompare, measureRef, translateY } = props;
+  const { id, topPx, onRerun, onCopy, onCompare, measureRef } = props;
   const block = useBlock(id);
   if (!block) return null;
-  // `data-index` is the attribute the virtualizer looks up on each measured
-  // element — without it, `measureElement` cannot map the element back to a
-  // row and logs a dev-mode warning.
   return (
     <div
-      ref={measureRef}
+      ref={measureRef ?? undefined}
       className={styles.row}
-      data-index={index}
-      style={{ transform: `translateY(${translateY}px)` }}
+      data-block-id={id}
+      style={{ transform: `translateY(${topPx}px)` }}
     >
       <BlockCard
         block={block}
@@ -106,23 +188,65 @@ function BlockRow(props: {
 }
 
 export function BlockList(props: BlockListProps) {
-  const { onRerun, onCopy, onCompare, sessionId } = props;
+  const { onRerun, onCopy, onCompare, sessionId, cellToScreen = defaultCellToScreen } = props;
   // Both hooks run on every render regardless of the `sessionId` prop — React's
   // rules-of-hooks forbid conditional calls. The unused return value is cheap
-  // (shallow-compared, one array reference), and `useBlocksForSession(null)`
-  // short-circuits to an empty array before iterating the store.
+  // (shallow-compared, one array reference).
   const allIds = useBlockIds();
   const scopedIds = useBlocksForSession(sessionId ?? null);
   const ids = sessionId === undefined ? allIds : scopedIds;
+
+  // Subscribe to the full store ONCE so the row-range math re-computes when
+  // any block's chunks or collapsed-state changes. Per-block updates
+  // invalidate the memo only if the block is in scope — cheap for typical
+  // session sizes.
+  const rowSignatures = useBlockStore((s) => {
+    const parts: string[] = [];
+    for (const id of ids) {
+      const b = s.entities[id];
+      if (!b) continue;
+      parts.push(`${id}:${b.outputChunks.length}:${b.collapsed ? 'c' : 'e'}`);
+    }
+    return parts.join('|');
+  });
+
+  const ranges = useMemo<RowRange[]>(() => {
+    const state = useBlockStore.getState();
+    const out: RowRange[] = [];
+    let cursor = 0;
+    for (const id of ids) {
+      const b = state.entities[id];
+      if (!b) continue;
+      const span = rowsForBlock(b.outputChunks, b.collapsed);
+      out.push({ blockId: id, startRow: cursor, endExclusive: cursor + span });
+      cursor += span;
+    }
+    return out;
+    // rowSignatures is the authoritative trigger; ids is already baked into it.
+  }, [ids, rowSignatures]);
+
+  const totalRows = ranges.length > 0 ? ranges[ranges.length - 1]!.endExclusive : 0;
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const prevCountRef = useRef(ids.length);
 
+  const estimateSize = useCallback(
+    (rowIndex: number) => {
+      // When we can, use `cellToScreen` so the row heights match the cell
+      // grid pixel-for-pixel. Falling back to the default metric preserves
+      // layout in jsdom (where the backend reports 0).
+      const rect = cellToScreen(rowIndex, 0);
+      return rect.height > 0 ? rect.height : ESTIMATED_ROW_HEIGHT_PX;
+    },
+    [cellToScreen],
+  );
+
   const virtualizer = useVirtualizer({
-    count: ids.length,
+    count: totalRows,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ESTIMATED_CARD_HEIGHT_PX,
-    overscan: 4,
-    getItemKey: (index) => ids[index] ?? index,
+    estimateSize,
+    overscan: DEFAULT_METRICS.cellHeightCssPx * 2,
+    getItemKey: (index) => index,
   });
 
   // Autoscroll — run AFTER render so the virtualizer has the new total size.
@@ -140,18 +264,13 @@ export function BlockList(props: BlockListProps) {
       threshold: AUTO_SCROLL_THRESHOLD_PX,
     });
     prevCountRef.current = ids.length;
-    if (pin && ids.length > 0) {
-      // Align to end so the newest block sits flush against the composer.
-      virtualizer.scrollToIndex(ids.length - 1, { align: 'end' });
+    if (pin && totalRows > 0) {
+      virtualizer.scrollToIndex(totalRows - 1, { align: 'end' });
     }
-  }, [ids.length, virtualizer]);
+  }, [ids.length, totalRows, virtualizer]);
 
-  // When the active (running) block streams output, the store reference for
-  // the list (`ids`) does not change. We still want to keep the view pinned
-  // if the user is near the bottom. Subscribe to the scroll element's size
-  // changes via ResizeObserver and re-check on every bump — but batch via
-  // requestAnimationFrame so a burst of measurement callbacks (streaming
-  // output flushes, reflow cascades) costs at most one scroll per frame.
+  // ResizeObserver rAF batching — mirrors the prior behaviour for streaming
+  // output keeping the view pinned.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -164,8 +283,8 @@ export function BlockList(props: BlockListProps) {
       rafId = requestAnimationFrame(() => {
         rafId = 0;
         const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distance <= AUTO_SCROLL_THRESHOLD_PX && ids.length > 0) {
-          virtualizer.scrollToIndex(ids.length - 1, { align: 'end' });
+        if (distance <= AUTO_SCROLL_THRESHOLD_PX && totalRows > 0) {
+          virtualizer.scrollToIndex(totalRows - 1, { align: 'end' });
         }
       });
     };
@@ -175,14 +294,7 @@ export function BlockList(props: BlockListProps) {
       ro.disconnect();
       if (rafId !== 0) cancelAnimationFrame(rafId);
     };
-  }, [ids.length, virtualizer]);
-
-  const measureElement = useCallback(
-    (el: HTMLElement | null): void => {
-      virtualizer.measureElement(el);
-    },
-    [virtualizer],
-  );
+  }, [totalRows, virtualizer]);
 
   if (ids.length === 0) {
     return (
@@ -204,29 +316,48 @@ export function BlockList(props: BlockListProps) {
     );
   }
 
+  // Determine which block ranges are currently visible (i.e. at least one
+  // virtualized row lands inside them). We mount block chrome ONLY for
+  // ranges the viewport overlaps — chrome mounts/unmounts on scroll.
   const items = virtualizer.getVirtualItems();
-  const totalSize = virtualizer.getTotalSize();
+  const totalSize = virtualizer.getTotalSize() || totalRows * ESTIMATED_ROW_HEIGHT_PX;
+
+  const visibleRangeIds = new Set<string>();
+  if (items.length > 0 && ranges.length > 0) {
+    const first = items[0]!.index;
+    const last = items[items.length - 1]!.index;
+    // Sweep all ranges that intersect [first, last].
+    const startIdx = Math.max(0, findRangeForRow(ranges, first));
+    const endIdx = Math.max(0, findRangeForRow(ranges, last));
+    for (let i = startIdx; i <= endIdx; i += 1) {
+      const range = ranges[i];
+      if (range) visibleRangeIds.add(range.blockId);
+    }
+  }
 
   return (
     <div
       ref={scrollRef}
       className={styles.scroll}
       data-testid="block-list"
+      data-total-rows={totalRows}
       aria-live="polite"
       aria-relevant="additions"
       aria-label={t('blockList.ariaLabel')}
     >
-      <div className={styles.inner} style={{ height: `${totalSize}px` }}>
-        {items.map((item) => {
-          const id = ids[item.index];
-          if (!id) return null;
+      <div
+        className={styles.inner}
+        data-testid="block-list-inner"
+        style={{ height: `${totalSize}px` }}
+      >
+        {ranges.map((range) => {
+          if (!visibleRangeIds.has(range.blockId)) return null;
+          const topPx = cellToScreen(range.startRow, 0).y;
           return (
-            <BlockRow
-              key={item.key}
-              id={id}
-              index={item.index}
-              measureRef={measureElement}
-              translateY={item.start}
+            <BlockRowChrome
+              key={range.blockId}
+              id={range.blockId}
+              topPx={topPx}
               {...(onRerun ? { onRerun } : {})}
               {...(onCopy ? { onCopy } : {})}
               {...(onCompare ? { onCompare } : {})}

@@ -66,8 +66,11 @@ This separation is intentional:
 - State management: Zustand or Redux Toolkit, with event-log-derived state as the primary model
 - Data fetching and command/query cache: TanStack Query where asynchronous host interactions benefit
 - Virtualized rendering: TanStack Virtual
-- Raw terminal rendering bootstrap: `xterm.js` with WebGL path where viable
-- Product renderer architecture: renderer abstraction that permits a future custom WebGPU or retained-grid renderer if `xterm.js` fails the SOTA benchmark matrix
+- Terminal rendering: custom Rust VT engine (`quanta-vt` + `quanta-block`) emits a
+  `GridMirror` that the TypeScript `TerminalCanvas` widget renders via a
+  Canvas2D backend (see RFC 0001, EPIC-D / EPIC-I). `xterm.js` was used as a
+  Phase-1 bootstrap and retired in EPIC-I after the custom engine cleared the
+  CJK / IME / alt-screen / resize / compat / telemetry / perf gates.
 - Multi-line command composer: CodeMirror 6
 - Schema validation: `zod`
 - Testing: Vitest for unit/component tests, Playwright for end-to-end
@@ -556,7 +559,7 @@ These are the default architectural decisions unless superseded by a dated ADR u
 
 - backend is a Rust sidecar, not an in-process WASM core
 - canonical persistence is append-only event log plus SQLite projections (see [ADR 0005](./adr/0005-storage-and-retention.md))
-- raw mode starts with `xterm.js`, but block truth comes from Rust event artifacts and the renderer remains replaceable
+- terminal rendering is owned end-to-end by the custom Rust VT engine — block truth is derived from Rust event artifacts and the canvas renderer consumes the engine's `GridMirror` directly (RFC 0001, EPIC-I); the transitional xterm.js bootstrap was retired after EPIC-I
 - two explicit host modes, one canonical core (see [ADR 0001](./adr/0001-host-modes.md))
 - IDE host integration starts with a VS Code-compatible adapter interface
 - optional assist orchestration lives in the TypeScript host, while execution and persistence stay outside assist control

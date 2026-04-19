@@ -1,0 +1,6 @@
+# Skipped fixture
+
+reason: write failed: serialize snapshot: cannot serialize tagged newtype variant Color::Palette8 containing an integer
+captured: 2026-04-19
+
+This marker causes `compat_harness.rs` to skip the fixture. Remove it + run `QUANTA_RECORD_COMPAT=1 cargo test -p quanta-integration-tests --test fixtures_programmatic` on a host that has the program installed.

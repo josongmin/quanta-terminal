@@ -117,8 +117,15 @@ export class Canvas2DBackend implements BackendContract {
     ctx.container.appendChild(this.cursorCanvas);
     ctx.container.appendChild(this.overlayLayer);
 
-    this.cellCtx = this.cellCanvas.getContext('2d');
-    this.cursorCtx = this.cursorCanvas.getContext('2d');
+    // jsdom returns null from getContext('2d'); swallow the "Not implemented"
+    // warning so test stderr stays legible.
+    try {
+      this.cellCtx = this.cellCanvas.getContext('2d');
+      this.cursorCtx = this.cursorCanvas.getContext('2d');
+    } catch {
+      this.cellCtx = null;
+      this.cursorCtx = null;
+    }
     this.atlas = new FontAtlas(this.metrics, { rasterizer: new MemoryRasterizer() });
     this.paintLog.push({ kind: 'mount' });
   }

@@ -255,13 +255,15 @@ export class SelectionManager {
     const left = Math.min(start.col, end.col);
     const right = Math.max(start.col, end.col);
     const outLines: string[] = [];
+    const rectCols = right - left;
     for (let r = top; r <= bottom; r += 1) {
       const endCol = rightEdgeCol(this.buffer, r, right);
       const piece = cellsToString(this.buffer, r, left, endCol);
-      // Pad short rows with spaces (standard rectangular-copy convention).
-      const visualWidth = widthOf(this.buffer, r, left, endCol);
-      const padded =
-        visualWidth < right - left ? piece + ' '.repeat(right - left - visualWidth) : piece;
+      // Pad the line to the rectangle width. We measure by visible grapheme
+      // count (cheap approximation of visual width — same convention as
+      // `tmux copy-mode` / standard rectangular-copy).
+      const visualLen = graphemeCount(piece);
+      const padded = visualLen < rectCols ? piece + ' '.repeat(rectCols - visualLen) : piece;
       const normalized = options.preserveTrailingWhitespace
         ? padded
         : padded.replace(/\s+$/u, '');
@@ -280,16 +282,12 @@ export class SelectionManager {
   }
 }
 
-/** Visual width of the cells between col0..col1, summed via width SSOT. */
-function widthOf(buffer: CellBuffer, row: number, col0: number, col1: number): number {
-  let w = 0;
-  let c = col0;
-  while (c < col1) {
-    const cell = buffer.getCell(row, c);
-    if (!cell) break;
-    const span = cell.cols === 2 ? 2 : 1;
-    w += span;
-    c += span;
-  }
-  return w;
+/** Count grapheme clusters in a string using the Unicode segmenter. */
+function graphemeCount(s: string): number {
+  if (!s) return 0;
+  let n = 0;
+  const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  for (const _ of seg.segment(s)) n += 1;
+  return n;
 }

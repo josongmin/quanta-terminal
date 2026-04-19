@@ -1,0 +1,9 @@
+# Archive of resolved compat gaps.
+#
+# A gap report lands here after it has been classified as fixed,
+# rerecorded, or deferred. The filename convention is:
+#
+#   <program>_<ts>_{resolved|rerecord|deferred}.md
+#
+# This directory exists so the resolved/ folder is preserved in git even
+# when empty.

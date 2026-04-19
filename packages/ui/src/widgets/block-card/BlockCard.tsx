@@ -60,6 +60,7 @@ import {
   type BlockStatus,
   type BlockStreamView,
 } from '../../entities/block/index.js';
+import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import {
   openInEditor,
   openInEditorMessageForReason,
@@ -152,6 +153,17 @@ function BlockCardImpl(props: BlockCardProps) {
   // (tests, storybook).
   const storeHeader = useBlockHeader(block.id);
   const header: BlockHeaderView = storeHeader ?? toHeaderView(block);
+
+  // EPIC-H §4.2: alt-screen chrome collapse. When an alt-screen program is
+  // running and THIS card is the owning block's chrome (status === 'running'
+  // and our session matches the tui store's sessionId), the chrome fades
+  // out to a thin status line via CSS. Non-running cards are unaffected.
+  const altScreen = useAltScreenMode();
+  const tuiSessionId = useTuiStore((s) => s.sessionId);
+  const isOwningAltScreenBlock =
+    header.status === 'running' &&
+    altScreen.active &&
+    (tuiSessionId === null || tuiSessionId === header.sessionId);
 
   const toggleCollapse = useBlockStore((s) => s.toggleCollapse);
   const togglePin = useBlockStore((s) => s.togglePin);
@@ -350,10 +362,16 @@ function BlockCardImpl(props: BlockCardProps) {
 
   return (
     <article
-      className={cx(styles.card)}
+      className={cx(
+        styles.card,
+        isOwningAltScreenBlock ? styles.altScreenCollapsed : undefined,
+        altScreen.crashed && isOwningAltScreenBlock ? styles.altScreenCrashed : undefined,
+      )}
       data-testid={`block-card-${header.id}`}
       data-status={header.status}
       data-collapsed={header.collapsed ? 'true' : 'false'}
+      data-alt-screen={isOwningAltScreenBlock ? 'true' : 'false'}
+      data-alt-depth={String(altScreen.depth)}
     >
       <span className={styles.stripe} aria-hidden />
       <div
@@ -398,7 +416,10 @@ function BlockCardImpl(props: BlockCardProps) {
             />
           )}
         </span>
-        <span className={styles.actions}>
+        <span
+          className={styles.actions}
+          data-alt-collapsed={isOwningAltScreenBlock ? 'true' : 'false'}
+        >
           {header.status === 'running' && (
             <Tooltip content={<>Stop</>}>
               <button
@@ -412,23 +433,27 @@ function BlockCardImpl(props: BlockCardProps) {
               </button>
             </Tooltip>
           )}
-          <Tooltip
-            content={
-              <>
-                {header.pinned ? 'Unpin' : 'Pin'} <Kbd>P</Kbd>
-              </>
-            }
-          >
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onPinClick}
-              aria-label={header.pinned ? 'Unpin block' : 'Pin block'}
-              data-active={header.pinned ? 'true' : 'false'}
+          {/* EPIC-H §4.2: during alt-screen the pin / rerun / compare buttons
+             are hidden; copy remains available. */}
+          {!isOwningAltScreenBlock && (
+            <Tooltip
+              content={
+                <>
+                  {header.pinned ? 'Unpin' : 'Pin'} <Kbd>P</Kbd>
+                </>
+              }
             >
-              <PinIcon />
-            </button>
-          </Tooltip>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={onPinClick}
+                aria-label={header.pinned ? 'Unpin block' : 'Pin block'}
+                data-active={header.pinned ? 'true' : 'false'}
+              >
+                <PinIcon />
+              </button>
+            </Tooltip>
+          )}
           <Tooltip
             content={
               <>
@@ -441,6 +466,7 @@ function BlockCardImpl(props: BlockCardProps) {
               className={styles.iconButton}
               onClick={onCopyClick}
               aria-label="Copy block output"
+              data-testid={`block-card-copy-${header.id}`}
             >
               <CopyIcon />
             </button>
@@ -496,37 +522,42 @@ function BlockCardImpl(props: BlockCardProps) {
               </div>
             )}
           </span>
-          <Tooltip
-            content={
-              <>
-                Rerun <Kbd>⌘R</Kbd>
-              </>
-            }
-          >
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onRerunClick}
-              aria-label="Rerun command"
+          {!isOwningAltScreenBlock && (
+            <Tooltip
+              content={
+                <>
+                  Rerun <Kbd>⌘R</Kbd>
+                </>
+              }
             >
-              <RerunIcon />
-            </button>
-          </Tooltip>
-          <Tooltip
-            content={canCompare ? <>Compare against previous run</> : <>No prior run to compare</>}
-          >
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onCompareClick}
-              aria-label={canCompare ? 'Compare against previous run' : 'Compare (no prior run)'}
-              disabled={!canCompare}
-              data-testid={`block-card-compare-${header.id}`}
-              aria-disabled={!canCompare}
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={onRerunClick}
+                aria-label="Rerun command"
+                data-testid={`block-card-rerun-${header.id}`}
+              >
+                <RerunIcon />
+              </button>
+            </Tooltip>
+          )}
+          {!isOwningAltScreenBlock && (
+            <Tooltip
+              content={canCompare ? <>Compare against previous run</> : <>No prior run to compare</>}
             >
-              <CompareIcon />
-            </button>
-          </Tooltip>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={onCompareClick}
+                aria-label={canCompare ? 'Compare against previous run' : 'Compare (no prior run)'}
+                disabled={!canCompare}
+                data-testid={`block-card-compare-${header.id}`}
+                aria-disabled={!canCompare}
+              >
+                <CompareIcon />
+              </button>
+            </Tooltip>
+          )}
           <span className={styles.caret} aria-hidden>
             <CaretIcon />
           </span>

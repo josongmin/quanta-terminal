@@ -1,6 +1,7 @@
 /**
- * Base64 helpers for PTY byte frames. xterm.js accepts Uint8Array via
- * `term.write`, which we hand the raw decoded bytes.
+ * Base64 helpers for PTY byte frames. The custom VT engine consumes
+ * `Uint8Array` chunks; these helpers bridge the host bridge's base64
+ * transport to that format.
  *
  * Kept dependency-free and environment-agnostic: uses the WHATWG `atob` global
  * which exists in every supported browser and in Node 16+. Tests run in jsdom,

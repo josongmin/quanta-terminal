@@ -28,17 +28,16 @@ export default defineConfig(async () => ({
     minify: 'esbuild',
     sourcemap: true,
     // Manual vendor chunking.
-    //   - `xterm`: xterm.js core + addons (the heaviest single dep).
     //   - `react`: react + react-dom + scheduler, which rarely change between
     //     UI tweaks and so benefit from a long-lived hash.
     //   - `vendor`: everything else in node_modules.
     // With this, a small UI change only invalidates the app chunk, not the
-    // xterm / react chunks — browsers keep those cached across deploys.
+    // react chunk — browsers keep it cached across deploys. (Pre-EPIC-I
+    // a separate `xterm` chunk held ~200 kB of xterm.js; that dep is gone.)
     rollupOptions: {
       output: {
         manualChunks(id: string): string | undefined {
           if (!id.includes('node_modules')) return undefined;
-          if (id.includes('@xterm/')) return 'xterm';
           if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
             return 'react';
           }
@@ -46,8 +45,7 @@ export default defineConfig(async () => ({
         },
       },
     },
-    // Raise the "chunk too large" noise threshold; the xterm chunk is
-    // inherently ~200 kB and the warning is purely informational.
-    chunkSizeWarningLimit: 700,
+    // Warning threshold tuned for the current vendor chunk sizes.
+    chunkSizeWarningLimit: 500,
   },
 }));

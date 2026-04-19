@@ -5,6 +5,39 @@ Quanta Terminal release. Everything here is invoked by `.github/workflows/releas
 the doc exists so an operator can reproduce the pipeline locally and so a
 fresh secret rotation has a checklist to follow.
 
+## Release notes
+
+### EPIC-I — xterm.js removed (RFC 0001 §19)
+
+xterm.js has been removed from the UI; the custom Rust VT engine
+(`quanta-vt` + `quanta-block`) is now the single renderer. Four
+dependencies left the tree — `@xterm/xterm`, `@xterm/addon-fit`,
+`@xterm/addon-web-links`, `@xterm/addon-webgl` — along with the
+`packages/ui/src/widgets/terminal-shell/` widget, its `useTerminalSurface`
+hook, and the `buildXtermTheme()` helper.
+
+Approximate bundle-size delta, measured on the pnpm store before removal
+and verified with `pnpm --filter @quanta/ui build` after:
+
+| Asset                                               | Before | After | Delta    |
+| --------------------------------------------------- | ------ | ----- | -------- |
+| `node_modules/.pnpm/@xterm+xterm@5.5.0`             | 2.5 MB | 0 MB  | −2.5 MB  |
+| `node_modules/.pnpm/@xterm+addon-webgl@0.18.0_...`  | 608 KB | 0 KB  | −608 KB  |
+| `node_modules/.pnpm/@xterm+addon-fit@0.10.0_...`    |  32 KB | 0 KB  |  −32 KB  |
+| `node_modules/.pnpm/@xterm+addon-web-links@0.11.0`  |  48 KB | 0 KB  |  −48 KB  |
+| Production `xterm` vendor chunk (Tauri build)       | ~200 KB gzipped | 0 KB | −200 KB gzipped |
+
+The dev-only `SideBySideHarness` used to mount the legacy xterm shell in
+its right pane; it now mounts a second `TerminalCanvas` fed from the
+same `GridMirror`, which makes the harness useful as a renderer
+regression sentinel rather than a cross-renderer parity check. The
+`data-renderer="xterm"` attribute on the right pane is preserved for
+selector stability.
+
+Reverting the removal is a single `git revert` away — the deletions were
+kept to one commit on purpose.
+
+
 ## Pipelines at a glance
 
 - `ci.yml` — correctness gate on every PR. Unit tests + clippy + fmt + the

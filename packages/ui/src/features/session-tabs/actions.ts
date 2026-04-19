@@ -56,8 +56,10 @@ export interface CreateSessionResult {
 
 /**
  * Spawn a new session, register its connection, and make it active. The
- * `onData` callback receives the new session's id so the caller (TerminalPage)
- * can route bytes to per-session surfaces (xterm alt-screen, etc.).
+ * `onData` callback receives the new session's id so the caller
+ * (TerminalPage) can route bytes to per-session listeners. Post-EPIC-I
+ * the callback is advisory — the custom VT engine consumes the bytes
+ * via the `GridMirror`; the callback is retained for test hooks.
  */
 export async function createSession(
   options: CreateSessionOptions,

@@ -1,0 +1,13 @@
+{
+  "cursor_key_app": false,
+  "bracketed_paste": false,
+  "focus_report": false,
+  "mouse_protocol": "off",
+  "mouse_encoding": "legacy",
+  "modify_other_keys": 0,
+  "kitty_keyboard": "disabled",
+  "alt_screen": false,
+  "sync_update": false,
+  "auto_wrap": true,
+  "origin": false
+}

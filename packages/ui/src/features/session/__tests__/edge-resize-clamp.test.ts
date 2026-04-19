@@ -1,13 +1,16 @@
 /**
  * Session-level resize edge case: a ConnectedSession's `resize(cols, rows)`
  * method forwards whatever dimensions it receives to the bridge. The
- * terminal-shell hook is responsible for clamping 0×0 → skip-call (the
- * xterm fit addon produces cols=0,rows=0 on a hidden host).
+ * caller (terminal-canvas's ResizeObserver) is responsible for clamping
+ * 0×0 → skip-call (a hidden host produces zero-sized measurements).
  *
  * This test targets the feature contract: if a caller passes 0×0, the
- * bridge is called with those values and the bridge is the clamp authority
- * — which means the HOOK must gate. We pin the gate behavior at the feature
- * level so a future regression in useTerminalSurface is detected.
+ * bridge is called with those values and the bridge is the clamp
+ * authority — which means the hosting widget must gate. We pin the
+ * gate behaviour at the feature level so a future regression in the
+ * canvas's resize pipeline is detected.
+ * (historical-xterm-reference: pre-EPIC-I the gate lived in
+ * `useTerminalSurface`, the xterm.js lifecycle hook.)
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

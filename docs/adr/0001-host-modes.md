@@ -41,6 +41,11 @@ Independent of host:
 - Rust sidecar (`quanta-core` and siblings).
 - Event protocol, block model, persistence, diagnostics, history.
 - React UI packaged as a host-agnostic module that receives an injected host-bridge object.
+- Terminal rendering: the custom Rust VT engine (`quanta-vt` + `quanta-block`)
+  is the single renderer (RFC 0001, EPIC-I). Earlier drafts of this ADR
+  described xterm.js as a raw-mode bootstrap with a replaceable renderer
+  abstraction; that transitional clause is retired as of EPIC-I. No host
+  ships a fallback renderer.
 
 ### Host Adapter Interfaces
 

@@ -267,11 +267,7 @@ async fn decset_1049_mode_changed_precedes_alt_buffer_grid_delta() {
     // unrelated writes.
     //
     // The command sequence: enter alt -> print 'X' -> leave alt.
-    let (events, _records) = drive(
-        r"printf '\033[?1049hX\033[?1049l'; exit 0",
-        true,
-    )
-    .await;
+    let (events, _records) = drive(r"printf '\033[?1049hX\033[?1049l'; exit 0", true).await;
 
     // Walk envelopes in order. Track:
     //   1. When we first see a ModeChanged event payload (any mode change).

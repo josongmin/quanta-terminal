@@ -1,8 +1,9 @@
 # ADR 0016 — Selection, Search, and Copy Semantics
 
-- **Status**: Proposed (skeleton — fleshed out during RFC 0001 Phase 6.5)
+- **Status**: Accepted (v1 decisions locked)
 - **Date**: 2026-04-19
-- **Related**: RFC 0001 §7.5.2 (hit-testing + selection callout), ADR 0015 (width SSOT — selection depends on width)
+- **Accepted**: 2026-04-19 (EPIC-D implementation agent — Phase 6.5)
+- **Related**: RFC 0001 §7.5.2 (hit-testing + selection callout), §11 (selection/copy/search authority), §13.8 (selection/copy acceptance), ADR 0015 (width SSOT — selection depends on width), EPIC-D `docs/plans/0001-custom-vt-engine-xterm-removal/epic-D-canvas-renderer-selection.md` (consumer)
 
 ## Context
 
@@ -104,9 +105,26 @@ Handled per RFC 0001 §7.3.5 (permission-gated). A program's OSC 52 write does N
 - Hyperlinks are first-class, not a hack.
 - Cross-scope scrollback+alt-screen selection is disallowed. Users may dislike this; the alternative is worse (nonsensical copy).
 
-## Open (to resolve during Phase 6.5 implementation)
+## Resolved (v1 decisions — locked by EPIC-D)
 
-- Shift-click extension vs Cmd-click multi-select (pick one convention and ship).
-- "Find in block" (ADR 0013 history search) vs "Find in grid" — are they the same surface or two? Likely two: history search returns blocks, grid search returns cell anchors. Document clearly in UI.
-- Regex engine for `/` search: `regex` crate (Rust, fast) vs native JS `RegExp`. Probably JS for simplicity; Rust only if grid is huge (>100k rows).
-- Copy-on-select vs copy-on-cmd-c (platform convention): default to cmd-c; add setting for copy-on-select.
+Every Open Question from the skeleton is resolved below. Implementation references are the corresponding test files in `packages/ui/src/shared/ui/cell-renderer/__tests__/` and `packages/ui/src/widgets/terminal-canvas/__tests__/`.
+
+1. **Word-boundary algorithm** — Unicode word break via `Intl.Segmenter(undefined, { granularity: 'word' })`. Chosen over locale-agnostic regex because it handles CJK-segmentation, emoji clusters, ZWJ sequences, and punctuation boundaries correctly out of the box with zero bundle cost (runtime built-in). Covered by `Selection.test.ts > word mode` scenarios.
+
+2. **Block-mode (rectangular) modifier** — **Opt on macOS, Alt on other platforms**. Both map to `altKey` in DOM events. Implementation uses `platformBlockModeModifier(platform)` which currently returns `'altKey'` uniformly (platform-specific variants are keyed via the `platform` prop for future divergence). Rationale: matches macOS `Terminal.app` + `iTerm2` convention; aligns with Warp's rectangular-select chord.
+
+3. **Copy-on-select vs Cmd+C default** — **Cmd+C (Ctrl+C on non-macOS) is the default**. Copy-on-select is **off** by default. A session-level setting (`selection.copyOnSelect`) is exposed; Linux users are the primary audience since X11 primary-selection semantics blur "selection" with "clipboard". Off-by-default avoids the silent-clipboard-steal surprise on macOS/Windows where users don't expect copy-on-select.
+
+4. **Middle-click paste (X11 primary selection)** — **Honored on Linux X11 only**. Gated by `platform === 'linux'` and the presence of a running X server; on Wayland and non-Linux, middle-click is ignored. Rationale: X11 PRIMARY is a cultural expectation on Linux; reproducing it on Wayland without a corresponding primary buffer would emit inconsistent data.
+
+5. **Search engine** — **Native JS `RegExp`**. Rust's `regex` crate is **not** bundled in v1. Reasons:
+   - Deterministic: `RegExp` is present in every browser + Node runtime the UI targets.
+   - Zero bundle cost: no WASM blob shipped.
+   - Scope is bounded: typical grids are 120×40 with scrollback in the single-digit-thousands-of-rows range. `RegExp.exec` amortizes to a few ms.
+   - If scrollback grows past 100k rows, a Rust-side engine can drop in behind `Search.buildLogicalView` without surface-level API changes. Treated as a follow-up.
+
+6. **Shift-click vs Cmd-click extension** — **Shift-click extends the active selection; Cmd-click (macOS) or Ctrl-click (elsewhere) opens hyperlinks**. Multi-selection is out of v1 (no multi-range support). Rationale: single-range selection + hyperlink-click is the 99% case; multi-range adds anchor-book-keeping complexity without a clear workflow win.
+
+7. **"Find in block" vs "Find in grid"** — **Two distinct surfaces**. ADR 0013 history search returns `Block[]` (command-level navigation); EPIC-D's `Search` returns `SelectionAnchor[]` on the grid (cell-level navigation). Keyboard shortcuts: `Cmd/Ctrl+Shift+F` history search, `Cmd/Ctrl+F` grid search. Documented in `TerminalCanvas` widget docs.
+
+8. **Copy-on-Alt-held: trailing-whitespace preservation** — **Held Alt/Opt at copy time passes `preserveTrailingWhitespace: true`**. This is a power-user knob; default off keeps pasted-command lines clean.

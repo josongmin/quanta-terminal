@@ -19,7 +19,7 @@ pages/      terminal-page/          The one Phase-1 route. Composes chrome.
 
 widgets/    title-bar/              Frameless window chrome.
             banner-host/            ADR-0010 banner precedence renderer.
-            terminal-shell/         xterm.js surface + bridge wiring.
+            terminal-canvas/        Custom Rust VT engine surface (RFC 0001).
             composer/               Multi-line command input.
             status-bar/             cwd/shell/health chips.
             session-tabs/           Phase-1 single-session placeholder.
@@ -34,7 +34,7 @@ entities/   session                Session store (zustand + selectors).
             event                  HostEvent domain entity.
 
 shared/     api/                   Bridge accessor (only reader of the global).
-            config/                Tokens, fonts, xterm theme, app.css.
+            config/                Tokens, fonts, app.css.
             lib/                   logger, keymap, focus-trap, debounce,
                                    write-batcher, perf, cx, base64,
                                    event-bus, banner-precedence.

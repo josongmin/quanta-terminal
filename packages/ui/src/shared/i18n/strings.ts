@@ -196,6 +196,28 @@ export const STRINGS = {
     'quanta: shell session failed to start. See the status bar for details.',
   'terminal.rerunBlocked': 'Wait for the previous run to finish before rerunning.',
 
+  // Alt-screen status bar (EPIC-H §4.2)
+  'altScreenStatus.ariaLabel': 'Full-screen terminal application status',
+  'altScreenStatus.hint': 'Ctrl-D exits',
+  'altScreenStatus.nested': '{{inner}} in {{outer}}',
+  'altScreenStatus.exitedWithSignal': '{{command}} exited with signal {{signal}}',
+
+  // Degraded-mode banner (EPIC-H §4.4 / ADR 0010 additions)
+  'degraded.engine_crashed':
+    'Engine crashed; last frame preserved. Restart session to continue.',
+  'degraded.restart': 'Restart session',
+  'degraded.banner.ariaLabel': 'Session health',
+
+  // Side-by-side harness (EPIC-H §4.3, dev-only)
+  'sideBySide.canvasLabel': 'Canvas renderer',
+  // historical-xterm-reference: the right pane is now a memory-mirror
+  // reference renderer, not xterm. The key name is kept so settings-UI
+  // lookups do not break during the EPIC-I removal rollout.
+  'sideBySide.xtermLabel': 'Reference mirror',
+  'sideBySide.exportDiff': 'Export diff',
+  'sideBySide.diffSummaryZero': 'No divergence detected.',
+  'sideBySide.diffSummary': '{{count}} divergence(s) over the last {{frames}} frames',
+
   // Settings panel
   'settings.dialogLabel': 'Settings',
   'settings.close': 'Close settings',

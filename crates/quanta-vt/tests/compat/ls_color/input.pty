@@ -1,0 +1,24 @@
+total 10
+drwxr-xr-x  22 root  wheel   704 Jul 19  2025 [34m.[39;49m[0m
+drwxr-xr-x  22 root  wheel   704 Jul 19  2025 [34m..[39;49m[0m
+----------   1 root  admin     0 Jul 19  2025 .file
+drwxr-xr-x   2 root  wheel    64 Jul 19  2025 [34m.nofollow[39;49m[0m
+drwxr-xr-x   2 root  wheel    64 Jul 19  2025 [34m.resolve[39;49m[0m
+drwxr-xr-x   2 root  wheel    64 Jul 19  2025 [34m.vol[39;49m[0m
+lrwxr-xr-x   1 root  admin    36 Jul 19  2025 [35m.VolumeIcon.icns[39;49m[0m -> System/Volumes/Data/.VolumeIcon.icns
+drwxrwxr-x  73 root  admin  2336 Apr 19 18:01 [34mApplications[39;49m[0m
+drwxr-xr-x@ 39 root  wheel  1248 Jul 19  2025 [34mbin[39;49m[0m
+drwxr-xr-x   2 root  wheel    64 Jul 19  2025 [34mcores[39;49m[0m
+dr-xr-xr-x   4 root  wheel  5052 Apr 19 12:45 [34mdev[39;49m[0m
+lrwxr-xr-x@  1 root  wheel    11 Jul 19  2025 [35metc[39;49m[0m -> private/etc
+lrwxr-xr-x   1 root  wheel    25 Apr 19 12:46 [35mhome[39;49m[0m -> /System/Volumes/Data/home
+drwxr-xr-x  68 root  wheel  2176 Apr  2 02:42 [34mLibrary[39;49m[0m
+drwxr-xr-x   3 root  wheel    96 Oct 19  2025 [34mopt[39;49m[0m
+drwxr-xr-x   6 root  wheel   192 Apr 19 12:45 [34mprivate[39;49m[0m
+drwxr-xr-x@ 76 root  wheel  2432 Jul 19  2025 [34msbin[39;49m[0m
+drwxr-xr-x@ 10 root  wheel   320 Jul 19  2025 [34mSystem[39;49m[0m
+lrwxr-xr-x@  1 root  wheel    11 Jul 19  2025 [35mtmp[39;49m[0m -> private/tmp
+drwxr-xr-x   5 root  admin   160 Oct 18  2025 [34mUsers[39;49m[0m
+drwxr-xr-x@ 11 root  wheel   352 Jul 19  2025 [34musr[39;49m[0m
+lrwxr-xr-x@  1 root  wheel    11 Jul 19  2025 [35mvar[39;49m[0m -> private/var
+drwxr-xr-x   4 root  wheel   128 Apr 19 14:39 [34mVolumes[39;49m[0m

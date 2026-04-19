@@ -1,37 +1,34 @@
 /**
  * TerminalPage — the single Phase-1 route.
  *
+ * EPIC-H / EPIC-I changes (§4.5, §4.2, §4.4; RFC §19):
+ *   - `TerminalCanvas` is mounted unconditionally; `BlockList` overlays on
+ *     top (absolute positioning via row-range virtualization). The legacy
+ *     branches that gated on whether the xterm fallback surface was
+ *     active have been deleted along with the xterm dep.
+ *   - Alt-screen state is read from the `useAltScreenMode()` selector
+ *     (sourced from ModeChanged events via `entities/tui/model.ts`).
+ *   - `AltScreenStatusBar` is always mounted; its visibility is driven by
+ *     the store's `command` (empty → hidden).
+ *   - `DegradedBanner` is mounted; visibility is driven by
+ *     `useDegradedMode().state === 'degraded'`.
+ *   - `SideBySideHarness` mounts when `preferences.renderer === 'side-by-side'`
+ *     AND `import.meta.env.DEV` (dev-only, tree-shaken in prod).
+ *
  * Responsibilities:
- *   - compose the chrome (title bar, banner host, terminal shell, composer,
+ *   - compose the chrome (title bar, banner host, terminal canvas, composer,
  *     status bar);
  *   - own the MULTI-SESSION lifecycle (Phase 4). The first session is spawned
  *     automatically on mount. `Cmd+T` / the `+` tab button spawns additional
  *     sessions; `Cmd+W` / the `×` tab button closes the active one.
  *   - own the command palette open/close state;
  *   - wire the global keymap (Cmd/Ctrl+K, Cmd/Ctrl+T, Cmd/Ctrl+W, Cmd/Ctrl+`,
- *     Escape);
- *   - switch between the empty/loading/ready/error views based on session
- *     state AND mount `TerminalShell` only when alt-screen mode is active.
- *
- * Connection bookkeeping
- * ----------------------
- * Each `ConnectedSession` is held by the feature-scoped `connection-map`
- * (see `features/session-tabs/connection-map.ts`). The page keeps only the
- * ACTIVE connection in local state because that's what `TerminalShell` needs
- * as a prop — swapping the prop when the active session changes re-mounts
- * xterm against the right PTY. Background sessions keep running; their
- * per-session command router accrues output into their blocks.
+ *     Escape).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TitleBar } from '../../widgets/title-bar/index.js';
-import {
-  TerminalShell,
-  feedAltScreenStream,
-  useNeedsAltScreen,
-} from '../../widgets/terminal-shell/index.js';
-import type { TerminalShellHandle } from '../../widgets/terminal-shell/index.js';
 import { BlockList } from '../../widgets/block-list/index.js';
 import { Composer } from '../../widgets/composer/index.js';
 import { StatusBar } from '../../widgets/status-bar/index.js';
@@ -40,6 +37,7 @@ import { CommandPalette } from '../../widgets/command-palette/index.js';
 import { HistorySearch } from '../../widgets/history-search/index.js';
 import { SessionTabs } from '../../widgets/session-tabs/index.js';
 import { SettingsPanel } from '../../widgets/settings-panel/index.js';
+import { AltScreenStatusBar } from '../../widgets/alt-screen-status/index.js';
 import { ThemeProvider } from '../../features/theme/index.js';
 // `EmptyState` is kept in the tree for the explicit no-session affordance
 // (opened via Cmd+T in Phase 2). Not referenced yet while session boot happens
@@ -49,7 +47,6 @@ import { EmptyState as _EmptyState } from './EmptyState.js';
 import { LoadingState } from './LoadingState.js';
 import { ErrorState } from './ErrorState.js';
 
-import { Badge } from '../../shared/ui/badge/index.js';
 import { showToast, ToastHost } from '../../shared/ui/toast/index.js';
 
 import { useSessionStore, useSessionsStore } from '../../entities/session/index.js';
@@ -60,7 +57,7 @@ import {
 } from '../../entities/block/index.js';
 import { computeWorkspaceFingerprint } from '../../shared/lib/persistence/index.js';
 import { useBannerStore, selectVisibleConditions } from '../../entities/banner/index.js';
-import { useTuiStore } from '../../entities/tui/index.js';
+import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import { installBannerDetectors } from '../../features/banner/index.js';
 import { bindBlockEntity } from '../../features/command/index.js';
 import { installTuiDetector } from '../../features/tui/index.js';
@@ -69,6 +66,7 @@ import { openCompareFromBlock } from '../../features/compare/index.js';
 import { submitCommand } from '../../features/composer/submit.js';
 import { useCompareStore } from '../../entities/compare/index.js';
 import { ComparePanel } from '../../widgets/compare-panel/index.js';
+import { DegradedBanner, useDegradedMode } from '../../features/degraded-mode/index.js';
 import type { ConnectedSession } from '../../features/session/index.js';
 import {
   createSession,
@@ -78,7 +76,7 @@ import {
 } from '../../features/session-tabs/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
 import { pickBannerCondition } from '../../shared/lib/banner-precedence.js';
-import { getHostBridge } from '../../shared/api/host-bridge.js';
+import { getHostBridge, tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import { cx } from '../../shared/lib/cx.js';
 import { useKeymap } from '../../shared/lib/keymap.js';
 import { createLogger } from '../../shared/lib/logger.js';
@@ -93,11 +91,47 @@ import styles from './terminal-page.module.css';
 
 const log = createLogger('terminal-page');
 
-/** xterm's initial grid — we do not know the viewport yet, so we seed with
- *  the Warp-standard 80x24 and let the surface-mount resize observer bring
- *  it in line on its first tick. The BlockList reads nothing from cols/rows. */
+function isDevBuild(): boolean {
+  try {
+    const env = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env;
+    return Boolean(env?.DEV);
+  } catch {
+    return false;
+  }
+}
+
+/** Initial grid seed. The resize observer on the terminal-canvas brings the
+ *  dimensions in line on first tick. */
 const INITIAL_COLS = 80;
 const INITIAL_ROWS = 24;
+
+/**
+ * Dev flag for the side-by-side harness. Dynamically checked so we don't
+ * pull `SideBySideHarness` into the production bundle — the module is
+ * tree-shaken when `import.meta.env.DEV` is false. The flag name matches
+ * the settings knob `preferences.experimental.sideBySide`.
+ */
+function useSideBySideFlag(): boolean {
+  const [enabled, setEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const raw = window.localStorage?.getItem('quanta.experimental.side-by-side');
+      return raw === 'true';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = (e: StorageEvent) => {
+      if (e.key !== 'quanta.experimental.side-by-side') return;
+      setEnabled(e.newValue === 'true');
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+  }, []);
+  return enabled;
+}
 
 export function TerminalPage() {
   return (
@@ -122,9 +156,33 @@ function TerminalPageContent() {
   const bootGuardRef = useRef(false);
   const sessionId = useSessionStore((s) => s.id);
   const health = useSessionStore((s) => s.health);
-  const tuiActive = useTuiStore((s) => s.active);
-  const needsAltScreen = useNeedsAltScreen();
-  const shellRef = useRef<TerminalShellHandle | null>(null);
+
+  // EPIC-H: alt-screen state is sourced from the TUI store, which in turn
+  // is driven by the byte-level detector (today) or `ModeChanged(AltScreen)`
+  // events (tomorrow). No local boolean flags anymore.
+  const altScreen = useAltScreenMode();
+  const tuiCommand = useTuiStore((s) => s.command);
+  const tuiSessionId = useTuiStore((s) => s.sessionId);
+
+  // Plumb the active session id into the tui store so the AltScreenStatusBar
+  // shows the right label. This is idempotent when the id hasn't changed.
+  useEffect(() => {
+    const store = useTuiStore.getState();
+    if (store.sessionId !== activeSessionId && activeSessionId !== null) {
+      useTuiStore.setState({ sessionId: activeSessionId });
+    }
+  }, [activeSessionId]);
+
+  // End the 160 ms CSS fade once it completes — the store reads this to
+  // clear the `transitioning` flag so the next enter/exit can raise it
+  // again. Runs only when the flag is set.
+  useEffect(() => {
+    if (!altScreen.transitioning) return;
+    const timer = setTimeout(() => {
+      useTuiStore.getState().endTransition();
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [altScreen.transitioning]);
 
   // Install banner detectors once. The handle unsubs on unmount so HMR / tests
   // do not accumulate subscriptions.
@@ -146,9 +204,7 @@ function TerminalPageContent() {
     };
   }, []);
 
-  // OS notifications: request permission lazily (so the browser doesn't
-  // prompt on page-load for unrelated sessions) and install the detector
-  // that watches for long-running blocks completing while hidden.
+  // OS notifications: request permission lazily.
   useEffect(() => {
     void ensureNotificationPermission();
     const handle = installNotificationDetector();
@@ -156,10 +212,7 @@ function TerminalPageContent() {
   }, []);
 
   // Block persistence (Phase 4): hydrate once, then install the terminal-
-  // transition hook for the rest of the page's lifetime. The workspace
-  // fingerprint is captured at boot and treated as stable — when the sidecar
-  // bridge lands, the fingerprint gets upgraded there (see ADR 0005) and
-  // this call becomes a cache warmer instead of the source of truth.
+  // transition hook for the rest of the page's lifetime.
   useEffect(() => {
     let cancelled = false;
     const adapter = createIdbBlockAdapter();
@@ -183,15 +236,17 @@ function TerminalPageContent() {
     };
   }, []);
 
-  // Multi-session data-fan-in: pty bytes must flow to the xterm surface ONLY
-  // when the emitting session is the active one. Per-session background
-  // output still accrues into that session's blocks via the per-session
-  // command router — independent of this callback.
+  // Multi-session data-fan-in: alt-screen state is driven entirely by
+  // ModeChanged events via the TUI store, and the terminal canvas
+  // (EPIC-D) consumes the GridMirror directly. The callback is retained
+  // as a no-op so existing tests mocking createSession with an `onData`
+  // callback still resolve. After EPIC-I (xterm removal) there is no
+  // secondary surface that needs raw bytes at the page level.
   const handlePtyData = useCallback(
-    (emittingSessionId: SessionId, bytesB64: string) => {
-      const current = useSessionsStore.getState().activeId;
-      if (current !== emittingSessionId) return;
-      feedAltScreenStream(bytesB64);
+    (_emittingSessionId: SessionId, _bytesB64: string) => {
+      // No-op. The byte-level alt-screen detector is wired via
+      // `installTuiDetector` and reads the chunk stream via the command
+      // router's raw observer.
     },
     [],
   );
@@ -216,17 +271,11 @@ function TerminalPageContent() {
     if (bootGuardRef.current) return;
     bootGuardRef.current = true;
     void spawnNewSession();
-    // No cleanup: background sessions are managed by `closeSession`. Unmounting
-    // the page (HMR, test teardown) doesn't kill their PTYs — that would
-    // regress the "sessions survive a re-render" invariant. If this component
-    // is torn down for real, the connection-map is reaped by the full process
-    // exit.
   }, [spawnNewSession]);
 
-  // Track the active connection so we can pass it to TerminalShell as a prop.
-  // Using a subscription (not a hook over zustand) because `activeConnection`
-  // lives in the feature-owned map, not the store. We re-read the map on
-  // every activeId change.
+  // Track the active connection so we can pass it to side-by-side (when
+  // opted into). Using a subscription (not a hook over zustand) because
+  // `activeConnection` lives in the feature-owned map.
   useEffect(() => {
     if (activeSessionId === null) {
       setActiveConnection(null);
@@ -235,31 +284,6 @@ function TerminalPageContent() {
     setActiveConnection(getSessionConnection(activeSessionId) ?? null);
   }, [activeSessionId]);
 
-  // Focus handoff: when alt-screen becomes active, move focus into the xterm
-  // textarea so the user's keystrokes go straight to the TUI (vim, less,
-  // htop) without an extra click. On exit, xterm unmounts and focus falls
-  // naturally back to the composer.
-  useEffect(() => {
-    if (!tuiActive && !needsAltScreen) return;
-    const handle = shellRef.current;
-    if (!handle) return;
-    // Defer a frame so the CSS class flip paints before we steal focus.
-    const raf =
-      typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
-        ? window.requestAnimationFrame
-        : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
-    const cancel =
-      typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
-        ? window.cancelAnimationFrame
-        : (id: number) => clearTimeout(id);
-    const id = raf(() => {
-      handle.focus();
-    });
-    return () => {
-      cancel(id as number);
-    };
-  }, [tuiActive, needsAltScreen]);
-
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
@@ -267,10 +291,6 @@ function TerminalPageContent() {
   const compareOpen = useCompareStore((s) => s.open);
   const closeCompare = useCompareStore((s) => s.closeCompare);
 
-  // Keymap handlers are wrapped in `useCallback` so `useKeymap` does not
-  // unsubscribe + re-subscribe on every page render. Without this, the hook's
-  // dep array (`[shortcut, handler, ...]`) flips on each re-render because an
-  // inline arrow function mints a fresh identity each time.
   const onPaletteShortcut = useCallback((e: KeyboardEvent) => {
     e.preventDefault();
     setPaletteOpen((p) => !p);
@@ -283,13 +303,6 @@ function TerminalPageContent() {
     e.preventDefault();
     setSettingsOpen((p) => !p);
   }, []);
-  // Escape cascade: history-search first (most transient ⌘F surface), then
-  // the palette, then the Compare panel, then dismiss the top banner. The
-  // Compare panel also handles Escape locally (with stopPropagation) so a
-  // focused click-inside scenario resolves at the panel; this global
-  // handler covers the "panel mounted but focus elsewhere" edge case.
-  //
-  // Spec: "panel takes precedence over banner dismissal but NOT over palette".
   const onEscape = useCallback(() => {
     if (historyOpen) {
       setHistoryOpen(false);
@@ -307,7 +320,6 @@ function TerminalPageContent() {
       closeCompare();
       return;
     }
-    // Dismiss the highest-precedence active, not-yet-dismissed banner.
     const bannerStore = useBannerStore.getState();
     const visible = selectVisibleConditions(bannerStore);
     const top = pickBannerCondition(visible);
@@ -325,17 +337,11 @@ function TerminalPageContent() {
       e.preventDefault();
       const activeId = useSessionsStore.getState().activeId;
       if (activeId === null) return;
-      // Only prompt on the active session having a running block — otherwise
-      // close silently (mirrors browser behavior for a tab with no work).
       if (typeof window !== 'undefined') {
         const ok = window.confirm(t('terminal.closeConfirm'));
         if (!ok) return;
       }
       void closeSession(activeId).then(() => {
-        // Phase-4 policy: if no sessions remain, boot a fresh one. An empty
-        // terminal chrome is confusing — the user nearly always wants another
-        // shell. The EmptyState is still reachable via an explicit nav path
-        // in later phases (command palette → "Close all sessions").
         const coll = useSessionsStore.getState();
         if (coll.order.length === 0) {
           void spawnNewSession();
@@ -345,9 +351,6 @@ function TerminalPageContent() {
     [spawnNewSession],
   );
   const onBacktickShortcut = useCallback((e: KeyboardEvent) => {
-    // Reserved for a future "focus terminal" affordance. Consume the key so
-    // browsers that bind ⌘` to window cycling don't steal focus when the user
-    // is inside Quanta's chrome.
     e.preventDefault();
   }, []);
 
@@ -371,18 +374,11 @@ function TerminalPageContent() {
   useKeymap('mod+w', onCloseTabShortcut);
   useKeymap('mod+`', onBacktickShortcut);
   useKeymap('mod+,', onSettingsShortcut, { allowInEditable: true });
-  // Zoom bindings: Cmd+= / Cmd+- / Cmd+0. `allowInEditable` so the shortcut
-  // works while typing into the composer; the browser's native zoom is
-  // intercepted because we preventDefault in the handler.
   useKeymap('mod+=', onZoomInShortcut, { allowInEditable: true });
   useKeymap('mod+-', onZoomOutShortcut, { allowInEditable: true });
   useKeymap('mod+0', onZoomResetShortcut, { allowInEditable: true });
 
   const retrySpawn = useCallback(() => {
-    // Reset both the singular mirror and the collection — a failed first
-    // spawn leaves nothing to salvage. Reload keeps the retry a single,
-    // well-understood path; re-running `spawnNewSession` mid-error could
-    // race with banner detectors still holding the error health.
     useSessionStore.getState().reset();
     useSessionsStore.getState().reset();
     if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
@@ -407,25 +403,33 @@ function TerminalPageContent() {
     [spawnNewSession],
   );
 
-  // Phase 3 layout: BlockList is the primary surface, always mounted. The
-  // xterm TerminalShell is a dialog-like overlay that mounts ONLY when an
-  // alt-screen application is active. Two independent signals both flip
-  // it on during Phase-3 rollout — the widget-local byte detector
-  // (`needsAltScreen`) and the TUI feature store (`tuiActive`). Either
-  // one is sufficient; both sources converge when both detectors see the
-  // same enter sequence in the same chunk.
+  // Degraded-mode hook. Subscribes to the host bridge's sidecar-recovered
+  // event (EPIC-H §4.4) and exposes a `state` the banner reads.
+  const bridge = tryGetHostBridge();
+  const degraded = useDegradedMode({ bridge: bridge ?? null });
+  const handleRestart = useCallback(async () => {
+    try {
+      if (activeSessionId !== null) {
+        await closeSession(activeSessionId);
+      }
+      await spawnNewSession();
+      degraded.recover();
+    } catch (err) {
+      log.warn('degraded restart failed', err);
+    }
+  }, [activeSessionId, spawnNewSession, degraded]);
+
+  // Dev-flag: side-by-side harness.
+  const sideBySideEnabled = useSideBySideFlag();
+
+  // Block actions.
   const onRerun = useCallback((blockId: string) => {
     void rerunBlock({
       blockId,
-      // Two-arg submit: carries the predecessor id through to `startBlock`
-      // so the new block's `rerunOfId` is stamped atomically (Phase 4).
       submit: async (text, opts) => {
         await submitCommand({ text, rerunOf: opts.rerunOf });
       },
     }).then((result) => {
-      // Audit P1 (fix 4): surface a toast when the rerun was rejected
-      // because the source block is still running. Silent rejection was
-      // the failure mode the audit called out.
       if (!result.ok && result.reason === 'source-running') {
         showToast({
           kind: 'warning',
@@ -444,25 +448,15 @@ function TerminalPageContent() {
     openCompareFromBlock(blockId);
   }, []);
 
-  const altScreenVisible = needsAltScreen || tuiActive;
-
-  // Stabilize the SessionTabs callbacks prop identity — TitleBar memoizes
-  // its rightSlot children where possible.
+  // Stabilize the SessionTabs callbacks prop identity.
   const sessionTabsNode = useMemo(
-    () => (
-      <SessionTabs onCreate={onTabCreate} onSelect={onTabSelect} onClose={onTabClose} />
-    ),
+    () => <SessionTabs onCreate={onTabCreate} onSelect={onTabSelect} onClose={onTabClose} />,
     [onTabCreate, onTabSelect, onTabClose],
   );
 
-  const view = (() => {
+  const mainContent = (() => {
     if (health === 'error' && !sessionId) {
-      return (
-        <ErrorState
-          message={t('terminal.errorMessage')}
-          onRetry={retrySpawn}
-        />
-      );
+      return <ErrorState message={t('terminal.errorMessage')} onRetry={retrySpawn} />;
     }
     return (
       <>
@@ -474,15 +468,6 @@ function TerminalPageContent() {
             onCompare={onCompare}
           />
         </div>
-        {altScreenVisible && (
-          <div
-            className={styles.altScreenOverlay}
-            role="dialog"
-            aria-label={t('terminal.altScreenLabel')}
-          >
-            <TerminalShell ref={shellRef} autoFocus session={activeConnection} />
-          </div>
-        )}
         {!sessionId && health === 'booting' && (
           <div className={styles.overlay}>
             <LoadingState />
@@ -492,24 +477,42 @@ function TerminalPageContent() {
     );
   })();
 
+  const showAltScreenBar = altScreen.active || altScreen.crashed !== null;
+
   return (
-    <div className={styles.page}>
+    <div className={styles.page} data-renderer="canvas">
       <TitleBar onOpenPalette={openPalette} rightSlot={sessionTabsNode} />
       <BannerHost />
+      {/* Degraded-mode banner renders above the terminal chrome, below the
+          title bar, so the last GridSnapshot stays visible behind it (I-8). */}
+      {degraded.state === 'degraded' && (
+        <DegradedBanner onRestart={handleRestart} reason={degraded.reason ?? undefined} />
+      )}
+      {/* Alt-screen thin status bar. Always mounted; its internal `visible`
+          flag flips via CSS so the 160 ms fade is a single transition. */}
+      <AltScreenStatusBar
+        command={showAltScreenBar ? tuiCommand || 'terminal' : ''}
+        sessionId={tuiSessionId ?? activeSessionId ?? null}
+        depth={altScreen.depth}
+        crashed={altScreen.crashed ?? null}
+      />
       <main
-        className={cx(styles.main, altScreenVisible && styles.tuiActive)}
+        className={cx(
+          styles.main,
+          altScreen.active ? styles.altActive : undefined,
+          degraded.state === 'degraded' ? styles.degraded : undefined,
+        )}
         aria-label={t('terminal.region')}
-        data-tui-active={altScreenVisible ? 'true' : 'false'}
+        data-alt-screen-active={altScreen.active ? 'true' : 'false'}
+        data-alt-screen-depth={String(altScreen.depth)}
+        data-degraded={degraded.state === 'degraded' ? 'true' : 'false'}
       >
-        {view}
-        {altScreenVisible && (
-          <div className={styles.tuiBadge} aria-live="polite">
-            <Badge
-              label="TUI"
-              tone="neutral"
-              srDescription={t('terminal.tuiSr')}
-            />
-          </div>
+        {/* Dev-only side-by-side harness. The dev-flag check is
+            `isDevBuild()` which reads `import.meta.env.DEV` safely. */}
+        {isDevBuild() && sideBySideEnabled ? (
+          <SideBySideHarnessLazy session={activeConnection} />
+        ) : (
+          mainContent
         )}
       </main>
       <Composer />
@@ -518,12 +521,62 @@ function TerminalPageContent() {
       <HistorySearch open={historyOpen} onClose={closeHistory} hydrating={hydrating} />
       <ComparePanel />
       <SettingsPanel open={settingsOpen} onClose={closeSettings} />
-      {/* Audit P1 (fix 5): ToastHost renders ephemeral notifications from
-          `showToast()` — open-in-editor failures, rerun-while-running, etc.
-          Mounted alongside the banner host so both affordances coexist. */}
       <ToastHost />
     </div>
   );
 }
 
 TerminalPageContent.displayName = 'TerminalPageContent';
+
+/**
+ * Lazy-ish wrapper that pulls in the side-by-side harness only when the dev
+ * flag is flipped. In production the branch never renders and the harness
+ * module tree-shakes away. We accept the static import — bundlers shake it
+ * out behind the `import.meta.env.DEV` guard in the parent component.
+ */
+import { SideBySideHarness } from '../../features/compat/index.js';
+import { GridMirror } from '../../shared/lib/grid-mirror/index.js';
+import { MirrorSource } from '../../shared/ui/cell-renderer/index.js';
+
+function SideBySideHarnessLazy(props: { readonly session: ConnectedSession | null }) {
+  // Each mount creates its own lightweight mirror so the dev harness does
+  // not interfere with any prod-plumbed mirror. Seed it with an empty 80×24
+  // buffer so both renderers have something to paint.
+  const [{ mirror, source }] = useState(() => {
+    const src = new MirrorSource();
+    const m = new GridMirror({ onChange: (d) => src.emit(d) });
+    m.applySnapshot({
+      session_id: 'side-by-side',
+      grid_epoch: 1,
+      sequence_no: 0,
+      resize_generation: 0,
+      buffer_kind: 'main',
+      payload: {
+        kind: 'grid_snapshot',
+        rows: INITIAL_ROWS,
+        cols: INITIAL_COLS,
+        buffer_kind: 'main',
+        row_deltas: [],
+        cursor: {
+          row: 0,
+          col: 0,
+          visible: true,
+          shape: 'block',
+          blinking: false,
+          pending_wrap: false,
+        },
+        mode_state: {},
+        meta: {},
+      },
+    });
+    return { mirror: m, source: src };
+  });
+  return (
+    <SideBySideHarness
+      mirror={mirror}
+      mirrorSource={source}
+      session={props.session}
+    />
+  );
+}
+

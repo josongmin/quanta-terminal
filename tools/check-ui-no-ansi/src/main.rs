@@ -89,11 +89,15 @@ const ALLOWLIST_PREFIXES: &[&str] = &["packages/ui/src/features/input/"];
 /// rule itself is unchanged; only the transitional skip shrinks.
 const TRANSITIONAL_SKIP_PREFIXES: &[&str] = &[
     "packages/ui/src/shared/lib/ansi-parser/",
-    // `features/tui/` hosts the xterm-backed renderer (RFC §16 ban
-    // target; EPIC-I removal). Skip until cleanup.
+    // `features/tui/` hosts the byte-level alt-screen detector. After
+    // EPIC-I (xterm removal) the feature is reduced to a detector that
+    // forwards enter/exit transitions into `entities/tui`. The byte
+    // patterns are ALLOWED references (fixture-style), not a parser;
+    // the skip is kept until we migrate the detector to consume
+    // `ModeChanged` events directly per EPIC-C.
     "packages/ui/src/features/tui/",
-    // Terminal-shell widget wraps the xterm fallback (EPIC-I cut).
-    "packages/ui/src/widgets/terminal-shell/",
+    // The `widgets/terminal-shell/` entry was removed in EPIC-I along
+    // with the directory itself.
 ];
 
 /// Pragma the allowlist requires. Must appear on the immediately

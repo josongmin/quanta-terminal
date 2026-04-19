@@ -39,21 +39,18 @@ body,
   app-region: no-drag;
 }
 
-/* xterm layout: host the terminal so fit addon can measure. */
-.xterm,
-.xterm-viewport,
-.xterm-screen {
-  width: 100% !important;
-  height: 100% !important;
-}
-.xterm-viewport::-webkit-scrollbar {
+/* historical-xterm-reference: xterm.js layout rules lived here in Phase
+   1–3. Removed in EPIC-I (RFC 0001 §19); the custom canvas renderer
+   owns its own sizing via ResizeObserver. A single scrollbar-styling
+   rule is kept for any overflow:auto shell inside the terminal region. */
+.q-term-scroller::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.xterm-viewport::-webkit-scrollbar-thumb {
+.q-term-scroller::-webkit-scrollbar-thumb {
   background: var(--q-border-strong);
   border-radius: 8px;
 }
-.xterm-viewport::-webkit-scrollbar-track {
+.q-term-scroller::-webkit-scrollbar-track {
   background: transparent;
 }

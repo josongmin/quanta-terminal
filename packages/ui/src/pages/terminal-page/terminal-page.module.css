@@ -38,36 +38,19 @@
   flex-direction: column;
 }
 
-/* Alt-screen overlay: when a TUI is active, the xterm surface mounts OVER
-   the BlockList as a dialog-like layer. It is NOT a display:none swap with
-   the BlockList — BlockList state remains live underneath — but it fully
-   covers the page content below the title bar so the TUI gets a clean
-   fullscreen grid. Keyboard focus is moved into xterm via the focus handle
-   the page holds (`shellRef.current.focus()`). */
-.altScreenOverlay {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  background: var(--q-bg-terminal);
+/* EPIC-H §4.2: alt-screen active does not hide the block list anymore. The
+ * BlockCard chrome collapse transitions the running card to a thin bar;
+ * the AltScreenStatusBar renders at the top of the page with the program
+ * name + session hint. This modifier exists for optional layout tweaks
+ * (e.g. darkening the canvas backdrop) and is cheap to leave empty. */
+.main.altActive {
+  background: var(--q-bg);
 }
 
-/* Hide the BlockList beneath the overlay — display:none drops it from the
-   tab order so Tab / Shift+Tab stay trapped inside xterm (Phase-3 keyboard
-   contract). */
-.main.tuiActive .blockListHost,
-.main.tuiActive > .overlay {
-  display: none;
-}
-
-/* TUI status chip — a small overlay so the user never loses track of why
-   their keystrokes stopped reaching the composer. Uses the same Badge
-   primitive as other degraded-state indicators (ADR 0010). */
-.tuiBadge {
-  position: absolute;
-  top: var(--q-space-2);
-  right: var(--q-space-3);
-  z-index: 4;
+/* Degraded mode: disable pointer events on the terminal chrome so the only
+ * interactive element is the DegradedBanner's Restart button. RFC §20 /
+ * ADR 0010. Keyboard interception is handled at the TerminalPage level. */
+.main.degraded .blockListHost {
   pointer-events: none;
+  opacity: 0.7;
 }

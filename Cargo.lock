@@ -1363,10 +1363,15 @@ name = "quanta-integration-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64",
+ "portable-pty",
  "quanta-core",
+ "quanta-events",
  "quanta-proto",
  "quanta-protocol",
+ "quanta-pty",
+ "quanta-session",
  "quanta-vt",
  "quanta-vt-width",
  "rmp-serde",

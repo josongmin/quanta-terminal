@@ -1,9 +1,9 @@
 /**
  * Event entity — runtime model of HostEvent for the UI.
  *
- * The xterm surface consumes pty.data events directly via a subscription;
- * higher-level widgets (status bar, future block list) will subscribe here.
- * Phase 1 keeps this thin.
+ * The canvas renderer consumes the `GridMirror` produced by the custom
+ * VT engine; higher-level widgets (status bar, block list) subscribe to
+ * their own projections. Kept intentionally thin.
  */
 
 export type { HostEvent, HostEventKind } from '@quanta/host-common';

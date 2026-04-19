@@ -1,0 +1,4 @@
+[?1049h[?1h=line a
+line b
+line c
+[7m(END)[27m[K[K[?1l>[?1049l

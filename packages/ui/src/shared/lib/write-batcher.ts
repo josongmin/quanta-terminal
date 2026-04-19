@@ -1,24 +1,27 @@
 /**
  * write-batcher — coalesces PTY byte frames so a burst of many small chunks
- * collapses into at most one `term.write` per animation frame.
+ * collapses into at most one downstream write per animation frame.
  *
  * Problem it solves
  * -----------------
  * A busy shell (e.g. `find /`, `yarn install`) emits hundreds of `pty_data`
  * events per second — each with a few bytes. Forwarding every event directly
- * into `term.write` forces xterm to do per-chunk layout work and starves the
- * main thread, because each write triggers renderer work on the next tick.
+ * into the renderer forces per-chunk layout work and starves the main
+ * thread, because each write triggers renderer work on the next tick.
  *
  * Design
  * ------
- * - Accept `Uint8Array` chunks; xterm accepts them natively (no re-encode).
+ * - Accept `Uint8Array` chunks natively (no re-encode).
  * - Queue chunks in a ring and schedule one flush per animation frame.
  * - Concatenate into a single `Uint8Array` at flush time and issue ONE write.
  * - On the final flush (dispose), pass a completion callback to
- *   `term.write(data, cb)` so callers can await drain if needed.
+ *   `write(data, cb)` so callers can await drain if needed.
  *
- * The batcher is framework-agnostic: the xterm dependency is injected as a
+ * The batcher is framework-agnostic: the sink is injected as a
  * `write(data)` function so this module stays trivially testable.
+ * (historical-xterm-reference: originally sized around
+ * `term.write(Uint8Array)`; post-EPIC-I the sink is typically the
+ * quanta-vt engine's feed method.)
  */
 
 import { mark, measure } from './perf.js';

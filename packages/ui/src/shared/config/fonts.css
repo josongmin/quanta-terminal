@@ -1,4 +1,4 @@
-/* JetBrains Mono — variable font, ligatures enabled by default in xterm. */
+/* JetBrains Mono — variable font, ligatures enabled in the canvas renderer. */
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
 @import '@fontsource/jetbrains-mono/700.css';
