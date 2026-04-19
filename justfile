@@ -28,6 +28,12 @@ check-layers:
     cargo run --quiet -p check-hex-imports -- --root .
     node tools/check-fsd-layers.mjs
 
+# Topic-registry enforcement: every `quanta://*` string literal in the
+# workspace must appear in `crates/quanta-proto/src/topics.rs`. Adding a
+# new topic without registering it fails this check.
+check-topics:
+    cargo run --quiet -p check-event-topic-names -- --root .
+
 # Proto schema freshness: compare generated TypeScript under
 # packages/ui/src/shared/types/generated against `quanta-proto`. Phase 2
 # will wire the actual diff; for now this is a no-op placeholder so the
@@ -50,3 +56,9 @@ fmt:
 # binary into PATH. Detects the host triple via `rustc -vV` (ADR 0004).
 package-sidecar:
     ./scripts/package-sidecar.sh
+
+# Regenerate the Tauri bundle icon set from assets/icon.svg. Committed
+# outputs live under packages/host-tauri/src-tauri/icons/. Re-run whenever
+# the SVG source changes. Placeholder-icon stop-gap — see docs/RELEASE.md.
+generate-icons:
+    ./scripts/generate-icons.sh

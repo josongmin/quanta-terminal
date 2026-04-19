@@ -25,11 +25,22 @@ function makeBridge(spy: BridgeSpy): HostBridge {
     async resize() {},
     async close() {},
     async cancelBlock() {},
+    async notify() {},
     async openInEditor() {},
     async installShellIntegration(options) {
       spy.calls.push(options);
       if (spy.throwError) throw new Error(spy.throwError);
       return spy.reply;
+    },
+    async uninstallShellIntegration() {
+      return {
+        targetPath: '/home/user/.zshrc',
+        removedRegion: '',
+        alreadyAbsent: true,
+        fileMissing: false,
+        mutated: false,
+        lineCount: 0,
+      };
     },
     async aiSuggest() {
       return {

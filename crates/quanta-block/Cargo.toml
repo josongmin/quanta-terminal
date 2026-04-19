@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 quanta-proto = { path = "../quanta-proto" }
+thiserror = { workspace = true }
 # `vte` is used only by `src/adapters/boundary.rs`. Per ADR 0014 the domain
 # layer does not touch it; `src/domain/boundary.rs` only declares value types
 # and the sink trait, and `src/ports/boundary.rs` declares the trait.

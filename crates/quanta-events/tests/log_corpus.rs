@@ -195,6 +195,7 @@ fn payload_kind(ev: &Event) -> &'static str {
         Event::SuggestionGenerated(_) => "suggestion_generated",
         Event::SuggestionReviewed(_) => "suggestion_reviewed",
         Event::HistoryIndexed(_) => "history_indexed",
+        Event::Unknown { .. } => "unknown",
     }
 }
 

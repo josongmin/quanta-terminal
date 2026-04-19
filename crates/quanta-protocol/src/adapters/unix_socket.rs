@@ -230,6 +230,13 @@ async fn handle_connection(
                 "resume cursor: replaying events",
             );
             for env in replayed {
+                // Envelope-level fields carried into every observability
+                // record for this replay: session_id, event_id, seq,
+                // causation_id so operators can triage a resume stall or
+                // partial replay back to the specific envelope.
+                let seq = env.monotonic_seq;
+                let event_id = env.event_id;
+                let causation_id = env.causation_id;
                 match encode_event(&env) {
                     Ok(frame) => {
                         let mut w = writer.lock().await;
@@ -237,13 +244,24 @@ async fn handle_connection(
                             || w.write_all(&frame).await.is_err()
                         {
                             tracing::warn!(
+                                %session_id,
+                                seq,
+                                %event_id,
+                                ?causation_id,
                                 "resume cursor: client disconnected mid-replay; aborting",
                             );
                             return Ok(());
                         }
                     }
                     Err(err) => {
-                        tracing::warn!(?err, "resume cursor: encode failed; skipping envelope");
+                        tracing::warn!(
+                            %session_id,
+                            seq,
+                            %event_id,
+                            ?causation_id,
+                            ?err,
+                            "resume cursor: encode failed; skipping envelope"
+                        );
                     }
                 }
             }
@@ -261,6 +279,13 @@ async fn handle_connection(
     let event_task = tokio::spawn(async move {
         loop {
             if let Some(envelope) = event_handler.next_event().await {
+                // Capture envelope identity before move into `encode_event`
+                // so error-path warnings carry enough context (session_id +
+                // event_id + seq + causation_id) for after-the-fact triage.
+                let session_id = envelope.session_id;
+                let seq = envelope.monotonic_seq;
+                let event_id = envelope.event_id;
+                let causation_id = envelope.causation_id;
                 match encode_event(&envelope) {
                     Ok(frame) => {
                         let mut w = event_writer.lock().await;
@@ -273,7 +298,14 @@ async fn handle_connection(
                         }
                     }
                     Err(err) => {
-                        warn!(?err, "event encode error");
+                        warn!(
+                            %session_id,
+                            seq,
+                            %event_id,
+                            ?causation_id,
+                            ?err,
+                            "event encode error"
+                        );
                         break;
                     }
                 }

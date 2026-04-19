@@ -35,6 +35,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::TauriError;
+
 /// Guard block markers — these are the idempotency sentinel. Do not rename;
 /// existing installs depend on exact-match detection.
 pub const GUARD_START: &str = "# >>> quanta shell integration >>>";
@@ -186,15 +188,10 @@ fn canonicalize_best_effort(p: &Path) -> Result<PathBuf, String> {
         }
     }
     let canonical_base = if existing.as_os_str().is_empty() {
-        std::env::current_dir()
-            .map_err(|e| format!("shell-integration: cwd unavailable: {e}"))?
+        std::env::current_dir().map_err(|e| format!("shell-integration: cwd unavailable: {e}"))?
     } else {
-        fs::canonicalize(&existing).map_err(|e| {
-            format!(
-                "shell-integration: canonicalize {:?} failed: {e}",
-                existing
-            )
-        })?
+        fs::canonicalize(&existing)
+            .map_err(|e| format!("shell-integration: canonicalize {:?} failed: {e}", existing))?
     };
     let mut out = canonical_base;
     // trailing was populated by popping from the end, so re-apply in reverse.
@@ -212,7 +209,10 @@ fn canonicalize_best_effort(p: &Path) -> Result<PathBuf, String> {
 fn ensure_within_home(target: &Path, home: &Path) -> Result<(), String> {
     let canonical_target = canonicalize_best_effort(target)?;
     let canonical_home = fs::canonicalize(home).map_err(|e| {
-        format!("shell-integration: canonicalize $HOME {:?} failed: {e}", home)
+        format!(
+            "shell-integration: canonicalize $HOME {:?} failed: {e}",
+            home
+        )
     })?;
     if !canonical_target.starts_with(&canonical_home) {
         return Err(ERR_OUTSIDE_HOME.to_string());
@@ -226,9 +226,8 @@ fn ensure_within_home(target: &Path, home: &Path) -> Result<(), String> {
     // re-canonicalize.
     if let Ok(meta) = fs::symlink_metadata(target) {
         if meta.file_type().is_symlink() {
-            let link_target = fs::read_link(target).map_err(|e| {
-                format!("shell-integration: read_link {:?} failed: {e}", target)
-            })?;
+            let link_target = fs::read_link(target)
+                .map_err(|e| format!("shell-integration: read_link {:?} failed: {e}", target))?;
             // A relative symlink resolves against the link's parent.
             let resolved = if link_target.is_absolute() {
                 link_target
@@ -247,8 +246,8 @@ fn ensure_within_home(target: &Path, home: &Path) -> Result<(), String> {
 }
 
 fn resolve_target(args: &InstallArgs) -> Result<PathBuf, String> {
-    let home = home_dir_from_env()
-        .ok_or_else(|| "shell-integration: $HOME is not set".to_string())?;
+    let home =
+        home_dir_from_env().ok_or_else(|| "shell-integration: $HOME is not set".to_string())?;
     let raw = match &args.target_path {
         Some(p) => PathBuf::from(p),
         None => home.join(args.shell.dotfile_relative()),
@@ -287,6 +286,202 @@ fn already_installed(path: &Path) -> Result<bool, String> {
     }
 }
 
+/* -------------------- uninstall -------------------- */
+
+/// Arguments to `quanta_uninstall_shell_integration`.
+///
+/// Same two-phase semantics as install: `confirm: false` returns the region
+/// that would be removed (preview) and must not mutate; `confirm: true`
+/// actually deletes the guarded block. Idempotent: a second call when the
+/// block is already absent returns `already_absent: true` and does NOT
+/// mutate.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UninstallArgs {
+    pub shell: Shell,
+    /// When `false`, the command returns a preview only — no file is mutated.
+    #[serde(default)]
+    pub confirm: bool,
+    /// Optional override for the target dotfile. Primarily for tests.
+    #[serde(default)]
+    pub target_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct UninstallReply {
+    /// Absolute path to the dotfile we would (or did) modify.
+    pub target_path: String,
+    /// The exact region that was (or would be) removed, including guard
+    /// markers. Empty string when the block is not present.
+    pub removed_region: String,
+    /// True iff the file existed but contained no guard block. The UI can
+    /// surface a "nothing to do" state instead of a mutation toast.
+    pub already_absent: bool,
+    /// True iff the target file does not exist on disk. Treated as a form of
+    /// "already absent" — a non-existent dotfile cannot have our block.
+    pub file_missing: bool,
+    /// True only when this invocation mutated the file.
+    pub mutated: bool,
+    /// Line count of the file AFTER this call (zero when the file is missing
+    /// or was emptied).
+    pub line_count: usize,
+}
+
+pub type UninstallResult = Result<UninstallReply, String>;
+
+/// Locate the `[start, end)` byte range of the guard block, where `end` is
+/// one past the end of the footer line (inclusive of the trailing newline if
+/// present). Returns `None` when no block is found.
+///
+/// The match is anchored: the header and footer must each appear on their own
+/// line (possibly with trailing whitespace). We deliberately do NOT match a
+/// footer-less file — a corrupted install (header only) is left alone so the
+/// user notices and we don't silently truncate their rc file.
+fn find_guard_region(contents: &str) -> Option<(usize, usize)> {
+    // Find the header line.
+    let header_line_start = {
+        // Walk line starts so we find a full-line match — prevents a user
+        // comment that happens to contain the marker mid-line from matching.
+        let mut search_from = 0usize;
+        loop {
+            let slice = &contents[search_from..];
+            let rel = slice.find(GUARD_START)?;
+            let abs = search_from + rel;
+            // Confirm the match is at a line start (beginning of file or
+            // preceded by a newline).
+            let at_line_start = abs == 0 || contents.as_bytes()[abs - 1] == b'\n';
+            if at_line_start {
+                break abs;
+            }
+            // Otherwise continue past this false positive.
+            search_from = abs + GUARD_START.len();
+        }
+    };
+    // Find the footer line anchored after the header.
+    let after_header = header_line_start + GUARD_START.len();
+    let footer_in_tail = {
+        let tail = &contents[after_header..];
+        let mut search_from = 0usize;
+        loop {
+            let slice = &tail[search_from..];
+            let rel = slice.find(GUARD_END)?;
+            let abs = search_from + rel;
+            let global_pos = after_header + abs;
+            let at_line_start =
+                global_pos == 0 || contents.as_bytes()[global_pos - 1] == b'\n';
+            if at_line_start {
+                break abs;
+            }
+            search_from = abs + GUARD_END.len();
+        }
+    };
+    let footer_start = after_header + footer_in_tail;
+    let footer_end_excl = footer_start + GUARD_END.len();
+    // Extend over the trailing newline if the footer line has one.
+    let mut region_end = footer_end_excl;
+    if region_end < contents.len() && contents.as_bytes()[region_end] == b'\n' {
+        region_end += 1;
+    }
+    // Swallow one preceding newline so removal leaves the surrounding file
+    // looking clean (the snippet is installed as "\n<header>\n…\n<footer>\n"
+    // which gives the block a blank line separator; we strip that too).
+    let mut region_start = header_line_start;
+    if region_start > 0 && contents.as_bytes()[region_start - 1] == b'\n' {
+        // Only strip if removing the region wouldn't collapse two
+        // consecutive newlines into a non-separator. Actually, we DO want to
+        // consume one leading newline — the snippet begins with `\n` so
+        // removing "\n<block>\n" nets back to the original content plus a
+        // single trailing `\n` from what was before.
+        region_start -= 1;
+    }
+    Some((region_start, region_end))
+}
+
+pub fn uninstall(args: UninstallArgs) -> UninstallResult {
+    let target = resolve_target_for_uninstall(&args)?;
+
+    // Missing file: return a well-formed "not installed" reply rather than
+    // error. The UI treats this as "nothing to do".
+    let contents = match fs::read_to_string(&target) {
+        Ok(c) => c,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UninstallReply {
+                target_path: path_to_string(&target)?,
+                removed_region: String::new(),
+                already_absent: true,
+                file_missing: true,
+                mutated: false,
+                line_count: 0,
+            });
+        }
+        Err(err) => {
+            return Err(format!(
+                "shell-integration: read {:?} failed: {err}",
+                target
+            ));
+        }
+    };
+
+    let region = find_guard_region(&contents);
+
+    // Already absent — no-op. Preview and confirm behave the same here.
+    let Some((start, end)) = region else {
+        return Ok(UninstallReply {
+            target_path: path_to_string(&target)?,
+            removed_region: String::new(),
+            already_absent: true,
+            file_missing: false,
+            mutated: false,
+            line_count: contents.lines().count(),
+        });
+    };
+
+    let removed_region = contents[start..end].to_string();
+
+    // Preview path — never mutate.
+    if !args.confirm {
+        return Ok(UninstallReply {
+            target_path: path_to_string(&target)?,
+            removed_region,
+            already_absent: false,
+            file_missing: false,
+            mutated: false,
+            line_count: contents.lines().count(),
+        });
+    }
+
+    // Mutation path — write back contents with the region removed.
+    let mut rewritten = String::with_capacity(contents.len() - (end - start));
+    rewritten.push_str(&contents[..start]);
+    rewritten.push_str(&contents[end..]);
+
+    fs::write(&target, &rewritten)
+        .map_err(|e| format!("shell-integration: write {:?} failed: {e}", target))?;
+
+    Ok(UninstallReply {
+        target_path: path_to_string(&target)?,
+        removed_region,
+        already_absent: false,
+        file_missing: false,
+        mutated: true,
+        line_count: rewritten.lines().count(),
+    })
+}
+
+/// Resolve the uninstall target using the same guards as install. Split out
+/// so the uninstall path doesn't accidentally mutate its own input struct.
+fn resolve_target_for_uninstall(args: &UninstallArgs) -> Result<PathBuf, String> {
+    let home =
+        home_dir_from_env().ok_or_else(|| "shell-integration: $HOME is not set".to_string())?;
+    let raw = match &args.target_path {
+        Some(p) => PathBuf::from(p),
+        None => home.join(args.shell.dotfile_relative()),
+    };
+    ensure_within_home(&raw, &home)?;
+    Ok(raw)
+}
+
 /// Public install entry point. Shared between the Tauri command and unit tests.
 pub fn install(args: InstallArgs) -> InstallResult {
     let target = resolve_target(&args)?;
@@ -311,7 +506,9 @@ pub fn install(args: InstallArgs) -> InstallResult {
     // Already installed — no-op. Report line count and present=true so the UI
     // can surface "already installed" instead of a mutation toast.
     if present {
-        let line_count = fs::read_to_string(&target).map(|c| c.lines().count()).unwrap_or(0);
+        let line_count = fs::read_to_string(&target)
+            .map(|c| c.lines().count())
+            .unwrap_or(0);
         return Ok(InstallReply {
             target_path: path_to_string(&target)?,
             snippet,
@@ -335,7 +532,12 @@ pub fn install(args: InstallArgs) -> InstallResult {
     let existing = match fs::read_to_string(&target) {
         Ok(c) => c,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(format!("shell-integration: read {:?} failed: {err}", target)),
+        Err(err) => {
+            return Err(format!(
+                "shell-integration: read {:?} failed: {err}",
+                target
+            ))
+        }
     };
 
     let mut combined = existing;
@@ -364,17 +566,39 @@ fn path_to_string(p: &Path) -> Result<String, String> {
 
 /* -------------------- Tauri command -------------------- */
 
+/// Convert a legacy string error produced by `install` / `uninstall` into a
+/// typed `TauriError` so the UI can switch on `.code`. The home-scope refusal
+/// string pins its own dedicated code; everything else collapses to
+/// `shell-integration-missing` with the raw detail stashed in context.
+pub(crate) fn classify_shell_integration_error(err: &str) -> TauriError {
+    if err.contains(ERR_OUTSIDE_HOME) {
+        return TauriError::shell_integration_outside_home();
+    }
+    TauriError::shell_integration_missing(err)
+}
+
 #[tauri::command]
-pub async fn quanta_install_shell_integration(args: InstallArgs) -> InstallResult {
+pub async fn quanta_install_shell_integration(args: InstallArgs) -> Result<InstallReply, TauriError> {
     tracing::info!(
         shell = ?args.shell,
         confirm = args.confirm,
         target = ?args.target_path,
         "install_shell_integration"
     );
-    // The work is purely filesystem-bound and already fast; no need to spawn
-    // on a worker. Tauri invokes commands on a worker thread already.
-    install(args)
+    install(args).map_err(|e| classify_shell_integration_error(&e))
+}
+
+#[tauri::command]
+pub async fn quanta_uninstall_shell_integration(
+    args: UninstallArgs,
+) -> Result<UninstallReply, TauriError> {
+    tracing::info!(
+        shell = ?args.shell,
+        confirm = args.confirm,
+        target = ?args.target_path,
+        "uninstall_shell_integration"
+    );
+    uninstall(args).map_err(|e| classify_shell_integration_error(&e))
 }
 
 /* -------------------- tests -------------------- */
@@ -389,8 +613,7 @@ mod tests {
     /// pool would otherwise flake (one test's HOME leaks into another's
     /// `resolve_target`).
     fn env_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-            std::sync::OnceLock::new();
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 
@@ -543,7 +766,10 @@ mod tests {
         .unwrap();
         assert!(reply.mutated);
         let contents = fs::read_to_string(&target).unwrap();
-        assert!(contents.starts_with(pre), "pre-existing content was clobbered");
+        assert!(
+            contents.starts_with(pre),
+            "pre-existing content was clobbered"
+        );
         assert!(contents.contains(GUARD_START));
         // Block must come after the user content.
         assert!(
@@ -581,7 +807,10 @@ mod tests {
         // create ~/.config/fish/ equivalent.
         let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let home = HomeGuard::new();
-        let root = tmp_home_path(&home, "fish-root").parent().unwrap().to_path_buf();
+        let root = tmp_home_path(&home, "fish-root")
+            .parent()
+            .unwrap()
+            .to_path_buf();
         let nested = root.join("deep/fish/config.fish");
         assert!(!nested.exists());
         let reply = install(InstallArgs {
@@ -814,6 +1043,207 @@ mod tests {
         .expect("fish config under $HOME must be accepted even when missing");
         assert!(reply.mutated);
         assert!(target.exists());
+    }
+
+    /* ---------- uninstall coverage ---------- */
+
+    /// Preview mode must never touch the file, even when a guard block is
+    /// present and ready to remove. Pin `mutated: false` and the file
+    /// contents as unchanged.
+    #[test]
+    fn uninstall_preview_does_not_mutate() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-uninstall-preview");
+        // First install so there is something to remove.
+        install(InstallArgs {
+            shell: Shell::Zsh,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        let before = fs::read_to_string(&target).unwrap();
+
+        let reply = uninstall(UninstallArgs {
+            shell: Shell::Zsh,
+            confirm: false,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(!reply.mutated, "preview must not mutate");
+        assert!(!reply.already_absent);
+        assert!(reply.removed_region.contains(GUARD_START));
+        assert!(reply.removed_region.contains(GUARD_END));
+        let after = fs::read_to_string(&target).unwrap();
+        assert_eq!(before, after, "preview must not alter the file");
+    }
+
+    /// `confirm: true` strips the guard block and leaves the surrounding file
+    /// otherwise identical — regression guard for the byte-range math in
+    /// `find_guard_region`.
+    #[test]
+    fn uninstall_confirm_removes_block_and_preserves_surrounding_content() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".bashrc-uninstall-remove");
+        let pre = "# user's own bashrc\nexport FOO=bar\n";
+        let post = "# trailing user content\nalias ll='ls -la'\n";
+        // Build a file: pre-existing content, then the install block, then
+        // more user content after it. This exercises the surround-preservation
+        // contract on both sides of the block.
+        {
+            let mut f = fs::File::create(&target).unwrap();
+            f.write_all(pre.as_bytes()).unwrap();
+        }
+        install(InstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        {
+            // Append trailing user content below the block.
+            let mut f = fs::OpenOptions::new().append(true).open(&target).unwrap();
+            f.write_all(post.as_bytes()).unwrap();
+        }
+
+        let reply = uninstall(UninstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(reply.mutated);
+        assert!(!reply.already_absent);
+        assert!(reply.removed_region.contains(GUARD_START));
+        assert!(reply.removed_region.contains(GUARD_END));
+
+        let after = fs::read_to_string(&target).unwrap();
+        assert!(
+            !after.contains(GUARD_START),
+            "uninstall left guard marker behind"
+        );
+        assert!(
+            !after.contains(GUARD_END),
+            "uninstall left footer marker behind"
+        );
+        assert!(after.contains(pre), "pre-existing user content clobbered");
+        assert!(
+            after.contains(post),
+            "trailing user content clobbered: {after:?}"
+        );
+    }
+
+    /// Second uninstall call must be a no-op: the block is already absent.
+    /// The reply pins `already_absent: true` and `mutated: false` so the UI
+    /// can show "already removed" rather than a mutation toast.
+    #[test]
+    fn uninstall_idempotent_on_second_run() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-uninstall-idem");
+        install(InstallArgs {
+            shell: Shell::Zsh,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        let first = uninstall(UninstallArgs {
+            shell: Shell::Zsh,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(first.mutated);
+        let after_first = fs::read_to_string(&target).unwrap();
+
+        let second = uninstall(UninstallArgs {
+            shell: Shell::Zsh,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(!second.mutated, "second call must be a no-op");
+        assert!(second.already_absent);
+        assert!(!second.file_missing);
+        assert_eq!(second.removed_region, "");
+
+        let after_second = fs::read_to_string(&target).unwrap();
+        assert_eq!(after_first, after_second);
+    }
+
+    /// A missing dotfile returns `file_missing: true` and must not error.
+    /// The UI treats this as "not installed; nothing to do".
+    #[test]
+    fn uninstall_missing_file_returns_not_installed() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-never-existed");
+        assert!(!target.exists());
+        let reply = uninstall(UninstallArgs {
+            shell: Shell::Zsh,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(reply.file_missing);
+        assert!(reply.already_absent);
+        assert!(!reply.mutated);
+        assert_eq!(reply.line_count, 0);
+    }
+
+    /// A target outside $HOME must be rejected — same defense-in-depth rule
+    /// as install.
+    #[test]
+    fn uninstall_rejects_target_outside_home() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let err = uninstall(UninstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some("/etc/bashrc-quanta-should-refuse".into()),
+        })
+        .expect_err("absolute path outside $HOME must be rejected");
+        assert!(err.contains(ERR_OUTSIDE_HOME));
+    }
+
+    /// Preview on a file with no guard block must return `already_absent`
+    /// without mutating.
+    #[test]
+    fn uninstall_preview_reports_already_absent_when_block_missing() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-no-block");
+        // Put a plain rc file with no Quanta block.
+        {
+            let mut f = fs::File::create(&target).unwrap();
+            f.write_all(b"# plain rc\nexport FOO=bar\n").unwrap();
+        }
+        let reply = uninstall(UninstallArgs {
+            shell: Shell::Zsh,
+            confirm: false,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+        assert!(reply.already_absent);
+        assert!(!reply.mutated);
+        assert!(!reply.file_missing);
+        assert_eq!(reply.removed_region, "");
+    }
+
+    /// FIX 2: the outside-home refusal string must upgrade to the typed
+    /// `shell-integration-outside-home` code, and generic errors must land on
+    /// `shell-integration-missing` with the raw detail confined to `context`.
+    #[test]
+    fn classifier_maps_outside_home_and_fallback() {
+        use crate::error::ErrorCode;
+        let outside = classify_shell_integration_error(ERR_OUTSIDE_HOME);
+        assert_eq!(outside.code, ErrorCode::ShellIntegrationOutsideHome);
+
+        let other = classify_shell_integration_error("shell-integration: read /x failed");
+        assert_eq!(other.code, ErrorCode::ShellIntegrationMissing);
+        // The raw path must not leak into `user_message`.
+        assert!(!other.user_message.contains("/x"));
     }
 
     /// Default target (no explicit target_path) still lands under the

@@ -11,6 +11,7 @@
 export {
   openInEditor,
   openInEditorOrThrow,
+  openInEditorMessageForReason,
   resolveAbsolutePath,
   isAbsolutePath,
   validatePathForNav,

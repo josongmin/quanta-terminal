@@ -10,11 +10,16 @@ export type {
   ShellKind,
   InstallShellIntegrationOptions,
   InstallShellIntegrationReply,
+  UninstallShellIntegrationOptions,
+  UninstallShellIntegrationReply,
   AiSuggestOptions,
   AiSuggestion,
   AiRiskTier,
+  NotifyOptions,
+  HostBridgeError,
+  HostBridgeErrorCode,
 } from './bridge.js';
-export { NULL_EDITOR_BRIDGE } from './bridge.js';
+export { NULL_EDITOR_BRIDGE, AI_SUGGEST_DEFAULT_TIMEOUT_MS } from './bridge.js';
 
 export type { HostCapabilities } from './capabilities.js';
 export { DEFAULT_CAPABILITIES } from './capabilities.js';

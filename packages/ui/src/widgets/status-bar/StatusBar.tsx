@@ -19,6 +19,7 @@ import { Tooltip } from '../../shared/ui/tooltip/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { useSessionStore } from '../../entities/session/index.js';
 import { cx } from '../../shared/lib/cx.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './status-bar.module.css';
 import type { SessionHealth } from '../../entities/session/index.js';
 import type { ShellIntegrationStatus } from '@quanta/host-common';
@@ -34,10 +35,10 @@ interface HealthPresentation {
 }
 
 const HEALTH_PRESENTATION: Readonly<Record<SessionHealth, HealthPresentation>> = {
-  ready:   { dot: 'dotReady',   label: 'ready',   ariaLabel: 'Session is ready',   pulse: true  },
-  booting: { dot: 'dotBooting', label: 'booting', ariaLabel: 'Session is starting', pulse: false },
-  exited:  { dot: 'dotExited',  label: 'exited',  ariaLabel: 'Session has exited', pulse: false },
-  error:   { dot: 'dotError',   label: 'error',   ariaLabel: 'Session errored',    pulse: false },
+  ready:   { dot: 'dotReady',   label: t('statusBar.ready'),   ariaLabel: t('statusBar.healthReady'),   pulse: true  },
+  booting: { dot: 'dotBooting', label: t('statusBar.booting'), ariaLabel: t('statusBar.healthBooting'), pulse: false },
+  exited:  { dot: 'dotExited',  label: t('statusBar.exited'),  ariaLabel: t('statusBar.healthExited'),  pulse: false },
+  error:   { dot: 'dotError',   label: t('statusBar.error'),   ariaLabel: t('statusBar.healthError'),   pulse: false },
 };
 
 interface IntegrationPresentation {
@@ -53,20 +54,20 @@ const INTEGRATION_PRESENTATION: Readonly<
   installed: {
     label: 'SI',
     tone: 'accent',
-    tooltip: 'Quanta knows the current working directory because shell integration is installed.',
-    srDescription: 'shell integration active',
+    tooltip: t('statusBar.siInstalledTooltip'),
+    srDescription: t('statusBar.siInstalledSr'),
   },
   partial: {
     label: 'SI?',
     tone: 'warning',
-    tooltip: 'Shell integration is partial. Some prompts are captured; cwd tracking may estimate.',
-    srDescription: 'shell integration partial',
+    tooltip: t('statusBar.siPartialTooltip'),
+    srDescription: t('statusBar.siPartialSr'),
   },
   missing: {
     label: 'est',
     tone: 'neutral',
-    tooltip: 'cwd is estimated. Install shell integration for authoritative tracking.',
-    srDescription: 'cwd is estimated from prompt text',
+    tooltip: t('statusBar.siMissingTooltip'),
+    srDescription: t('statusBar.siMissingSr'),
   },
 };
 
@@ -81,7 +82,7 @@ export function StatusBar() {
   const integration = INTEGRATION_PRESENTATION[shellIntegration];
 
   return (
-    <div className={styles.bar} role="contentinfo" aria-label="Session status">
+    <div className={styles.bar} role="contentinfo" aria-label={t('statusBar.region')}>
       <div className={styles.group} aria-label={healthView.ariaLabel}>
         <span
           className={cx(
@@ -101,17 +102,17 @@ export function StatusBar() {
             srDescription={integration.srDescription}
           />
         </Tooltip>
-        <span className={styles.cwd} aria-label={`Working directory: ${cwd || 'unknown'}`}>
+        <span className={styles.cwd} aria-label={t('statusBar.cwdLabel', { cwd: cwd || 'unknown' })}>
           {prettyCwd(cwd)}
         </span>
       </div>
       <div className={styles.grow} />
       <div className={styles.group}>
-        <span className={styles.shell} aria-label={`Shell: ${shell || 'none'}`}>
+        <span className={styles.shell} aria-label={t('statusBar.shellLabel', { shell: shell || 'none' })}>
           {shell || '—'}
         </span>
       </div>
-      <div className={styles.group} aria-label="Open command palette shortcut">
+      <div className={styles.group} aria-label={t('statusBar.paletteShortcutLabel')}>
         <span className={styles.kbdHint}>
           <Kbd>⌘</Kbd>
           <Kbd>K</Kbd>
@@ -122,7 +123,7 @@ export function StatusBar() {
 }
 
 function healthLabel(h: SessionHealth, exitCode: number | null): string {
-  if (h === 'exited' && exitCode !== null) return `exited ${exitCode}`;
+  if (h === 'exited' && exitCode !== null) return t('statusBar.exitedWithCode', { code: exitCode });
   return HEALTH_PRESENTATION[h].label;
 }
 

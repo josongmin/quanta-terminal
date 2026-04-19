@@ -15,6 +15,10 @@ quanta-proto = { path = "../quanta-proto" }
 thiserror = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
+# encoding_rs gives us a streaming UTF-8 decoder with suspended-state support,
+# so a 4-byte codepoint split across two PTY chunks decodes correctly instead
+# of turning into U+FFFD. See FIX 3 in the audit.
+encoding_rs = "0.8"
 
 [dev-dependencies]
 serde = { workspace = true }

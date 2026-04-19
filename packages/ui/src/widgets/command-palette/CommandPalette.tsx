@@ -28,6 +28,7 @@ import {
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { activateFocusTrap } from '../../shared/lib/focus-trap.js';
+import { t } from '../../shared/i18n/index.js';
 import {
   filterCommands,
   getDefaultCommands,
@@ -144,7 +145,7 @@ export function CommandPalette(props: CommandPaletteProps) {
         ref={containerRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label={t('commandPalette.dialogLabel')}
         className={styles.panel}
         onKeyDown={handleKeyDown}
       >
@@ -159,8 +160,8 @@ export function CommandPalette(props: CommandPaletteProps) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search commands"
-            aria-label="Search commands"
+            placeholder={t('commandPalette.searchPlaceholder')}
+            aria-label={t('commandPalette.searchLabel')}
             aria-controls="quanta-palette-results"
             aria-activedescendant={
               filtered[activeIndex] ? `quanta-palette-opt-${filtered[activeIndex].id}` : undefined
@@ -175,11 +176,11 @@ export function CommandPalette(props: CommandPaletteProps) {
           id="quanta-palette-results"
           className={styles.results}
           role="listbox"
-          aria-label="Command results"
+          aria-label={t('commandPalette.resultsLabel')}
         >
           {filtered.length === 0 ? (
             <div className={styles.empty} role="status">
-              No sessions yet — press <Kbd>⌘</Kbd> <Kbd>T</Kbd> to start.
+              {t('commandPalette.emptyHint')}
             </div>
           ) : (
             renderSections(filtered, activeIndex, (i) => setActiveIndex(i), runAt)

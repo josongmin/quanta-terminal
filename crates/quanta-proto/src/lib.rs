@@ -15,6 +15,7 @@ pub mod events;
 pub mod ids;
 pub mod protocol;
 pub mod rpc;
+pub mod topics;
 pub mod version;
 
 pub use envelope::{Envelope, Producer, SchemaVersion};
@@ -22,3 +23,4 @@ pub use events::Event;
 pub use ids::{BlockId, DiagnosticId, EventId, SessionId, SpanId, SuggestionId, WorkspaceId};
 pub use protocol::{Hello, Incompatible, ProtocolVersion, Ready};
 pub use rpc::{RpcError, RpcRequest, RpcResponse, RpcResult};
+pub use topics::{is_registered as is_registered_topic, REGISTERED_TOPICS};

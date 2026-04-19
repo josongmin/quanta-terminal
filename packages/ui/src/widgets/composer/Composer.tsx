@@ -34,6 +34,7 @@ import { Separator } from '../../shared/ui/separator/index.js';
 import { submitCommand, type ComposerMode } from '../../features/composer/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { createLogger } from '../../shared/lib/logger.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './composer.module.css';
 
 const log = createLogger('composer');
@@ -111,12 +112,12 @@ export function Composer(props: ComposerProps) {
     // Surface failure. Keep the text so the user can retry. Log every branch
     // at `warn` — these are correctable conditions, not crashes.
     if (result.reason === 'no-session') {
-      setSubmitError('composer.submit: no active session. Start a shell with ⌘T.');
+      setSubmitError(t('composer.error.noSession'));
       log.warn('submit rejected: no active session');
       return;
     }
     if (result.reason === 'no-bridge') {
-      setSubmitError('composer.submit: host bridge unavailable. Reload the app.');
+      setSubmitError(t('composer.error.noBridge'));
       log.warn('submit rejected: no host bridge');
       return;
     }
@@ -125,7 +126,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
     const detail = result.error?.message ?? 'unknown failure';
-    setSubmitError(`composer.submit: bridge.write rejected (${detail})`);
+    setSubmitError(t('composer.error.writeRejected', { detail }));
     log.warn('bridge.write rejected during composer submit', result.error);
   }, [busy, mode, onSubmitted, value]);
 
@@ -173,7 +174,7 @@ export function Composer(props: ComposerProps) {
       data-testid="composer"
     >
       {historyOpen ? (
-        <div className={styles.history} role="listbox" aria-label="Recent commands">
+        <div className={styles.history} role="listbox" aria-label={t('composer.recentCommandsLabel')}>
           <div className={styles.historyEmpty}>
             No recent commands yet. Press <Kbd>Esc</Kbd> to close.
           </div>
@@ -184,7 +185,7 @@ export function Composer(props: ComposerProps) {
           &gt;
         </span>
         <label className={styles.srOnly} htmlFor="quanta-composer-input">
-          Command input
+          {t('composer.inputLabel')}
         </label>
         <textarea
           id="quanta-composer-input"
@@ -196,7 +197,7 @@ export function Composer(props: ComposerProps) {
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          placeholder="Type a command, then Enter"
+          placeholder={t('composer.placeholder')}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onCompositionStart={handleCompositionStart}
@@ -210,7 +211,7 @@ export function Composer(props: ComposerProps) {
           disabled={busy}
         />
         <Separator />
-        <div className={styles.modeChip} aria-label={`Composer mode: ${mode}`}>
+        <div className={styles.modeChip} aria-label={t('composer.modeLabel', { mode })}>
           {mode}
         </div>
       </div>

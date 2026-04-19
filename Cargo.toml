@@ -10,13 +10,23 @@ members = [
     "crates/quanta-lifecycle",
     "crates/quanta-session",
     "crates/quanta-security",
+    "crates/quanta-crash-reporter",
+    "crates/quanta-metrics",
     "crates/quanta-diagnostic",
     "crates/quanta-ai",
     "crates/quanta-core",
+    "crates/quanta-replay-cli",
+    "crates/quanta-vt-width",
     "tools/check-hex-imports",
     "tools/check-adr-compliance",
+    "tools/check-event-topic-names",
+    "tools/check-ui-no-ansi",
+    "tools/check-paint-no-width-override",
+    "tools/check-key-event-encoder-layer",
     "tools/fixtures-runner",
+    "tools/update-manifest-gen",
     "tests/integration",
+    "tests/perf",
 ]
 
 [workspace.package]
@@ -92,6 +102,9 @@ zstd = "0.13"
 camino = { version = "1.1", features = ["serde1"] }
 globset = "0.4"
 regex = "1"
+unicode-segmentation = "1.11"
+unicode-width = "0.2"
+smallstr = { version = "0.3", features = ["serde"] }
 bytes = "1"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"

@@ -34,12 +34,25 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "resources": [
       "../resources/shell-integration/bash.sh",
       "../resources/shell-integration/zsh.zsh",
       "../resources/shell-integration/fish.fish"
     ],
     "externalBin": ["binaries/quanta-core"]
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": ["https://updates.quanta-terminal.dev/{{target}}/{{arch}}/{{current_version}}"],
+      "pubkey": ""
+    }
   }
 }

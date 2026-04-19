@@ -1,0 +1,46 @@
+[package]
+name = "quanta-vt-width"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — width, grapheme, and line-break SSOT (ADR 0015)."
+
+[lints]
+workspace = true
+
+# Unicode version pin: bumps MUST trigger a parity-test re-run.
+# We track it in a text file committed next to the crate, not in metadata,
+# so `git diff` is obvious. See `docs/adr/0015-*.md` §Parity enforcement.
+[package.metadata.quanta-vt-width]
+unicode-version = "15.1.0"
+unicode-segmentation-version = "1.11"
+unicode-width-version = "0.2"
+
+[dependencies]
+# Grapheme segmentation — the Rust canonical segmenter. TS mirror uses the
+# browser's `Intl.Segmenter` and is asserted byte-for-byte parity in the
+# vitest suite under `packages/ui/src/shared/lib/width/__tests__/`.
+unicode-segmentation = { workspace = true }
+# Code-point width classifier; we override per the curated table in
+# `src/overrides.rs` before returning a final width.
+unicode-width = { workspace = true }
+# Inline-small grapheme storage: up to 8 bytes inline, heap on overflow.
+# Every cell in the grid will hold one of these; keeping the common case
+# inline (ASCII, Latin-1, most CJK) is a significant footprint win.
+smallstr = { workspace = true }
+# Public types are serde-serializable so protocol and snapshot tooling can
+# round-trip them without a custom encoder.
+serde = { workspace = true }
+# No `panic!` / `unwrap` in library code — all fallible paths bubble up an
+# error; `thiserror` provides the derive.
+thiserror = { workspace = true }
+# Observability — we log override hits at `debug!` so CI can diff the set
+# of hits between engine and mirror if parity fails.
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rstest = { workspace = true }
+serde_json = { workspace = true }

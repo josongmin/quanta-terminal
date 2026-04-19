@@ -385,6 +385,25 @@ impl ZstdSegmentedEventLog {
             let outcome = Self::read_segment(&p)?;
             out.extend(outcome.records);
         }
+        // Per ADR 0011 §Monotonic Seq — "gaps are never allowed". After
+        // replay completes, verify every consecutive pair of records differs
+        // by exactly 1 in `monotonic_seq`. A gap here surfaces as corruption
+        // so callers do not silently ingest a truncated history.
+        //
+        // Duplicates (same seq twice) also trip the check by way of the
+        // strict `expected` arithmetic below — duplicates are just as much
+        // a writer-side bug as gaps.
+        for pair in out.windows(2) {
+            let prev = pair[0].envelope.monotonic_seq;
+            let next = pair[1].envelope.monotonic_seq;
+            let expected = prev.saturating_add(1);
+            if next != expected {
+                return Err(EventLogError::SeqGap {
+                    expected,
+                    actual: next,
+                });
+            }
+        }
         Ok(out)
     }
 }
@@ -515,6 +534,102 @@ mod tests {
         let log = ZstdSegmentedEventLog::new(tmp.path()).unwrap();
         let records = log.replay_session(SessionId::new()).await.unwrap();
         assert!(records.is_empty());
+    }
+
+    /// Clean append path: seqs 1..=5 replay without tripping the continuity
+    /// guard. Acts as a baseline for the corruption-side tests below.
+    #[tokio::test]
+    async fn clean_log_replays_without_seq_gap_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = ZstdSegmentedEventLog::new(tmp.path()).unwrap();
+        let session = SessionId::new();
+        for seq in 1..=5 {
+            log.append(make_env(session, seq)).await.unwrap();
+        }
+        let records = log.replay_session(session).await.unwrap();
+        assert_eq!(records.len(), 5);
+        let seqs: Vec<u64> = records.iter().map(|r| r.envelope.monotonic_seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+    }
+
+    /// Doctored log: a single segment whose records are 1,2,4,5 (seq 3
+    /// missing) must surface as `EventLogError::SeqGap`. Per ADR 0011 a gap
+    /// is corruption; silently returning a truncated history would mislead
+    /// callers.
+    #[tokio::test]
+    async fn replay_returns_seq_gap_when_log_has_holes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = ZstdSegmentedEventLog::new(tmp.path()).unwrap();
+        let session = SessionId::new();
+        for seq in [1u64, 2, 4, 5] {
+            log.append(make_env(session, seq)).await.unwrap();
+        }
+        let err = log
+            .replay_session(session)
+            .await
+            .expect_err("seq gap must surface as error");
+        match err {
+            EventLogError::SeqGap { expected, actual } => {
+                assert_eq!(expected, 3, "gap after seq=2 should expect seq=3");
+                assert_eq!(actual, 4, "gap after seq=2 actually got seq=4");
+            }
+            other => panic!("expected SeqGap, got {other:?}"),
+        }
+    }
+
+    /// Segment-boundary gap: write seqs 1,2 to the first segment, then force
+    /// a rotation and write seq 4 to the next segment. The post-replay
+    /// continuity check spans segments, so this must also surface as
+    /// `SeqGap`.
+    #[tokio::test]
+    async fn replay_returns_seq_gap_across_segment_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = ZstdSegmentedEventLog::new(tmp.path()).unwrap();
+        let session = SessionId::new();
+        // First segment: seqs 1 and 2.
+        log.append(make_env(session, 1)).await.unwrap();
+        log.append(make_env(session, 2)).await.unwrap();
+        // Simulate a rotation by writing seq 4 directly into a fresh
+        // higher-numbered segment file. We manually construct the framed
+        // record via the public append API after sealing the active
+        // segment: drop this log handle and reopen on a sibling directory
+        // with pre-existing segments to exercise the cross-segment path.
+        //
+        // Simpler approach: pad the active segment past the rotate
+        // threshold is expensive in a test; instead, we craft a second log
+        // handle rooted at the same directory and append seq 4. The
+        // rotation logic only triggers on size, so we directly write into
+        // segment 1's filename by creating it manually.
+        let dir = log.session_dir(session);
+        let seg_next = dir.join("00001.zlog");
+        // Produce a valid framed record for seq 4 by running the append
+        // path against a temporary log rooted at a side directory, then
+        // copying its bytes into the new segment.
+        let side = tempfile::tempdir().unwrap();
+        let side_log = ZstdSegmentedEventLog::new(side.path()).unwrap();
+        let side_session = session; // same session id, isolate via root dir
+        side_log.append(make_env(side_session, 4)).await.unwrap();
+        let side_dir = side_log.session_dir(side_session);
+        let side_seg = std::fs::read_dir(&side_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let bytes = std::fs::read(&side_seg).unwrap();
+        std::fs::write(&seg_next, bytes).unwrap();
+
+        let err = log
+            .replay_session(session)
+            .await
+            .expect_err("cross-segment seq gap must surface as error");
+        match err {
+            EventLogError::SeqGap { expected, actual } => {
+                assert_eq!(expected, 3);
+                assert_eq!(actual, 4);
+            }
+            other => panic!("expected SeqGap, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -214,9 +214,8 @@ impl UnixSocketClient {
             payload: method,
         });
         write_control(&self.writer, &msg).await?;
-        rx.await.map_err(|_| {
-            ProtocolError::Io("client reader closed before response arrived".into())
-        })
+        rx.await
+            .map_err(|_| ProtocolError::Io("client reader closed before response arrived".into()))
     }
 
     /// Take ownership of the event receiver. Can only be called once per
@@ -701,11 +700,7 @@ mod tests {
         assert!(err.is_err(), "expected rx-closed error");
 
         // The fix guarantees cleanup on ALL exit paths.
-        let remaining = client
-            .pending
-            .lock()
-            .expect("pending mutex")
-            .len();
+        let remaining = client.pending.lock().expect("pending mutex").len();
         assert_eq!(
             remaining, 0,
             "pending map must be empty after reader-abort; leak would let a stale response silently swallow a later RPC"

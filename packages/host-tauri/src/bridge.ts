@@ -20,12 +20,18 @@ import type {
   HostEventListener,
   InstallShellIntegrationOptions,
   InstallShellIntegrationReply,
+  NotifyOptions,
   OpenInEditorOptions,
   SessionId,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
+  UninstallShellIntegrationOptions,
+  UninstallShellIntegrationReply,
 } from '@quanta/host-common';
+
+import { invokeStructured } from './structured-error.js';
+export { HostBridgeErrorThrown } from './structured-error.js';
 
 /* ----- Tauri command payload shapes — authored here; will be generated from
    the Rust side when the real core lands. ----- */
@@ -78,12 +84,32 @@ interface QuantaInstallShellIntegrationReply {
   line_count: number;
 }
 
+/* Uninstall command — mirrors `shell_integration::UninstallArgs`. */
+interface QuantaUninstallShellIntegrationArgs {
+  shell: 'bash' | 'zsh' | 'fish';
+  confirm: boolean;
+  target_path: string | null;
+}
+
+interface QuantaUninstallShellIntegrationReply {
+  target_path: string;
+  removed_region: string;
+  already_absent: boolean;
+  file_missing: boolean;
+  mutated: boolean;
+  line_count: number;
+}
+
 /* AI suggestion command — mirrors `quanta_ai::SuggestionResponse` +
    `ClassifiedCommand` flattened for transport. Snake_case follows the Rust
    serde convention; the bridge remaps to the camelCase TS shape. */
 interface QuantaAiSuggestArgs {
   prompt: string;
   cwd: string | null;
+  /** FIX 2: caller-supplied hard deadline in milliseconds. `null` lets Rust
+   *  apply `AI_SUGGEST_DEFAULT_TIMEOUT_MS` (8 s). A non-positive value is
+   *  normalised to `null` here so the Rust default always wins. */
+  timeout_ms: number | null;
 }
 
 interface QuantaAiSuggestReply {
@@ -168,7 +194,7 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         rows: options.rows,
         env: options.env ? { ...options.env } : null,
       };
-      const reply = await invoke<QuantaSpawnReply>('quanta_spawn_session', { args });
+      const reply = await invokeStructured<QuantaSpawnReply>('quanta_spawn_session', { args });
       return {
         sessionId: reply.session_id as SessionId,
         shell: reply.shell,
@@ -177,48 +203,50 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
     },
 
     async write(sessionId: SessionId, data: string): Promise<void> {
-      await invoke('quanta_write', { sessionId, data });
+      await invokeStructured('quanta_write', { sessionId, data });
     },
 
     async resize(sessionId: SessionId, cols: number, rows: number): Promise<void> {
-      await invoke('quanta_resize', { sessionId, cols, rows });
+      await invokeStructured('quanta_resize', { sessionId, cols, rows });
     },
 
     async close(sessionId: SessionId): Promise<void> {
-      await invoke('quanta_close', { sessionId });
+      await invokeStructured('quanta_close', { sessionId });
     },
 
     async cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void> {
-      // Fire-and-await the Rust-side cancel. The sidecar-backed command
-      // already swallows idempotent errors (unknown session, already-
-      // terminal block) and resolves `Ok(())`, so this promise can only
-      // reject for genuine transport failures — which we re-throw as an
-      // Error so the UI can toast the Rust-side string verbatim.
+      // The Rust-side command already swallows idempotent errors (unknown
+      // session, already-terminal block) and resolves `Ok(())`; any rejection
+      // here is a genuine transport/IPC failure surfaced as a typed
+      // `HostBridgeErrorThrown` the UI can branch on.
+      await invokeStructured('quanta_cancel_block', { sessionId, blockId });
+    },
+
+    async notify(options: NotifyOptions): Promise<void> {
+      // Tauri host delegates to the notification plugin on the Rust side.
+      // NOTE to Track β: the `tauri-plugin-notification` crate requires
+      // `notification:default` in `src-tauri/capabilities/*.json`; if that
+      // permission is missing the invoke rejects and we swallow to keep
+      // notifications best-effort (the Web API fallback in
+      // features/notifications may still succeed).
       try {
-        await invoke('quanta_cancel_block', { sessionId, blockId });
-      } catch (err) {
-        const msg =
-          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-        throw new Error(msg);
+        await invokeStructured('quanta_notify', {
+          title: options.title,
+          body: options.body,
+        });
+      } catch {
+        // Swallow — the UI wrapper falls through to the Web Notification API
+        // when the bridge call rejects.
       }
     },
 
     async openInEditor(options: OpenInEditorOptions): Promise<void> {
-      // The command returns `Result<(), String>` on the Rust side; Tauri maps
-      // `Err(String)` to a rejected invoke promise. Surface the Rust string
-      // as the Error message so the UI can toast it verbatim.
       const args: QuantaOpenInEditorArgs = {
         path: options.path,
         line: options.line ?? null,
         column: options.column ?? null,
       };
-      try {
-        await invoke('quanta_open_in_editor', { args });
-      } catch (err) {
-        const msg =
-          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-        throw new Error(msg);
-      }
+      await invokeStructured('quanta_open_in_editor', { args });
     },
 
     async installShellIntegration(
@@ -229,46 +257,64 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         confirm: options.confirm ?? false,
         target_path: null,
       };
-      try {
-        const reply = await invoke<QuantaInstallShellIntegrationReply>(
-          'quanta_install_shell_integration',
-          { args },
-        );
-        return {
-          targetPath: reply.target_path,
-          snippet: reply.snippet,
-          alreadyInstalled: reply.already_installed,
-          mutated: reply.mutated,
-          lineCount: reply.line_count,
-        };
-      } catch (err) {
-        const msg =
-          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-        throw new Error(msg);
-      }
+      const reply = await invokeStructured<QuantaInstallShellIntegrationReply>(
+        'quanta_install_shell_integration',
+        { args },
+      );
+      return {
+        targetPath: reply.target_path,
+        snippet: reply.snippet,
+        alreadyInstalled: reply.already_installed,
+        mutated: reply.mutated,
+        lineCount: reply.line_count,
+      };
+    },
+
+    async uninstallShellIntegration(
+      options: UninstallShellIntegrationOptions,
+    ): Promise<UninstallShellIntegrationReply> {
+      const args: QuantaUninstallShellIntegrationArgs = {
+        shell: options.shell,
+        confirm: options.confirm ?? false,
+        target_path: null,
+      };
+      const reply = await invokeStructured<QuantaUninstallShellIntegrationReply>(
+        'quanta_uninstall_shell_integration',
+        { args },
+      );
+      return {
+        targetPath: reply.target_path,
+        removedRegion: reply.removed_region,
+        alreadyAbsent: reply.already_absent,
+        fileMissing: reply.file_missing,
+        mutated: reply.mutated,
+        lineCount: reply.line_count,
+      };
     },
 
     async aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {
+      // FIX 2: forward the caller's timeout. A non-positive value is treated
+      // as "use the default" — we pass null so Rust applies
+      // `AI_SUGGEST_DEFAULT_TIMEOUT_MS`. Positive values flow through verbatim.
+      const normalizedTimeout =
+        typeof options.timeoutMs === 'number' && options.timeoutMs > 0
+          ? options.timeoutMs
+          : null;
       const args: QuantaAiSuggestArgs = {
         prompt: options.prompt,
         cwd: options.cwd ?? null,
+        timeout_ms: normalizedTimeout,
       };
-      try {
-        const reply = await invoke<QuantaAiSuggestReply>('quanta_ai_suggest', { args });
-        const result: AiSuggestion = {
-          id: reply.id,
-          command: reply.command,
-          tier: reply.tier,
-          modifiers: reply.modifiers,
-          rulesetVersion: reply.ruleset_version,
-          ...(reply.rationale !== null ? { rationale: reply.rationale } : {}),
-        };
-        return result;
-      } catch (err) {
-        const msg =
-          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-        throw new Error(msg);
-      }
+      const reply = await invokeStructured<QuantaAiSuggestReply>('quanta_ai_suggest', { args });
+      const result: AiSuggestion = {
+        id: reply.id,
+        command: reply.command,
+        tier: reply.tier,
+        modifiers: reply.modifiers,
+        rulesetVersion: reply.ruleset_version,
+        ...(reply.rationale !== null ? { rationale: reply.rationale } : {}),
+      };
+      return result;
     },
 
     subscribe(listener: HostEventListener): Subscription {

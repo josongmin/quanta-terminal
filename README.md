@@ -58,3 +58,9 @@ pnpm package-sidecar && pnpm --filter @quanta/host-tauri tauri build
 ```
 
 Details and the runtime resolver priority (env var → bundled resource → PATH) live in [`TESTING.md`](./TESTING.md#building-a-production-tauri-bundle-with-the-quanta-core-sidecar).
+
+## Releasing
+
+Tagging `vX.Y.Z` triggers [`.github/workflows/release.yml`](./.github/workflows/release.yml), which builds the multi-platform bundle, signs/notarizes per-platform, and publishes a GitHub release plus a signed update manifest (consumed by the Tauri updater plugin wired in `packages/host-tauri/src-tauri/tauri.conf.json`). A nightly build ([`.github/workflows/nightly.yml`](./.github/workflows/nightly.yml)) runs the same matrix unsigned against `main` so platform regressions surface before a tag.
+
+The full secrets checklist, local dry-run procedure, and troubleshooting live in [`docs/RELEASE.md`](./docs/RELEASE.md). Bundle icons are rasterized from [`assets/icon.svg`](./assets/icon.svg) by [`scripts/generate-icons.sh`](./scripts/generate-icons.sh) (`just generate-icons` / `pnpm generate-icons`); the current mark is a placeholder.

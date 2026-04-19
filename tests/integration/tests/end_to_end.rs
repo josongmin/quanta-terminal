@@ -401,5 +401,6 @@ fn event_kind_name(e: &Event) -> &'static str {
         Event::SuggestionGenerated(_) => "SuggestionGenerated",
         Event::SuggestionReviewed(_) => "SuggestionReviewed",
         Event::HistoryIndexed(_) => "HistoryIndexed",
+        Event::Unknown { .. } => "Unknown",
     }
 }

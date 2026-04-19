@@ -16,11 +16,14 @@ import type {
   HostEventListener,
   InstallShellIntegrationOptions,
   InstallShellIntegrationReply,
+  NotifyOptions,
   OpenInEditorOptions,
   SessionId,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
+  UninstallShellIntegrationOptions,
+  UninstallShellIntegrationReply,
 } from '@quanta/host-common';
 import { MOCK_PROMPT_STRING } from '@quanta/host-common';
 
@@ -150,6 +153,16 @@ export function createMockHostBridge(): HostBridge {
       return Promise.resolve();
     },
 
+    notify(options: NotifyOptions): Promise<void> {
+      // Browser-dev mode: the Web Notification API is available via the
+      // wrapper in `features/notifications` — this bridge path is a fallback
+      // for adapters that want to fan out to a native plugin. Log for
+      // developer observability and resolve silently.
+      // eslint-disable-next-line no-console
+      console.debug('[mock] notify', options.title, options.body);
+      return Promise.resolve();
+    },
+
     openInEditor(options: OpenInEditorOptions): Promise<void> {
       // The mock bridge cannot actually open editors (no Tauri IPC, no shell
       // access). It logs the attempt so browser-dev sessions see that the
@@ -180,43 +193,91 @@ export function createMockHostBridge(): HostBridge {
       });
     },
 
+    uninstallShellIntegration(
+      options: UninstallShellIntegrationOptions,
+    ): Promise<UninstallShellIntegrationReply> {
+      // Mock host has no dotfiles; return a "nothing to uninstall" reply.
+      // `mutated` is never true — the mock doesn't touch disk. We return
+      // `fileMissing: true` so the UI's "uninstalled" toast reports the
+      // absence rather than a successful removal.
+      return Promise.resolve({
+        targetPath: `/mock/${options.shell}rc`,
+        removedRegion: '',
+        alreadyAbsent: true,
+        fileMissing: true,
+        mutated: false,
+        lineCount: 0,
+      });
+    },
+
     aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {
       // Browser-dev mode: canned reply. Matches the shape of the real
       // Rust-side `quanta_ai::SuggestionResponse`. Deterministic based on
       // prompt so end-to-end smoke tests are reproducible.
+      //
+      // FIX 2: when the caller supplies a positive `timeoutMs` we honour it
+      // by racing the canned resolution against a `setTimeout` that rejects
+      // with an Error whose message carries "timeout" — matching what the
+      // Tauri host surfaces after `classify_ai_error` maps
+      // `SuggestionProviderError::Timeout`. When `timeoutMs` is absent or
+      // non-positive the canned path resolves synchronously as before, so
+      // existing callers see no behavioural drift.
       const trimmed = options.prompt.trim();
       if (!trimmed) {
         return Promise.reject(new Error('aiSuggest: empty prompt'));
       }
       const lower = trimmed.toLowerCase();
-      if (lower.includes('delete') && lower.includes('everything')) {
-        return Promise.resolve({
-          id: 'mock-rm-rf-root',
-          command: 'rm -rf /',
-          tier: 'blocked',
-          modifiers: ['destructive_verb', 'recursion'],
-          rulesetVersion: 1,
-          rationale: 'Mocked: the classifier blocks this command.',
-        });
-      }
-      if (lower.includes('status')) {
-        return Promise.resolve({
-          id: 'mock-git-status',
-          command: 'git status',
+      const produce = (): AiSuggestion => {
+        if (lower.includes('delete') && lower.includes('everything')) {
+          return {
+            id: 'mock-rm-rf-root',
+            command: 'rm -rf /',
+            tier: 'blocked',
+            modifiers: ['destructive_verb', 'recursion'],
+            rulesetVersion: 1,
+            rationale: 'Mocked: the classifier blocks this command.',
+          };
+        }
+        if (lower.includes('status')) {
+          return {
+            id: 'mock-git-status',
+            command: 'git status',
+            tier: 'safe',
+            modifiers: ['allowlist_match'],
+            rulesetVersion: 1,
+            rationale: 'Mocked: show repository status.',
+          };
+        }
+        return {
+          id: 'mock-ls',
+          command: 'ls -la',
           tier: 'safe',
           modifiers: ['allowlist_match'],
           rulesetVersion: 1,
-          rationale: 'Mocked: show repository status.',
-        });
+          rationale: 'Mocked: list files (default fallback).',
+        };
+      };
+      const timeoutMs =
+        typeof options.timeoutMs === 'number' && options.timeoutMs > 0
+          ? options.timeoutMs
+          : undefined;
+      if (timeoutMs === undefined) {
+        return Promise.resolve(produce());
       }
-      return Promise.resolve({
-        id: 'mock-ls',
-        command: 'ls -la',
-        tier: 'safe',
-        modifiers: ['allowlist_match'],
-        rulesetVersion: 1,
-        rationale: 'Mocked: list files (default fallback).',
-      });
+      // Both branches of the race are eager: the resolve resolves on the
+      // next microtask, the reject after `timeoutMs`. With a positive
+      // `timeoutMs` the mock effectively always resolves first, but the
+      // structural contract is preserved so callers with a zero-ish
+      // timeout observe a rejection rather than a hang.
+      return Promise.race<AiSuggestion>([
+        Promise.resolve(produce()),
+        new Promise<AiSuggestion>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('aiSuggest: timeout')),
+            Math.max(0, timeoutMs),
+          ),
+        ),
+      ]);
     },
 
     subscribe(listener: HostEventListener): Subscription {

@@ -79,6 +79,35 @@ impl std::error::Error for SuggestionProviderError {}
 /// Every provider MUST classify the command before returning — that invariant
 /// is what lets the UI treat "a suggestion exists" as "the suggestion is
 /// already risk-tagged".
+///
+/// # Timing contract
+///
+/// `suggest()` MUST complete in bounded wall time — a hung provider is a
+/// UX and resource-leak concern. In practice:
+///
+/// - Every implementation SHOULD return a result (success or error) within
+///   **2 s median** for interactive UIs. A provider that routinely exceeds
+///   this budget is a bug; the UI's "Ask AI" affordance surfaces a
+///   loading state but has no backoff strategy for multi-second latencies.
+/// - Callers needing a hard deadline MUST use
+///   [`SuggestionProvider::suggest_with_timeout`]. If the supplied
+///   duration elapses before the provider returns, the adapter MUST
+///   surface [`SuggestionProviderError::Timeout`] — not a network error,
+///   not a generic unavailability. The `Timeout` variant is what the UI
+///   branches on for "try again" copy.
+/// - Implementations are free to cap the effective deadline at their own
+///   hard ceiling (e.g. the Anthropic adapter enforces a 10 s absolute
+///   cap per request). A caller-supplied timeout shorter than that
+///   ceiling wins; a longer one is clamped down silently. The net effect
+///   is: `actual_deadline = min(caller_supplied, provider_ceiling)`.
+///
+/// The default `suggest_with_timeout` wraps `suggest` with
+/// `tokio::time::timeout`, which is sufficient for adapters whose
+/// `suggest` does not itself expose a timeout knob (the MockProvider in
+/// particular). Adapters that natively accept a per-request timeout —
+/// e.g. `reqwest::Client::timeout` on [`crate::AnthropicProvider`] —
+/// SHOULD override for efficiency so the underlying transport can cancel
+/// in-flight work instead of racing a spawned task.
 #[async_trait]
 pub trait SuggestionProvider: Send + Sync + std::fmt::Debug {
     /// Produce a single suggestion for `request`. Providers that want to
@@ -88,4 +117,25 @@ pub trait SuggestionProvider: Send + Sync + std::fmt::Debug {
         &self,
         request: SuggestionRequest,
     ) -> Result<SuggestionResponse, SuggestionProviderError>;
+
+    /// Produce a suggestion with a caller-supplied hard timeout. Must
+    /// return [`SuggestionProviderError::Timeout`] if the deadline is
+    /// exceeded before the provider can complete.
+    ///
+    /// The default implementation wraps [`suggest`] in
+    /// `tokio::time::timeout` so every provider gets the timing contract
+    /// for free. Network-backed adapters SHOULD override if they can pass
+    /// the timeout into their transport for earlier cancellation.
+    async fn suggest_with_timeout(
+        &self,
+        request: SuggestionRequest,
+        timeout: std::time::Duration,
+    ) -> Result<SuggestionResponse, SuggestionProviderError> {
+        match tokio::time::timeout(timeout, self.suggest(request)).await {
+            Ok(res) => res,
+            Err(_elapsed) => Err(SuggestionProviderError::Timeout(format!(
+                "provider exceeded {timeout:?} caller-supplied deadline"
+            ))),
+        }
+    }
 }

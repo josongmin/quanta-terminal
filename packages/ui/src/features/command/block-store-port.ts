@@ -62,15 +62,22 @@ export interface BlockStoreActions {
    * watchdog timer (default 30s of silence → errored).
    */
   startBlock(command: string, cwd: string, options?: StartBlockPortOptions): BlockId;
-  /** Override the active block pointer. The router calls this with `null`
-   *  on boundary detection; tests use it to seed state. */
-  setActiveBlockId(id: BlockId | null): void;
+  /**
+   * Override the active block pointer. The router calls this with `null`
+   * on boundary detection; tests use it to seed state.
+   *
+   * Audit P1 (fix 4): when `options.requireSessionMatch` is passed, the write
+   * only applies if the targeted block is owned by that session. Callers use
+   * this to close the router↔composer race where two callers on different
+   * sessions can stomp each other's pointer.
+   */
+  setActiveBlockId(id: BlockId | null, options?: { requireSessionMatch?: SessionId }): void;
   /** Read the store's current active block pointer. */
   getActiveBlockId(): BlockId | null;
-  appendBlockOutput(blockId: BlockId, chunk: Uint8Array): void;
-  completeBlock(blockId: BlockId, exitCode: number | null): void;
-  cancelBlock(blockId: BlockId): void;
-  errorBlock(blockId: BlockId, message: string): void;
+  appendBlockOutput(blockId: BlockId, chunk: Uint8Array, eventId?: string): void;
+  completeBlock(blockId: BlockId, exitCode: number | null, eventId?: string): void;
+  cancelBlock(blockId: BlockId, eventId?: string): void;
+  errorBlock(blockId: BlockId, message: string, eventId?: string): void;
   getRunningBlockIds(): readonly BlockId[];
 }
 

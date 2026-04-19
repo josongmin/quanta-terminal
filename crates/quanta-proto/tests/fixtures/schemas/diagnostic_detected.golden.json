@@ -1,0 +1,26 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 1,
+  "session_id": "01J00000000000000000000001",
+  "block_id": "01J00000000000000000000002",
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "diagnostic",
+  "schema_version": 1,
+  "causation_id": null,
+  "payload": {
+    "kind": "diagnostic_detected",
+    "diagnostic_id": "01J0000000000000000000000D",
+    "block_id": "01J00000000000000000000002",
+    "parser_id": "rustc",
+    "category": "compiler",
+    "severity": "error",
+    "confidence": 0.95,
+    "message": "mismatched types",
+    "path": "src/main.rs",
+    "line": 12,
+    "column": 4,
+    "end_line": 12,
+    "end_column": 20,
+    "symbol": "T"
+  }
+}

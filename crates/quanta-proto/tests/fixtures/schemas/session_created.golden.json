@@ -1,0 +1,17 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 1,
+  "session_id": "01J00000000000000000000001",
+  "block_id": "01J00000000000000000000002",
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "session",
+  "schema_version": 1,
+  "causation_id": null,
+  "payload": {
+    "kind": "session_created",
+    "session_id": "01J00000000000000000000001",
+    "workspace_id": "01J00000000000000000000003",
+    "shell": "/bin/zsh",
+    "launch_cwd": "/workspace"
+  }
+}

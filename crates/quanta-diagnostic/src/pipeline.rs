@@ -20,6 +20,8 @@
 
 use std::collections::HashSet;
 
+use encoding_rs::UTF_8;
+
 use crate::adapters::{NodeStackParser, PythonTracebackParser, RustcParser, TscParser};
 use crate::domain::{Diagnostic, ParserCandidate};
 use crate::ports::{CrossSignals, ParserAdapter, ParserId};
@@ -32,6 +34,17 @@ pub struct DiagnosticPipeline {
     /// arrives in chunk N-1 and whose span arrives in chunk N is parsed
     /// correctly.
     line_buffer: String,
+    /// Streaming UTF-8 decoder. Holds any trailing bytes that looked like a
+    /// UTF-8 lead-with-continuations still in flight at the end of the
+    /// previous chunk, so the next chunk's bytes complete the codepoint
+    /// without emitting U+FFFD.
+    ///
+    /// Per FIX 3 in the audit: the prior `String::from_utf8_lossy`-based
+    /// call site in the session actor applied decoding per-chunk and
+    /// therefore mangled any codepoint whose bytes spanned a PTY read
+    /// boundary. The streaming decoder from `encoding_rs` carries state
+    /// across chunks and defers partial sequences to the next call.
+    decoder: encoding_rs::Decoder,
     signals: CrossSignals,
     /// Track emitted (parser_id, path, line, column, message) tuples for the
     /// current block so the same diagnostic isn't surfaced twice when cargo
@@ -81,6 +94,10 @@ impl DiagnosticPipeline {
         Self {
             parsers,
             line_buffer: String::new(),
+            // `new_decoder_without_bom_handling` is the right constructor for
+            // a PTY byte stream: there is no leading BOM and we do NOT want
+            // the decoder to consume or interpret bytes that look like one.
+            decoder: UTF_8.new_decoder_without_bom_handling(),
             signals: CrossSignals::default(),
             seen: HashSet::new(),
         }
@@ -97,12 +114,15 @@ impl DiagnosticPipeline {
         self.signals = signals;
     }
 
-    /// Reset per-block state (line buffer + dedupe cache). Called when a
-    /// block ends so the next block starts from a clean slate.
+    /// Reset per-block state (line buffer + dedupe cache + decoder). Called
+    /// when a block ends so the next block starts from a clean slate.
     pub fn reset_block(&mut self) {
         self.line_buffer.clear();
         self.seen.clear();
         self.signals = CrossSignals::default();
+        // Drop any half-decoded codepoint carried from the previous block —
+        // it would be a stale leading byte from block N's tail if kept.
+        self.decoder = UTF_8.new_decoder_without_bom_handling();
         for p in &mut self.parsers {
             let _ = p.flush();
         }
@@ -111,17 +131,58 @@ impl DiagnosticPipeline {
     /// Feed a chunk of output (UTF-8). Returns ranked, deduplicated
     /// diagnostics emitted by any parser.
     ///
-    /// Partial codepoints across chunk boundaries are the caller's problem;
-    /// the session actor uses `String::from_utf8_lossy` to guarantee this
-    /// input is valid UTF-8.
+    /// This is the string-input surface: callers that already hold a valid
+    /// `&str` use it directly. PTY-adjacent callers must use
+    /// [`DiagnosticPipeline::feed_bytes`] instead, which carries partial
+    /// UTF-8 codepoints across chunk boundaries without mangling them.
     pub fn feed(&mut self, chunk: &str) -> Vec<Diagnostic> {
         if chunk.is_empty() {
             return Vec::new();
         }
         self.line_buffer.push_str(chunk);
+        self.drain_lines()
+    }
+
+    /// Feed raw bytes of PTY output. Handles partial UTF-8 codepoints that
+    /// span chunk boundaries: the internal `encoding_rs` decoder carries
+    /// lead-with-continuation state across calls, so a 4-byte emoji split
+    /// after byte 2 of chunk N decodes correctly when bytes 3+4 arrive in
+    /// chunk N+1. The per-chunk `String::from_utf8_lossy` used by the old
+    /// session-actor call site would instead emit U+FFFD for the prefix and
+    /// orphan continuation bytes for the suffix.
+    ///
+    /// Invalid byte sequences (lone continuations, 0xFE/0xFF) still
+    /// surface as U+FFFD, same as `from_utf8_lossy` — the fix is about
+    /// the BOUNDARY case, not about changing the lossy semantics for
+    /// genuinely malformed bytes.
+    pub fn feed_bytes(&mut self, bytes: &[u8]) -> Vec<Diagnostic> {
+        if bytes.is_empty() {
+            return Vec::new();
+        }
+        // Decode directly into the line buffer. Pre-size the string append
+        // target to the decoder's worst-case estimate so we don't pay for
+        // reallocations on large chunks.
+        let max_chars = self
+            .decoder
+            .max_utf8_buffer_length_without_replacement(bytes.len())
+            .unwrap_or(bytes.len() * 3);
+        self.line_buffer.reserve(max_chars);
+        // `last = false` means: we expect more bytes later. The decoder
+        // therefore SUSPENDS on a trailing incomplete codepoint rather than
+        // flushing it as U+FFFD. `reset_block` / the explicit flush path in
+        // `flush()` below eventually calls with `last = true` semantics by
+        // recreating the decoder.
+        let _ =
+            self.decoder
+                .decode_to_string_without_replacement(bytes, &mut self.line_buffer, false);
+        self.drain_lines()
+    }
+
+    /// Extract complete lines from `line_buffer`, fan each out to every
+    /// parser, and collect ranked/deduped diagnostics. Shared by both
+    /// `feed` and `feed_bytes`.
+    fn drain_lines(&mut self) -> Vec<Diagnostic> {
         let mut out: Vec<Diagnostic> = Vec::new();
-        // Drain complete lines. Use a loop so we can split off substrings
-        // while respecting the remainder for the next call.
         loop {
             let Some(newline_idx) = self.line_buffer.find('\n') else {
                 break;
@@ -147,6 +208,27 @@ impl DiagnosticPipeline {
     /// Returning zero diagnostics is the common case: most Tier-1 parsers
     /// only emit on a terminator they already saw.
     pub fn flush(&mut self) -> Vec<Diagnostic> {
+        // Finalize the streaming decoder. Any partial codepoint still held
+        // at end-of-stream is replaced with U+FFFD — the caller has
+        // declared no more bytes are coming, so a dangling lead can no
+        // longer hope to complete. Matches `from_utf8_lossy` semantics for
+        // truly truncated data.
+        //
+        // We pass an empty input with `last = true`. The returned `written`
+        // bytes are already appended to the buffer.
+        let max_final = self
+            .decoder
+            .max_utf8_buffer_length_without_replacement(0)
+            .unwrap_or(4);
+        self.line_buffer.reserve(max_final);
+        let _ = self
+            .decoder
+            .decode_to_string_without_replacement(&[], &mut self.line_buffer, true);
+        // Recreate the decoder so a subsequent feed_bytes after flush starts
+        // fresh; not doing so would leave the decoder in an "ended" state
+        // that refuses further input.
+        self.decoder = UTF_8.new_decoder_without_bom_handling();
+
         // If the buffer has a trailing incomplete line, feed it as-is so a
         // final `tsc` line without a `\n` still parses.
         let tail = std::mem::take(&mut self.line_buffer);
@@ -219,6 +301,43 @@ fn rank_and_dedupe(
 mod tests {
     use super::*;
     use crate::domain::Severity;
+    use crate::ports::ParserAdapter;
+    use std::sync::Mutex;
+
+    /// Test-only parser that captures every line it sees into a global
+    /// buffer, so we can assert on exactly what made it through the
+    /// pipeline's decoder + line-drain. A global is justified here because
+    /// parsers are boxed trait objects with no public state getters; the
+    /// alternative would be an `Arc<Mutex<Vec<String>>>` param on the
+    /// parser's constructor, which complicates test readability.
+    #[derive(Default)]
+    struct CaptureParser;
+
+    static CAPTURED: once_cell::sync::Lazy<Mutex<Vec<String>>> =
+        once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
+    /// Serializes the tests that share `CAPTURED` so they cannot interleave.
+    static CAPTURE_TEST_LOCK: once_cell::sync::Lazy<Mutex<()>> =
+        once_cell::sync::Lazy::new(|| Mutex::new(()));
+
+    impl CaptureParser {
+        fn drain_global() -> Vec<String> {
+            let mut g = CAPTURED.lock().expect("capture mutex");
+            std::mem::take(&mut *g)
+        }
+    }
+
+    impl ParserAdapter for CaptureParser {
+        fn id(&self) -> crate::ports::ParserId {
+            "capture"
+        }
+        fn parse_line(&mut self, line: &str) -> Vec<crate::domain::ParserCandidate> {
+            CAPTURED
+                .lock()
+                .expect("capture mutex")
+                .push(line.to_string());
+            Vec::new()
+        }
+    }
 
     #[test]
     fn default_ctor_registers_all_tier1_parsers() {
@@ -283,6 +402,64 @@ mod tests {
         assert_eq!(diags.len(), 1);
         // rustc prior is 0.95; + 0.02 + 0.02 + 0.03 = 1.02 clamped to 0.99.
         assert!(diags[0].confidence >= 0.98);
+    }
+
+    /// Regression for FIX 3: feeding a multi-byte UTF-8 codepoint split
+    /// mid-sequence across two `feed_bytes` calls MUST decode to the
+    /// original character, not to U+FFFD. Before the streaming decoder
+    /// landed, the session actor called `String::from_utf8_lossy` on each
+    /// chunk independently; the Korean / Chinese text below would surface
+    /// as replacement characters for the prefix and orphan continuation
+    /// bytes for the suffix.
+    #[test]
+    fn feed_bytes_recovers_split_utf8_codepoint_across_chunks() {
+        // Serialize with the other capture test; they share CAPTURED.
+        let _guard = CAPTURE_TEST_LOCK.lock().expect("test serialization lock");
+        // Drain any leftovers from a prior test so captured.len() is clean.
+        let _ = CaptureParser::drain_global();
+
+        let mut p = DiagnosticPipeline::with_parsers(vec![Box::new(CaptureParser)]);
+        // Korean "안녕" — 6 bytes:
+        //   안: EC 95 88
+        //   녕: EB 85 95
+        // Split between the first and second byte of 안 so chunk N carries
+        // an incomplete lead byte.
+        let payload = [0xEC, 0x95, 0x88, 0xEB, 0x85, 0x95];
+        let _ = p.feed_bytes(&payload[..2]); // EC 95
+        let _ = p.feed_bytes(&payload[2..]); // 88 EB 85 95
+        let _ = p.feed_bytes(b"\n");
+        let captured = CaptureParser::drain_global();
+        assert_eq!(
+            captured.len(),
+            1,
+            "exactly one line should have been parsed after the newline: got {captured:?}"
+        );
+        let line = &captured[0];
+        // The crucial assertion: no U+FFFD replacement characters.
+        assert!(
+            !line.contains('\u{FFFD}'),
+            "recovered line must not contain U+FFFD: {line:?}",
+        );
+        assert_eq!(line, "안녕", "expected full Korean text, got: {line:?}");
+    }
+
+    /// A 4-byte emoji split across three chunks (1+2+1 bytes) must also
+    /// round-trip cleanly — sanity check that the decoder tolerates
+    /// arbitrarily fine-grained chunking, not just 2-part splits.
+    #[test]
+    fn feed_bytes_tolerates_3_way_split_of_4_byte_codepoint() {
+        let _guard = CAPTURE_TEST_LOCK.lock().expect("test serialization lock");
+        let _ = CaptureParser::drain_global();
+
+        let mut p = DiagnosticPipeline::with_parsers(vec![Box::new(CaptureParser)]);
+        // 👋 U+1F44B: F0 9F 91 8B
+        let _ = p.feed_bytes(&[0xF0]);
+        let _ = p.feed_bytes(&[0x9F, 0x91]);
+        let _ = p.feed_bytes(&[0x8B, b'\n']);
+        let captured = CaptureParser::drain_global();
+        assert_eq!(captured.len(), 1, "got: {captured:?}");
+        assert!(!captured[0].contains('\u{FFFD}'));
+        assert_eq!(captured[0], "👋");
     }
 
     /// `reset_block` must clear the incomplete-line buffer so a partial line

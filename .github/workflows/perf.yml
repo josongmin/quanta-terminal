@@ -1,0 +1,114 @@
+name: Perf
+
+# Runs the `quanta-perf-harness` criterion benches on PRs that touch
+# the hot paths listed below, plus nightly on `main`. The workflow is
+# deliberately scoped — running criterion on every PR is too expensive
+# and too noisy — so path filters limit it to changes that could
+# plausibly regress a measurable stage.
+#
+# RFC 0001 §13.12 / §13.13 / §13.14 references:
+# - §13.12: keystroke → cell p95 ≤ 16 ms.
+# - §13.13: per-stage budget decomposition (matches `PerfStage`).
+# - §13.14: counter catalog, of which `perf.stage.*_us` is a subset.
+
+on:
+  pull_request:
+    paths:
+      - 'crates/quanta-vt/**'
+      - 'crates/quanta-vt-width/**'
+      - 'crates/quanta-proto/**'
+      - 'crates/quanta-session/**'
+      - 'crates/quanta-metrics/**'
+      - 'tests/perf/**'
+      - 'packages/ui/src/shared/ui/cell-renderer/**'
+      - 'docs/perf-baselines.md'
+      - '.github/workflows/perf.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/quanta-vt/**'
+      - 'crates/quanta-vt-width/**'
+      - 'crates/quanta-proto/**'
+      - 'crates/quanta-session/**'
+      - 'crates/quanta-metrics/**'
+      - 'tests/perf/**'
+      - 'packages/ui/src/shared/ui/cell-renderer/**'
+      - 'docs/perf-baselines.md'
+      - '.github/workflows/perf.yml'
+
+concurrency:
+  group: perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  bench:
+    name: criterion (${{ matrix.os }})
+    # macos-14 is the baseline for p95 numbers per RFC §13.12 and
+    # `docs/perf-baselines.md`. Ubuntu is a secondary regression
+    # signal; the comparison threshold on Linux uses its own prior
+    # green run rather than the absolute macOS number.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04]
+    # Graceful during development: skip the job if the harness crate
+    # or its Cargo.toml is missing (e.g. a scratch branch). Prevents
+    # the workflow from becoming a hard blocker before every epic
+    # has wired its contribution.
+    if: ${{ hashFiles('tests/perf/Cargo.toml') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-${{ matrix.os }}
+
+      - name: Build bench binaries (no run)
+        # Compile-only step catches a broken bench target without
+        # paying for the full measurement run. The subsequent step
+        # actually runs them; splitting the two makes CI logs far
+        # easier to skim.
+        run: cargo bench -p quanta-perf-harness --no-run --locked
+
+      - name: Run criterion benches
+        # `--output-format bencher` gives a single-line-per-sample
+        # format that tooling can parse; not used for automated
+        # gating yet (benches are stubs) but stored as an artefact so
+        # re-baselining PRs can inspect the numbers.
+        run: |
+          mkdir -p perf-results
+          cargo bench -p quanta-perf-harness --locked -- --output-format bencher \
+            | tee "perf-results/${{ matrix.os }}.txt"
+
+      - name: Compare against docs/perf-baselines.md
+        # Stub gate. The real comparison fires when the benches stop
+        # being stand-ins; for now this step only confirms the
+        # baselines file exists so a PR that deletes it fails noisily.
+        run: |
+          if [ ! -f docs/perf-baselines.md ]; then
+            echo "docs/perf-baselines.md is missing — baseline contract broken." >&2
+            exit 1
+          fi
+          echo "Baseline file present; full comparison wires in post EPIC-B/C/D."
+
+      - name: Upload bench artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results-${{ matrix.os }}
+          path: |
+            perf-results/
+            target/criterion/
+          if-no-files-found: ignore

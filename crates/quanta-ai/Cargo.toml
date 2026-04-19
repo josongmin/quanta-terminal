@@ -16,9 +16,16 @@ workspace = true
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+quanta-metrics = { path = "../quanta-metrics" }
 # Phase-6 Anthropic adapter (ADR 0012). `rustls-tls` avoids the OpenSSL
 # link so the Tauri host builds on fresh macOS without extra brew deps.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# `tokio::time::timeout` backs the trait's default `suggest_with_timeout`
+# implementation so every adapter honours the port's timing contract.
+# We only pull the `time` feature to keep the crate's footprint tight;
+# full tokio is already available transitively via reqwest, but
+# depending on a feature slice here is more honest.
+tokio = { version = "1.40", default-features = false, features = ["time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

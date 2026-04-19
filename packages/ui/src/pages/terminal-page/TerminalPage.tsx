@@ -39,6 +39,8 @@ import { BannerHost } from '../../widgets/banner-host/index.js';
 import { CommandPalette } from '../../widgets/command-palette/index.js';
 import { HistorySearch } from '../../widgets/history-search/index.js';
 import { SessionTabs } from '../../widgets/session-tabs/index.js';
+import { SettingsPanel } from '../../widgets/settings-panel/index.js';
+import { ThemeProvider } from '../../features/theme/index.js';
 // `EmptyState` is kept in the tree for the explicit no-session affordance
 // (opened via Cmd+T in Phase 2). Not referenced yet while session boot happens
 // transparently under the new block-list surface.
@@ -48,6 +50,7 @@ import { LoadingState } from './LoadingState.js';
 import { ErrorState } from './ErrorState.js';
 
 import { Badge } from '../../shared/ui/badge/index.js';
+import { showToast, ToastHost } from '../../shared/ui/toast/index.js';
 
 import { useSessionStore, useSessionsStore } from '../../entities/session/index.js';
 import {
@@ -79,6 +82,12 @@ import { getHostBridge } from '../../shared/api/host-bridge.js';
 import { cx } from '../../shared/lib/cx.js';
 import { useKeymap } from '../../shared/lib/keymap.js';
 import { createLogger } from '../../shared/lib/logger.js';
+import { t } from '../../shared/i18n/index.js';
+import { useZoomStore } from '../../features/zoom/index.js';
+import {
+  ensureNotificationPermission,
+  installNotificationDetector,
+} from '../../features/notifications/index.js';
 
 import styles from './terminal-page.module.css';
 
@@ -91,8 +100,19 @@ const INITIAL_COLS = 80;
 const INITIAL_ROWS = 24;
 
 export function TerminalPage() {
+  return (
+    <ThemeProvider>
+      <TerminalPageContent />
+    </ThemeProvider>
+  );
+}
+
+TerminalPage.displayName = 'TerminalPage';
+
+function TerminalPageContent() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const activeSessionId = useSessionsStore((s) => s.activeId);
   const [activeConnection, setActiveConnection] = useState<ConnectedSession | null>(null);
@@ -124,6 +144,15 @@ export function TerminalPage() {
       tui.unsubscribe();
       unbind();
     };
+  }, []);
+
+  // OS notifications: request permission lazily (so the browser doesn't
+  // prompt on page-load for unrelated sessions) and install the detector
+  // that watches for long-running blocks completing while hidden.
+  useEffect(() => {
+    void ensureNotificationPermission();
+    const handle = installNotificationDetector();
+    return () => handle.unsubscribe();
   }, []);
 
   // Block persistence (Phase 4): hydrate once, then install the terminal-
@@ -234,6 +263,7 @@ export function TerminalPage() {
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const compareOpen = useCompareStore((s) => s.open);
   const closeCompare = useCompareStore((s) => s.closeCompare);
 
@@ -248,6 +278,10 @@ export function TerminalPage() {
   const onHistoryShortcut = useCallback((e: KeyboardEvent) => {
     e.preventDefault();
     setHistoryOpen((p) => !p);
+  }, []);
+  const onSettingsShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    setSettingsOpen((p) => !p);
   }, []);
   // Escape cascade: history-search first (most transient ⌘F surface), then
   // the palette, then the Compare panel, then dismiss the top banner. The
@@ -265,6 +299,10 @@ export function TerminalPage() {
       setPaletteOpen(false);
       return;
     }
+    if (settingsOpen) {
+      setSettingsOpen(false);
+      return;
+    }
     if (compareOpen) {
       closeCompare();
       return;
@@ -274,7 +312,7 @@ export function TerminalPage() {
     const visible = selectVisibleConditions(bannerStore);
     const top = pickBannerCondition(visible);
     if (top) bannerStore.dismiss(top);
-  }, [historyOpen, paletteOpen, compareOpen, closeCompare]);
+  }, [historyOpen, paletteOpen, settingsOpen, compareOpen, closeCompare]);
   const onNewTabShortcut = useCallback(
     (e: KeyboardEvent) => {
       e.preventDefault();
@@ -290,7 +328,7 @@ export function TerminalPage() {
       // Only prompt on the active session having a running block — otherwise
       // close silently (mirrors browser behavior for a tab with no work).
       if (typeof window !== 'undefined') {
-        const ok = window.confirm('Close this session? This will terminate the shell.');
+        const ok = window.confirm(t('terminal.closeConfirm'));
         if (!ok) return;
       }
       void closeSession(activeId).then(() => {
@@ -313,12 +351,32 @@ export function TerminalPage() {
     e.preventDefault();
   }, []);
 
+  const onZoomInShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    useZoomStore.getState().zoomIn();
+  }, []);
+  const onZoomOutShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    useZoomStore.getState().zoomOut();
+  }, []);
+  const onZoomResetShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    useZoomStore.getState().reset();
+  }, []);
+
   useKeymap('mod+k', onPaletteShortcut);
   useKeymap('mod+f', onHistoryShortcut, { allowInEditable: true });
   useKeymap('escape', onEscape, { enabled: true, allowInEditable: true });
   useKeymap('mod+t', onNewTabShortcut);
   useKeymap('mod+w', onCloseTabShortcut);
   useKeymap('mod+`', onBacktickShortcut);
+  useKeymap('mod+,', onSettingsShortcut, { allowInEditable: true });
+  // Zoom bindings: Cmd+= / Cmd+- / Cmd+0. `allowInEditable` so the shortcut
+  // works while typing into the composer; the browser's native zoom is
+  // intercepted because we preventDefault in the handler.
+  useKeymap('mod+=', onZoomInShortcut, { allowInEditable: true });
+  useKeymap('mod+-', onZoomOutShortcut, { allowInEditable: true });
+  useKeymap('mod+0', onZoomResetShortcut, { allowInEditable: true });
 
   const retrySpawn = useCallback(() => {
     // Reset both the singular mirror and the collection — a failed first
@@ -364,6 +422,16 @@ export function TerminalPage() {
       submit: async (text, opts) => {
         await submitCommand({ text, rerunOf: opts.rerunOf });
       },
+    }).then((result) => {
+      // Audit P1 (fix 4): surface a toast when the rerun was rejected
+      // because the source block is still running. Silent rejection was
+      // the failure mode the audit called out.
+      if (!result.ok && result.reason === 'source-running') {
+        showToast({
+          kind: 'warning',
+          message: t('terminal.rerunBlocked'),
+        });
+      }
     });
   }, []);
   const onCopy = useCallback(
@@ -391,7 +459,7 @@ export function TerminalPage() {
     if (health === 'error' && !sessionId) {
       return (
         <ErrorState
-          message="quanta: shell session failed to start. See the status bar for details."
+          message={t('terminal.errorMessage')}
           onRetry={retrySpawn}
         />
       );
@@ -410,7 +478,7 @@ export function TerminalPage() {
           <div
             className={styles.altScreenOverlay}
             role="dialog"
-            aria-label="Full-screen terminal application"
+            aria-label={t('terminal.altScreenLabel')}
           >
             <TerminalShell ref={shellRef} autoFocus session={activeConnection} />
           </div>
@@ -430,7 +498,7 @@ export function TerminalPage() {
       <BannerHost />
       <main
         className={cx(styles.main, altScreenVisible && styles.tuiActive)}
-        aria-label="Terminal"
+        aria-label={t('terminal.region')}
         data-tui-active={altScreenVisible ? 'true' : 'false'}
       >
         {view}
@@ -439,7 +507,7 @@ export function TerminalPage() {
             <Badge
               label="TUI"
               tone="neutral"
-              srDescription="Full-screen TUI application is active; keystrokes go to the shell"
+              srDescription={t('terminal.tuiSr')}
             />
           </div>
         )}
@@ -449,8 +517,13 @@ export function TerminalPage() {
       <CommandPalette open={paletteOpen} onClose={closePalette} />
       <HistorySearch open={historyOpen} onClose={closeHistory} hydrating={hydrating} />
       <ComparePanel />
+      <SettingsPanel open={settingsOpen} onClose={closeSettings} />
+      {/* Audit P1 (fix 5): ToastHost renders ephemeral notifications from
+          `showToast()` — open-in-editor failures, rerun-while-running, etc.
+          Mounted alongside the banner host so both affordances coexist. */}
+      <ToastHost />
     </div>
   );
 }
 
-TerminalPage.displayName = 'TerminalPage';
+TerminalPageContent.displayName = 'TerminalPageContent';

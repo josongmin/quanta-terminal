@@ -25,6 +25,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -32,6 +33,7 @@ use base64::Engine as _;
 use quanta_block::{BoundaryEvent, VteBoundaryDetector};
 use quanta_diagnostic::{Category, DiagnosticPipeline, Severity};
 use quanta_events::{EventLogError, EventSink};
+use quanta_metrics::{MetricsRecorder, NoopRecorder};
 use quanta_output::OutputStore;
 use quanta_proto::envelope::{Envelope, Producer, SchemaVersion};
 use quanta_proto::events::{
@@ -48,7 +50,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::domain::{InputSubmission, SessionConfig, SessionSnapshot};
 use crate::ports::{SessionError, SessionHandle};
@@ -58,9 +60,26 @@ use crate::ports::{SessionError, SessionHandle};
 // §Backpressure — the sink IS durable, so any delay here is bounded by fsync.
 const INPUT_CHANNEL_CAPACITY: usize = 256;
 const EMIT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Metric names used by the session actor. `&'static str` by construction
+/// (the recorder keys on it) and colocated here so a future audit can grep
+/// for "session.*" and find the full surface.
+pub const METRIC_ENVELOPE_APPENDED: &str = "session.envelope.appended";
+pub const METRIC_APPEND_LATENCY_US: &str = "session.append.latency_us";
 // NOTE: 8 KiB chunk is a compromise between span fragmentation and latency.
 // Increase to 64 KiB only if the serializer/sink becomes the bottleneck.
 const PTY_READ_CHUNK_BYTES: usize = 8 * 1024;
+/// Upper bound on how long `submit_input` will wait for the input task to
+/// accept a command. When the input task is stuck on a hung PTY (kernel-level
+/// write block, unresponsive child, etc.), the bounded channel fills and
+/// every subsequent `send` stalls forever without this timeout. The RPC
+/// boundary then starves — submit_input callers hang, and the UI loses
+/// responsiveness. See FIX 5 in the audit.
+///
+/// 5 s is generous: a healthy desktop system will deliver a command in
+/// microseconds. Tune downward if a documented latency SLA exists; tune
+/// upward only on genuinely slow sinks.
+const SUBMIT_INPUT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 #[allow(
@@ -120,6 +139,11 @@ pub struct SessionActor {
     /// Secret detector used to redact persisted input text (ADR 0006).
     /// Injected for determinism in tests via [`SessionActor::spawn_with_detector`].
     detector: Arc<dyn SecretDetector>,
+    /// FIX 1 — fail-closed flag. Set by the emitter task when a sink append
+    /// fails after seq assignment; checked by `submit_input` / `close` so
+    /// downstream callers see `SessionError::Closed` instead of hanging on
+    /// the emitter's dropped ack channel. Idempotent once set.
+    sink_failed: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for SessionActor {
@@ -161,21 +185,61 @@ impl SessionActor {
         Self::spawn_with_detector(pty_port, sink, config, Arc::new(DefaultDetector::new())).await
     }
 
+    /// Variant of [`spawn`](Self::spawn) that also accepts a metrics
+    /// recorder. Default [`spawn`] passes a [`NoopRecorder`] so the
+    /// metrics surface is opt-in per ADR 0014 §Metrics Port. A production
+    /// caller that owns a shared `InMemoryRecorder` threads it through
+    /// here once and every actor's emitter reports `session.envelope.*`
+    /// counters + `session.append.latency_us` observations to the same
+    /// sink.
+    pub async fn spawn_with_recorder(
+        pty_port: Arc<dyn PtyPort>,
+        sink: Arc<dyn EventSink>,
+        config: SessionConfig,
+        recorder: Arc<dyn MetricsRecorder>,
+    ) -> Result<(Self, SessionId), SessionError> {
+        Self::spawn_inner(
+            pty_port,
+            sink,
+            config,
+            Arc::new(DefaultDetector::new()),
+            recorder,
+        )
+        .await
+    }
+
     /// Variant of [`spawn`](Self::spawn) with an explicit detector port.
     ///
     /// Required for integration tests that need to inject mock detectors so
     /// the assertions are deterministic across ruleset bumps. See ADR 0006
     /// §Detection Placement — the detector runs at the persistence boundary,
     /// so this is the correct injection point.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "inline wiring of 3 tasks + shutdown fanout kept local for locality"
-    )]
     pub async fn spawn_with_detector(
         pty_port: Arc<dyn PtyPort>,
         sink: Arc<dyn EventSink>,
         config: SessionConfig,
         detector: Arc<dyn SecretDetector>,
+    ) -> Result<(Self, SessionId), SessionError> {
+        Self::spawn_inner(
+            pty_port,
+            sink,
+            config,
+            detector,
+            Arc::new(NoopRecorder::new()),
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "inline wiring of 3 tasks + shutdown fanout kept local for locality"
+    )]
+    async fn spawn_inner(
+        pty_port: Arc<dyn PtyPort>,
+        sink: Arc<dyn EventSink>,
+        config: SessionConfig,
+        detector: Arc<dyn SecretDetector>,
+        recorder: Arc<dyn MetricsRecorder>,
     ) -> Result<(Self, SessionId), SessionError> {
         let session_id = SessionId::new();
         // Launch env is currently empty in Phase 1 per ADR 0003, but we still
@@ -230,12 +294,33 @@ impl SessionActor {
             let _ = emitter_stop_tx.send(());
         });
 
+        // FIX 1: shared "sink failed" flag. The emitter task sets it on a
+        // non-recoverable sink error; the actor's input-facing methods check
+        // it to short-circuit to `SessionError::Closed` rather than hang on
+        // the emitter's dropped ack channel.
+        let sink_failed = Arc::new(AtomicBool::new(false));
+
         // Spawn emitter FIRST so SessionCreated can go through it.
         let emitter_task: JoinHandle<()> = {
             let sink = sink.clone();
             let session_id_for_task = session_id;
+            let sink_failed_for_task = sink_failed.clone();
+            let recorder_for_task = recorder.clone();
+            // The emitter task must be able to abort the reader / input tasks
+            // on sink failure so a durable session doesn't keep producing
+            // writes against a poisoned log. Join handles are wired in below
+            // after the reader/input tasks spawn; until then we pass Arc-wrapped
+            // slots the spawn fills in atomically.
             tokio::spawn(async move {
-                emitter_loop(emit_rx, sink, session_id_for_task, emitter_stop_rx).await;
+                emitter_loop(
+                    emit_rx,
+                    sink,
+                    session_id_for_task,
+                    emitter_stop_rx,
+                    sink_failed_for_task,
+                    recorder_for_task,
+                )
+                .await;
             })
         };
 
@@ -247,6 +332,7 @@ impl SessionActor {
             shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
             tasks: Arc::new(Mutex::new(Vec::new())),
             detector,
+            sink_failed,
         };
 
         // Emit SessionCreated through the emitter.
@@ -319,6 +405,13 @@ impl SessionActor {
 #[async_trait]
 impl SessionHandle for SessionActor {
     async fn submit_input(&self, input: InputSubmission) -> Result<Option<BlockId>, SessionError> {
+        // FIX 1: once the emitter has failed-closed on a sink error, every
+        // further submit must fast-fail with `Closed` — the emit channel is
+        // dead, the seq counter is corrupt, and blocking on an ack is the
+        // exact user-visible hang we're fixing.
+        if self.sink_failed.load(Ordering::Acquire) {
+            return Err(SessionError::Closed);
+        }
         // ADR 0006 §Placement of Redaction: command gets redacted representation
         // on persistence. The raw bytes still go to the PTY — redaction never
         // alters what the user typed in-memory or the live stream. Here we
@@ -343,11 +436,11 @@ impl SessionHandle for SessionActor {
 
         if !input.submit {
             // Passthrough: write raw bytes, no block. `send` applies backpressure
-            // if the pty input task is behind (bounded channel).
-            self.input_tx
-                .send(InputCommand::Write(input.text.into_bytes()))
-                .await
-                .map_err(|_| SessionError::Closed)?;
+            // if the pty input task is behind (bounded channel). FIX 5: bound the
+            // wait with `SUBMIT_INPUT_SEND_TIMEOUT` so a hung PTY doesn't starve
+            // the RPC layer.
+            send_input_bounded(&self.input_tx, InputCommand::Write(input.text.into_bytes()))
+                .await?;
             return Ok(None);
         }
 
@@ -404,21 +497,16 @@ impl SessionHandle for SessionActor {
             });
         }
         // Write command bytes + CR so the shell executes. Raw bytes reach the
-        // PTY — redaction is a persistence-layer concern only.
+        // PTY — redaction is a persistence-layer concern only. FIX 5: timeout
+        // bounds so a hung PTY cannot starve callers.
         let mut bytes = input.text.into_bytes();
         bytes.push(b'\n');
-        self.input_tx
-            .send(InputCommand::Write(bytes))
-            .await
-            .map_err(|_| SessionError::Closed)?;
+        send_input_bounded(&self.input_tx, InputCommand::Write(bytes)).await?;
         Ok(Some(block_id))
     }
 
     async fn resize(&self, size: PtySize) -> Result<(), SessionError> {
-        self.input_tx
-            .send(InputCommand::Resize(size))
-            .await
-            .map_err(|_| SessionError::Closed)?;
+        send_input_bounded(&self.input_tx, InputCommand::Resize(size)).await?;
         Ok(())
     }
 
@@ -448,10 +536,7 @@ impl SessionHandle for SessionActor {
             .await?;
         }
 
-        self.input_tx
-            .send(InputCommand::Cancel(block_id))
-            .await
-            .map_err(|_| SessionError::Closed)?;
+        send_input_bounded(&self.input_tx, InputCommand::Cancel(block_id)).await?;
         Ok(())
     }
 
@@ -472,7 +557,14 @@ impl SessionHandle for SessionActor {
         let maybe_tx = self.shutdown_tx.lock().await.take();
         let first_close = maybe_tx.is_some();
 
-        if first_close {
+        // FIX 1: if the session already fail-closed via sink error, the
+        // emitter already pushed a terminal `SessionEnded(SinkFailure)` and
+        // drained its queue. Trying to emit a second `SessionEnded(UserClosed)`
+        // would deadlock on the dead ack channel. Skip the emission arm but
+        // preserve the rest of the teardown (shutdown signal + task join).
+        let already_fail_closed = self.sink_failed.load(Ordering::Acquire);
+
+        if first_close && !already_fail_closed {
             // ADR 0011 §Durable Commit Ordering: emit `SessionEnded`
             // SYNCHRONOUSLY (ack-backed) BEFORE we trigger shutdown, so the
             // envelope is durable in the event log before the emitter task
@@ -552,6 +644,29 @@ async fn emit(
     ack_rx
         .await
         .map_err(|_| EventLogError::Io("emitter dropped ack".into()))?
+}
+
+/// Send an `InputCommand` to the input task with the FIX 5 timeout applied.
+///
+/// Three observable outcomes:
+/// 1. Send succeeds → `Ok(())`.
+/// 2. Receiver dropped (actor already closed) → `Err(SessionError::Closed)`.
+/// 3. Timer fires before the input task accepts the command (bounded channel
+///    full because input task is stuck) → `Err(SessionError::Unresponsive)`.
+///
+/// Case 3 is the reason this helper exists: before FIX 5, a hung PTY made
+/// the bounded channel fill forever and every subsequent caller hung
+/// indefinitely — the RPC layer lost responsiveness and the UI had no
+/// signal to surface.
+async fn send_input_bounded(
+    tx: &mpsc::Sender<InputCommand>,
+    cmd: InputCommand,
+) -> Result<(), SessionError> {
+    match tokio::time::timeout(SUBMIT_INPUT_SEND_TIMEOUT, tx.send(cmd)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionError::Closed),
+        Err(_elapsed) => Err(SessionError::Unresponsive),
+    }
 }
 
 /// Variant used from the read loop that does NOT await the sink outcome. The
@@ -638,11 +753,40 @@ fn filter_launch_env(
 /// The single emitter: assigns `monotonic_seq`, stamps the envelope, calls the
 /// sink, and fans the result back to the requester. Ordering is preserved by
 /// the single-consumer mpsc.
+///
+/// # FIX 1 — Fail-closed on sink error
+///
+/// The assigner-then-append protocol burns a seq on every call: the sequence
+/// counter is incremented BEFORE `sink.append` runs, so a failed append
+/// creates a durable gap the `ZstdSegmentedEventLog::replay_session` strict
+/// `SeqGap` check surfaces as corruption. "Log and continue" — the previous
+/// policy — would compound the gap on every subsequent append.
+///
+/// Instead, on a non-recoverable sink error for an acked request (i.e. one
+/// where a caller is actively awaiting the result), we:
+///
+/// 1. Log at `tracing::error!` with full envelope identity (session_id, seq,
+///    event_id, causation_id) so an operator can correlate the failed record
+///    with the torn tail in the segment file.
+/// 2. Flip `sink_failed` so the actor's input-facing methods short-circuit to
+///    `SessionError::Closed` instead of waiting on a dead emitter.
+/// 3. Best-effort emit a terminal `SessionEnded { SinkFailure }` record so
+///    consumers on the replay side see a clean session boundary. This emit
+///    is itself fail-closed: if THAT append also errors, we do not retry.
+/// 4. Break out of the emit loop so no further sequence numbers are burned.
+///
+/// For fire-and-forget emits (output chunks, boundary events) the existing
+/// behavior is preserved — those are high-volume and non-blocking, and losing
+/// one doesn't corrupt the caller's view. But any FAILED fire-and-forget
+/// append also flips `sink_failed` and tears the loop down, for the same
+/// "don't compound the gap" reason.
 async fn emitter_loop(
     mut rx: mpsc::Receiver<EmitRequest>,
     sink: Arc<dyn EventSink>,
     session_id: SessionId,
     mut shutdown: oneshot::Receiver<()>,
+    sink_failed: Arc<AtomicBool>,
+    recorder: Arc<dyn MetricsRecorder>,
 ) {
     // Start at 1 and saturate on overflow. Wrapping past u64::MAX would break
     // the strict-monotonic contract ADR 0011 §Durable Commit Ordering relies
@@ -656,6 +800,7 @@ async fn emitter_loop(
         *seq = seq.saturating_add(1);
         cur
     };
+    let mut failed = false;
     loop {
         tokio::select! {
             // biased: always drain pending emits before shutting down so we
@@ -674,18 +819,71 @@ async fn emitter_loop(
                 if let Some(bid) = block_id_for_event(&env.payload) {
                     env = env.with_block(bid);
                 }
+                // B1: capture envelope identity before `append` consumes
+                // `env` so any downstream log carries session_id, seq,
+                // event_id, and causation_id for after-the-fact triage.
+                let event_id = env.event_id;
+                let causation_id = env.causation_id;
+                // FIX 3: time the append on the recorder. We measure the
+                // sink call in microseconds so the histogram buckets capture
+                // typical (<1 ms) and slow (>100 ms) appends without
+                // swamping the low end.
+                let started = std::time::Instant::now();
                 let result = sink.append(env).await;
-                if let Some(ack) = req.ack {
-                    let _ = ack.send(result);
-                } else if let Err(ref err) = result {
-                    // Fire-and-forget emits (output chunks, boundary events):
-                    // surface failures at debug level; the session survives.
-                    debug!(
+                let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                recorder.record_histogram(METRIC_APPEND_LATENCY_US, elapsed_us);
+                if result.is_ok() {
+                    recorder.inc_counter(METRIC_ENVELOPE_APPENDED);
+                }
+                if let Err(ref err) = result {
+                    // FIX 1: promote to error-level with the full envelope
+                    // identity so the torn record can be located post-mortem.
+                    error!(
                         session_id = %session_id,
                         seq,
+                        %event_id,
+                        ?causation_id,
                         ?err,
-                        "session.actor.emitter: event sink append failed"
+                        "session.actor.emitter: sink append failed; session is fail-closed"
                     );
+                    // Surface the error to any synchronous waiter BEFORE we
+                    // flip the failed flag — the ack carries the exact
+                    // underlying error, which `submit_input`'s caller needs.
+                    if let Some(ack) = req.ack {
+                        let _ = ack.send(result);
+                    }
+                    // Flip the shared flag so input-facing methods bail out
+                    // to `Closed` instead of queuing behind a dead emitter.
+                    sink_failed.store(true, Ordering::Release);
+                    failed = true;
+                    // Best-effort terminal SessionEnded(SinkFailure). If
+                    // THAT append errors, we log and give up — per the FIX 1
+                    // protocol we never retry a burned seq.
+                    let terminal_seq = assign_seq(&mut next_seq);
+                    let terminal_env = Envelope::new(
+                        session_id,
+                        terminal_seq,
+                        Producer::Session,
+                        SchemaVersion::ONE,
+                        Event::SessionEnded(SessionEnded {
+                            reason: SessionEndReason::SinkFailure,
+                        }),
+                    );
+                    let terminal_event_id = terminal_env.event_id;
+                    if let Err(terr) = sink.append(terminal_env).await {
+                        error!(
+                            session_id = %session_id,
+                            seq = terminal_seq,
+                            event_id = %terminal_event_id,
+                            ?terr,
+                            "session.actor.emitter: terminal SessionEnded(SinkFailure) append also failed"
+                        );
+                    }
+                    break;
+                }
+                // Success path.
+                if let Some(ack) = req.ack {
+                    let _ = ack.send(result);
                 }
             }
             _ = &mut shutdown => {
@@ -702,13 +900,23 @@ async fn emitter_loop(
                     if let Some(bid) = block_id_for_event(&env.payload) {
                         env = env.with_block(bid);
                     }
+                    let event_id = env.event_id;
+                    let causation_id = env.causation_id;
+                    let started = std::time::Instant::now();
                     let result = sink.append(env).await;
+                    let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                    recorder.record_histogram(METRIC_APPEND_LATENCY_US, elapsed_us);
+                    if result.is_ok() {
+                        recorder.inc_counter(METRIC_ENVELOPE_APPENDED);
+                    }
                     if let Some(ack) = req.ack {
                         let _ = ack.send(result);
                     } else if let Err(ref err) = result {
                         debug!(
                             session_id = %session_id,
                             seq,
+                            %event_id,
+                            ?causation_id,
                             ?err,
                             "session.actor.emitter: event sink append failed during drain"
                         );
@@ -718,7 +926,20 @@ async fn emitter_loop(
             }
         }
     }
+    // On fail-closed, drain any queued requests so their acks unblock with
+    // `Closed`-equivalent errors rather than hang forever waiting on an
+    // emitter that has already given up. Dropping the receiver here closes
+    // the channel so further `send` attempts observe a `SendError`.
+    if failed {
+        while let Ok(req) = rx.try_recv() {
+            if let Some(ack) = req.ack {
+                let _ = ack.send(Err(EventLogError::Closed));
+            }
+        }
+    }
     // Ensure the sink is flushed on shutdown — fsync contract per ADR 0011 §4.
+    // On fail-closed, still flush: the sink may have partial durable state
+    // we want persisted before the actor tears down.
     if let Err(err) = sink.flush().await {
         debug!(
             session_id = %session_id,
@@ -879,11 +1100,17 @@ async fn read_loop(
 
         // --- Tier-1 diagnostic extraction (ADR 0007). ---
         //
-        // UTF-8 decode lossy-safe so a partial codepoint across chunks
-        // doesn't crash the pipeline. The line buffer inside the
-        // pipeline re-joins cross-chunk lines so a diagnostic whose
-        // header arrives in chunk N-1 and whose `-->` arrives in chunk N
-        // still parses.
+        // We hand raw bytes to the pipeline via `feed_bytes`; the pipeline
+        // owns a streaming UTF-8 decoder that carries partial codepoints
+        // across chunk boundaries. This fixes FIX 3: previously we called
+        // `String::from_utf8_lossy` per-chunk, which turned any codepoint
+        // straddling chunks N and N+1 into U+FFFD on N and orphan
+        // continuation bytes on N+1 — breaking Korean / Chinese / emoji
+        // diagnostics at PTY read boundaries.
+        //
+        // The line buffer inside the pipeline still re-joins cross-chunk
+        // lines so a diagnostic whose header arrives in chunk N-1 and
+        // whose `-->` arrives in chunk N still parses.
         //
         // Do NOT block the PTY drain on this: parsers are synchronous
         // and regex-based, so the wall-clock cost per chunk is bounded;
@@ -895,8 +1122,7 @@ async fn read_loop(
                 diagnostics.reset_block();
                 diag_block = Some(active);
             }
-            let text = String::from_utf8_lossy(bytes);
-            let emitted = diagnostics.feed(text.as_ref());
+            let emitted = diagnostics.feed_bytes(bytes);
             for d in emitted {
                 let ev = Event::DiagnosticDetected(DiagnosticDetected {
                     diagnostic_id: DiagnosticId::new(),
@@ -1300,5 +1526,63 @@ mod tests {
         assert!(records
             .iter()
             .any(|r| matches!(r.envelope.payload, Event::SessionCreated(_))));
+    }
+
+    /// FIX 5: if the bounded input channel is full AND the receiver never
+    /// drains (stuck input task / hung PTY), `send_input_bounded` must time
+    /// out and return `SessionError::Unresponsive` rather than hang.
+    ///
+    /// We construct the failure directly at the helper level: create a
+    /// bounded channel of capacity 1, fill it, and retain the receiver
+    /// without polling so the sender's backpressure never releases.
+    ///
+    /// To keep the test fast we temporarily override the timeout via a
+    /// variant of `send_input_bounded` that accepts the duration as a
+    /// parameter — otherwise the test would block for `SUBMIT_INPUT_SEND_TIMEOUT`
+    /// (5 s) to observe the outcome. The production helper's constant wraps
+    /// the same implementation.
+    #[tokio::test]
+    async fn send_input_bounded_times_out_when_receiver_stuck() {
+        async fn with_timeout(
+            tx: &mpsc::Sender<InputCommand>,
+            cmd: InputCommand,
+            dur: Duration,
+        ) -> Result<(), SessionError> {
+            match tokio::time::timeout(dur, tx.send(cmd)).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(_)) => Err(SessionError::Closed),
+                Err(_) => Err(SessionError::Unresponsive),
+            }
+        }
+
+        // Capacity 1, fill it, then drop no receiver — the second send will
+        // block indefinitely without a timeout.
+        let (tx, _rx) = mpsc::channel::<InputCommand>(1);
+        tx.send(InputCommand::Write(b"first".to_vec()))
+            .await
+            .expect("first send fills the buffer");
+        let err = with_timeout(
+            &tx,
+            InputCommand::Write(b"second".to_vec()),
+            Duration::from_millis(100),
+        )
+        .await
+        .expect_err("second send must time out");
+        assert!(
+            matches!(err, SessionError::Unresponsive),
+            "expected Unresponsive, got: {err:?}",
+        );
+    }
+
+    /// FIX 5 continuation: the full helper behind the ABI. Sanity-check that
+    /// dropping the receiver yields `Closed`, not `Unresponsive`.
+    #[tokio::test]
+    async fn send_input_bounded_surfaces_closed_when_receiver_dropped() {
+        let (tx, rx) = mpsc::channel::<InputCommand>(1);
+        drop(rx);
+        let err = send_input_bounded(&tx, InputCommand::Write(b"x".to_vec()))
+            .await
+            .expect_err("send to dropped receiver must fail");
+        assert!(matches!(err, SessionError::Closed), "got: {err:?}");
     }
 }

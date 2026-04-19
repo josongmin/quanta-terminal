@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quanta Terminal placeholder icon. Single SVG source of truth for every
+  rasterized icon under packages/host-tauri/src-tauri/icons/. The mark is a
+  rounded square with a stylized "Q" monogram; the palette uses the design
+  tokens' `surface-1` (background) and `accent` (foreground) so the icon
+  picks up the brand without pulling the full token stylesheet.
+
+  NOTE: this is a stop-gap; a designer should produce the final marks per
+  platform before the 1.0 release. See docs/RELEASE.md for the handoff
+  plan. scripts/generate-icons.sh re-rasterizes every bundle size from
+  this file — edit here, not the generated PNGs.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="192" ry="192" fill="url(#bg)"/>
+  <g fill="none" stroke="#38bdf8" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Q circle -->
+    <circle cx="512" cy="512" r="248"/>
+    <!-- Tail of the Q -->
+    <line x1="664" y1="664" x2="784" y2="784"/>
+  </g>
+  <!-- Terminal prompt caret: emphasises that this is a terminal-first product. -->
+  <g fill="#38bdf8">
+    <polygon points="416,472 512,528 416,584"/>
+  </g>
+</svg>

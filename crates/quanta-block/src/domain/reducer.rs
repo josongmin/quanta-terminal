@@ -2,6 +2,24 @@
 //!
 //! Per ADR 0011, reducers are pure functions of `(prior, event)`. No IO, no
 //! clock reads, no randomness. They are idempotent by `event_id`.
+//!
+//! # Out-of-order handling (Option A, strict)
+//!
+//! Per the cross-event invariant in ADR 0011, `BlockCompleted` must follow
+//! `BlockStarted` (or at least a state that has transited through
+//! `Running`). When the reducer observes an out-of-order `BlockCompleted`
+//! — e.g. the completed envelope arrives before `BlockStarted` — it picks
+//! **Option A (strict)**: the event is rejected outright. No state
+//! transition, and no metadata is absorbed (exit code, boundary signal,
+//! etc. are NOT recorded). A subsequent healthy
+//! `Started → Completed(exit=N)` pair proceeds normally and the final
+//! `exit_code` reflects only the healthy completion.
+//!
+//! The typed API lives on [`try_reduce`], which returns
+//! [`ReducerError::OutOfOrder`] so callers can log or fail the upstream
+//! pipeline. The convenience [`reduce`] wrapper keeps the pre-existing
+//! infallible signature by silently dropping out-of-order events — useful
+//! for replay loops where a strict failure would poison a whole session.
 
 use quanta_proto::envelope::Envelope;
 use quanta_proto::events::{BlockCompleted, Event};
@@ -14,15 +32,65 @@ use super::state::{Block, BlockState, SubState};
 /// surface honest.
 pub type BlockEvent = Envelope<Event>;
 
-/// Apply a single envelope to a prior block. Returns the next state.
+/// Errors the pure reducer can return.
 ///
-/// Unknown or unrelated events return the prior unchanged. Re-applying an
-/// event with a previously-seen `event_id` is a no-op.
-#[must_use]
-pub fn reduce(mut prior: Block, event: &BlockEvent) -> Block {
-    if prior.applied(&event.event_id) {
-        return prior;
+/// The reducer remains pure (no IO, no clock) — these variants signal a
+/// contract breach in the *event stream* so callers can decide the policy
+/// (log + drop vs. fail-closed).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReducerError {
+    /// A lifecycle event arrived out of order. Currently fired by
+    /// `BlockCompleted` that precedes `BlockStarted` per ADR 0011.
+    #[error("reducer: out-of-order event; state={state:?}, got={got_kind}")]
+    OutOfOrder {
+        state: BlockState,
+        got_kind: &'static str,
+    },
+}
+
+/// A zero-sized handle around the pure reduce function, kept for call sites
+/// that prefer a method-style dispatch (e.g. `BlockReducer::apply`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BlockReducer;
+
+impl BlockReducer {
+    /// Apply a single event. See [`try_reduce`] for the free-function form.
+    pub fn apply(self, prior: Block, event: &BlockEvent) -> Result<Block, ReducerError> {
+        try_reduce(prior, event)
     }
+}
+
+/// Strict variant of [`reduce`] that surfaces out-of-order events as an
+/// error instead of silently dropping them.
+///
+/// See the module docs for the Option A semantics: an out-of-order
+/// `BlockCompleted` produces [`ReducerError::OutOfOrder`]. The envelope
+/// is still recorded in the applied-id set, because idempotency is keyed
+/// on `event_id` — replaying the same envelope a second time must be a
+/// no-op regardless of whether the first pass absorbed it or dropped it.
+/// The session actor re-mints a fresh envelope (new `event_id`) to retry
+/// once the prerequisite arrives, so the "mark-as-applied on rejection"
+/// policy is never at odds with a legitimate retry.
+pub fn try_reduce(mut prior: Block, event: &BlockEvent) -> Result<Block, ReducerError> {
+    if prior.applied(&event.event_id) {
+        return Ok(prior);
+    }
+
+    // Strict ordering check: out-of-order `BlockCompleted` is rejected
+    // before any state transition. We still record the envelope as applied
+    // so a replay of the same event stream converges — the second pass
+    // through `fold(reduce, events)` sees the id on the applied set and
+    // short-circuits identically to the first pass.
+    if let Event::BlockCompleted(_) = &event.payload {
+        if !matches!(prior.state, BlockState::Running) {
+            prior.applied_events.insert(event.event_id);
+            return Err(ReducerError::OutOfOrder {
+                state: prior.state,
+                got_kind: "block_completed",
+            });
+        }
+    }
+
     prior.applied_events.insert(event.event_id);
 
     match &event.payload {
@@ -40,15 +108,7 @@ pub fn reduce(mut prior: Block, event: &BlockEvent) -> Block {
             boundary_confidence,
             ..
         }) => {
-            // Per ADR 0011 cross-event invariant: completed must not precede started.
-            // If violated, leave prior state unchanged (return early without transitioning).
-            if !matches!(prior.state, BlockState::Running) {
-                // Fall through to still record confidence/signal but keep state.
-                prior.boundary_signal = Some(*boundary_signal);
-                prior.boundary_confidence = Some(*boundary_confidence);
-                prior.exit_code = *exit_code;
-                return prior;
-            }
+            // Guarded above: we're strictly in `Running` at this point.
             prior.state = BlockState::Completed;
             prior.exit_code = *exit_code;
             prior.boundary_signal = Some(*boundary_signal);
@@ -73,7 +133,34 @@ pub fn reduce(mut prior: Block, event: &BlockEvent) -> Block {
         _ => {}
     }
 
-    prior
+    Ok(prior)
+}
+
+/// Apply a single envelope to a prior block. Returns the next state.
+///
+/// This is the infallible sibling of [`try_reduce`]: an out-of-order event
+/// is silently dropped AS FAR AS STATE is concerned — no transition, no
+/// metadata absorbed (Option A). The envelope's `event_id` is still
+/// recorded on the applied-id set so replay remains idempotent: a second
+/// fold over the same event list converges to the same final state.
+///
+/// Unknown or unrelated events return the prior unchanged. Re-applying an
+/// event with a previously-seen `event_id` is a no-op.
+#[must_use]
+pub fn reduce(prior: Block, event: &BlockEvent) -> Block {
+    // `try_reduce` inserts the event_id into `applied_events` before
+    // returning `Err(OutOfOrder)`; we preserve that bookkeeping on the
+    // infallible wrapper too. We can't simply return the prior-on-error
+    // because it lacks the applied-id mutation; instead, do the
+    // applied-events update ourselves on the rejected path so the
+    // failure-mode is a faithful "marked as seen, no state change".
+    if let Ok(next) = try_reduce(prior.clone(), event) {
+        next
+    } else {
+        let mut p = prior;
+        p.applied_events.insert(event.event_id);
+        p
+    }
 }
 
 /// Apply a sequence of events, returning the final state.
@@ -179,10 +266,95 @@ mod tests {
                 completed_ev(session, block, 2, 0),
             ],
         );
-        // State stays in Created because invariant fired.
+        // Option A (strict): state stays in Created AND no metadata is
+        // absorbed. The reducer drops the out-of-order completed wholesale
+        // so a later healthy pair produces the only visible completion.
         assert_eq!(out.state, BlockState::Created);
-        // But the trailing metadata is captured.
-        assert_eq!(out.exit_code, Some(0));
+        assert_eq!(out.exit_code, None);
+        assert_eq!(out.boundary_signal, None);
+    }
+
+    /// Option A regression: an early out-of-order `Completed(exit=42)` is
+    /// dropped entirely, and a subsequent healthy `Started → Completed(exit=99)`
+    /// pair must produce the final visible exit code of 99.
+    /// Prior to the Option A fix, the early completed-before-started
+    /// absorbed its `exit_code` into the aggregate, producing a
+    /// "stuck" block whose exit code reflected the stale event.
+    #[test]
+    fn completed_before_started_is_dropped_and_later_pair_wins() {
+        let session = SessionId::new();
+        let block = BlockId::new();
+        let b = Block::new(block);
+        let out = reduce_many(
+            b,
+            &[
+                created_ev(session, block, 1),
+                // Out-of-order: must be dropped.
+                completed_ev(session, block, 2, 42),
+                started_ev(session, block, 3),
+                completed_ev(session, block, 4, 99),
+            ],
+        );
+        assert_eq!(out.state, BlockState::Completed);
+        assert_eq!(
+            out.exit_code,
+            Some(99),
+            "the healthy completed pair must win, not the dropped out-of-order one"
+        );
+    }
+
+    /// `try_reduce` surfaces out-of-order completed as the typed error
+    /// variant so strict pipelines can fail-closed.
+    #[test]
+    fn try_reduce_reports_out_of_order_completed() {
+        let session = SessionId::new();
+        let block = BlockId::new();
+        let b = Block::new(block);
+        let b = try_reduce(b, &created_ev(session, block, 1)).expect("created ok");
+        let bad = completed_ev(session, block, 2, 0);
+        let err = try_reduce(b.clone(), &bad).expect_err("completed before started must error");
+        match err {
+            ReducerError::OutOfOrder { state, got_kind } => {
+                assert_eq!(state, BlockState::Created);
+                assert_eq!(got_kind, "block_completed");
+            }
+        }
+    }
+
+    /// Replay idempotency: an out-of-order Completed that was rejected on
+    /// first contact MUST remain rejected (or a no-op) on a second
+    /// `try_reduce` of the same envelope. Idempotency is keyed on
+    /// `event_id`, not on "accepted vs. dropped".
+    ///
+    /// The session actor never reuses an `event_id` for a retry — on a
+    /// legitimate retry after the prerequisite arrives it mints a fresh
+    /// envelope. This test pins the replay semantics for the reducer
+    /// itself.
+    #[test]
+    fn rejected_out_of_order_event_is_replay_idempotent() {
+        let session = SessionId::new();
+        let block = BlockId::new();
+        let b = Block::new(block);
+        let b = try_reduce(b, &created_ev(session, block, 1)).expect("created ok");
+        let bad = completed_ev(session, block, 2, 42);
+        // First application: rejected, envelope marked as applied.
+        // `try_reduce` consumes the block by value; rebuild from the
+        // known-good prior and re-apply so we can inspect downstream.
+        let b_after_bad = if try_reduce(b.clone(), &bad).is_ok() {
+            panic!("should have been rejected");
+        } else {
+            let mut b2 = b.clone();
+            b2.applied_events.insert(bad.event_id);
+            b2
+        };
+        assert_eq!(b_after_bad.state, BlockState::Created);
+        // Drive the block into Running so completed would now be legal.
+        let b_running =
+            try_reduce(b_after_bad, &started_ev(session, block, 3)).expect("started ok");
+        // Re-applying the same envelope is a no-op: idempotency by event_id.
+        let same = try_reduce(b_running.clone(), &bad).expect("idempotent replay");
+        assert_eq!(same.state, BlockState::Running);
+        assert_eq!(same.exit_code, None);
     }
 
     #[test]

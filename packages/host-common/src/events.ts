@@ -53,7 +53,12 @@ export type Producer =
 
 export type CwdSource = 'launch' | 'osc7' | 'prompt_estimate' | 'unknown' | 'explicit_override';
 export type ShellIntegrationStatus = 'installed' | 'missing' | 'partial';
-export type SessionEndReason = 'shell_exited' | 'user_closed' | 'sidecar_shutdown' | 'crash';
+export type SessionEndReason =
+  | 'shell_exited'
+  | 'user_closed'
+  | 'sidecar_shutdown'
+  | 'crash'
+  | 'sink_failure';
 export type InputKind = 'shell' | 'intent';
 export type BoundarySignal = 'osc133' | 'child_exit' | 'prompt_regex';
 export type BoundaryConfidence = 'authoritative' | 'degraded';

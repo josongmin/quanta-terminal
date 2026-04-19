@@ -1,0 +1,27 @@
+[package]
+name = "update-manifest-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — builds the signed Tauri update manifest from a directory of built bundles."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "update-manifest-gen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+base64 = { workspace = true }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = { workspace = true }

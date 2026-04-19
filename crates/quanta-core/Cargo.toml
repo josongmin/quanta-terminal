@@ -26,6 +26,7 @@ quanta-events = { path = "../quanta-events" }
 quanta-protocol = { path = "../quanta-protocol" }
 quanta-lifecycle = { path = "../quanta-lifecycle" }
 quanta-session = { path = "../quanta-session" }
+quanta-metrics = { path = "../quanta-metrics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

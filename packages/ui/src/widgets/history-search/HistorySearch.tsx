@@ -34,6 +34,7 @@ import { Badge } from '../../shared/ui/badge/index.js';
 import { Spinner } from '../../shared/ui/spinner/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { activateFocusTrap } from '../../shared/lib/focus-trap.js';
+import { t } from '../../shared/i18n/index.js';
 import { useBlockIds, useBlockStore, type Block } from '../../entities/block/index.js';
 // FIXME(fsd-layer-skip): history widget depends on the history feature for ranking
 import {
@@ -176,7 +177,7 @@ export function HistorySearch(props: HistorySearchProps) {
         ref={containerRef}
         role="dialog"
         aria-modal="true"
-        aria-label="History search"
+        aria-label={t('historySearch.dialogLabel')}
         className={styles.panel}
         onKeyDown={handleKeyDown}
       >
@@ -190,8 +191,8 @@ export function HistorySearch(props: HistorySearchProps) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search command history"
-            aria-label="Search command history"
+            placeholder={t('historySearch.placeholder')}
+            aria-label={t('historySearch.placeholder')}
             aria-controls="quanta-history-results"
             aria-activedescendant={
               hits[activeIndex] ? `quanta-history-opt-${hits[activeIndex].block.id}` : undefined
@@ -206,15 +207,15 @@ export function HistorySearch(props: HistorySearchProps) {
           id="quanta-history-results"
           className={styles.results}
           role="listbox"
-          aria-label="History results"
+          aria-label={t('historySearch.resultsLabel')}
         >
           {query.trim().length === 0 ? (
             <div className={styles.empty} role="status">
-              Type to search past commands. {hydrating ? 'Loading history…' : ''}
+              {t('historySearch.typePrompt')} {hydrating ? t('historySearch.loadingHistory') : ''}
             </div>
           ) : hits.length === 0 ? (
             <div className={styles.empty} role="status">
-              No matches for &ldquo;{query}&rdquo;.
+              {t('historySearch.noMatches', { query })}
             </div>
           ) : (
             <ul className={styles.sectionList}>
@@ -237,9 +238,14 @@ export function HistorySearch(props: HistorySearchProps) {
           </div>
           <div>
             {hydrating ? (
-              <Spinner size="sm" label="Hydrating history" />
+              <Spinner size="sm" label={t('historySearch.hydratingSr')} />
             ) : (
-              <span>{hits.length} result{hits.length === 1 ? '' : 's'}</span>
+              <span>
+                {hits.length}{' '}
+                {hits.length === 1
+                  ? t('historySearch.resultSingular')
+                  : t('historySearch.resultPlural')}
+              </span>
             )}
           </div>
         </div>

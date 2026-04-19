@@ -248,5 +248,6 @@ fn event_kind_name(e: &quanta_proto::envelope::Envelope<Event>) -> &'static str 
         Event::SuggestionGenerated(_) => "SuggestionGenerated",
         Event::SuggestionReviewed(_) => "SuggestionReviewed",
         Event::HistoryIndexed(_) => "HistoryIndexed",
+        Event::Unknown { .. } => "Unknown",
     }
 }

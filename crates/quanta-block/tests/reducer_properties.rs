@@ -200,10 +200,12 @@ proptest! {
     }
 
     // 3. Monotonicity / cross-event invariant: `Completed` must never precede
-    //    `Started`. The reducer must NOT transition to `Completed` if Started
-    //    is absent, per ADR 0011.
+    //    `Started`. Per the Option A (strict) fix, the reducer drops the
+    //    out-of-order Completed wholesale — neither the state nor the
+    //    exit-code metadata mutates.
     #[test]
     fn completed_without_started_does_not_transition(exit in proptest::num::i32::ANY) {
+        let _ = exit; // exit intentionally unused — Option A drops the event.
         let session = SessionId::new();
         let block = BlockId::new();
         let events = vec![
@@ -212,8 +214,10 @@ proptest! {
         ];
         let out = reduce_many(Block::new(block), &events);
         prop_assert_eq!(out.state, BlockState::Created);
-        // exit_code and signal metadata are still captured, per reducer docs.
-        prop_assert_eq!(out.exit_code, Some(exit));
+        // Option A: the rejected completed leaves zero trace on the
+        // aggregate. A retry once Started is emitted will still land.
+        prop_assert_eq!(out.exit_code, None);
+        prop_assert_eq!(out.boundary_signal, None);
     }
 
     // 4. Terminal states absorb the lifecycle events the session actor can

@@ -20,24 +20,46 @@ mod sidecar_setup {
     //! Tauri setup glue for the sidecar boot. Split out so the borrow
     //! checker can own the slot handle without dragging `tauri::Manager`
     //! into the rest of the crate.
+    use std::path::PathBuf;
     use std::sync::Arc;
 
-    pub type SidecarSlot =
-        Arc<parking_lot::Mutex<Option<Arc<crate::sidecar::SidecarBridge>>>>;
+    use tauri::Manager;
 
-    pub fn spawn_sidecar_boot<R: tauri::Runtime>(
-        app: &tauri::App<R>,
-        slot: SidecarSlot,
-    ) {
+    pub type SidecarSlot = Arc<parking_lot::Mutex<Option<Arc<crate::sidecar::SidecarBridge>>>>;
+
+    /// Resolve the directory the sidecar bridge uses for its crash marker
+    /// (see FIX 2 in the audit). Tauri's `app_config_dir` is the canonical
+    /// "profile dir" on every platform; if resolution fails we fall back to
+    /// `$HOME/.config/quanta` so the marker still has somewhere to land on
+    /// linux/macOS dev setups.
+    fn crash_marker_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+        if let Ok(p) = app.path().app_config_dir() {
+            return p;
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".config/quanta");
+        }
+        std::env::temp_dir().join("quanta-host-tauri")
+    }
+
+    pub fn spawn_sidecar_boot<R: tauri::Runtime>(app: &tauri::App<R>, slot: SidecarSlot) {
         let app_handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
+            // FIX 2 (audit): if the previous process left a crash marker in
+            // the profile dir, emit the recovery banner + synthetic
+            // pty-exits NOW so the UI can finalize stale blocks even before
+            // the fresh sidecar boots. Delete-on-read is inside the helper.
+            let marker_dir = crash_marker_dir(&app_handle);
+            crate::sidecar::process_crash_marker_on_startup(&app_handle, &marker_dir);
+
             // Pass the live AppHandle so the resolver can consult Tauri's
             // bundled-resource path when neither `QUANTA_CORE_BIN` nor
             // `PATH` carry the binary. Env override still wins.
             match crate::sidecar::SidecarLaunchConfig::from_env(Some(&app_handle)) {
                 Ok(cfg) => match crate::sidecar::launch(cfg).await {
                     Ok(bridge) => {
-                        let _ = bridge.start_event_pump(app_handle.clone());
+                        let _ = bridge
+                            .start_event_pump(app_handle.clone(), marker_dir.clone());
                         *slot.lock() = Some(Arc::new(bridge));
                         tracing::info!("sidecar: quanta-core up and connected");
                     }
@@ -52,6 +74,8 @@ mod sidecar_setup {
     }
 }
 
+mod crash;
+mod error;
 mod ipc;
 mod shell_integration;
 
@@ -79,8 +103,16 @@ pub fn run() {
     #[cfg(feature = "sidecar")]
     let sidecar_slot_handle = state.sidecar_slot_arc();
 
+    // Install the panic hook BEFORE the Tauri runtime starts so a panic in
+    // a setup callback still goes through our reporter. The reporter slot
+    // is filled during `setup` (once we have an `AppHandle` for the
+    // `app_config_dir()` lookup) — until then the hook buffers via the
+    // process's default stderr output.
+    crash::install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             ipc::quanta_ready,
@@ -91,10 +123,17 @@ pub fn run() {
             ipc::quanta_cancel_block,
             ipc::quanta_open_in_editor,
             ipc::quanta_ai_suggest,
+            ipc::quanta_report_crash,
             shell_integration::quanta_install_shell_integration,
+            shell_integration::quanta_uninstall_shell_integration,
         ])
         .setup(move |app| {
             tracing::info!("Quanta host (Tauri) booted; window manager attached.");
+            // Wire the real (file-sink) crash reporter now that we have an
+            // `AppHandle` to resolve `app_config_dir()`. Before this point
+            // the hook is a no-op stub, which is the right default for
+            // tests that never instantiate an app.
+            crash::bind_reporter_to_app(app.handle());
             #[cfg(feature = "sidecar")]
             sidecar_setup::spawn_sidecar_boot(app, sidecar_slot_handle.clone());
             let _ = app;

@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { Button } from '../../shared/ui/button/index.js';
 import { activateFocusTrap } from '../../shared/lib/focus-trap.js';
+import { t } from '../../shared/i18n/index.js';
 import {
   install as installAction,
   preview as previewAction,
@@ -135,8 +136,8 @@ export function Wizard(props: WizardProps) {
       outcome: outcome.kind,
       message:
         outcome.kind === 'already-installed'
-          ? `Already installed in ${outcome.reply.targetPath}.`
-          : `Appended to ${outcome.reply.targetPath}. Reload your shell to activate.`,
+          ? t('wizard.done.alreadyInstalled', { path: outcome.reply.targetPath })
+          : t('wizard.done.appended', { path: outcome.reply.targetPath }),
     }));
   }, [detection.shell, installFn]);
 
@@ -188,10 +189,10 @@ export function Wizard(props: WizardProps) {
       >
         <div className={styles.header}>
           <h2 id="quanta-si-wizard-title" className={styles.title}>
-            Install shell integration
+            {t('wizard.title')}
           </h2>
           <p className={styles.subtitle}>
-            Detected shell: <strong>{detection.shell}</strong>
+            {t('wizard.detectedShell')}<strong>{detection.shell}</strong>
             {detection.rawShell ? ` (${detection.rawShell})` : null}
           </p>
         </div>
@@ -199,26 +200,20 @@ export function Wizard(props: WizardProps) {
         <div className={styles.body}>
           {state.phase === 'detect' ? (
             <div data-testid="step-detect">
-              <p>
-                Quanta uses OSC 133 markers to frame command blocks precisely. Without the
-                integration script, block boundaries are estimated from prompt text.
-              </p>
-              <p>
-                Click <strong>Preview snippet</strong> to see exactly what would be appended to
-                your shell's rc file. Nothing is written until you confirm.
-              </p>
+              <p>{t('wizard.detect.intro')}</p>
+              <p>{t('wizard.detect.cta')}</p>
             </div>
           ) : null}
 
           {state.phase === 'preview' ? (
             <div data-testid="step-preview">
               <p>
-                This snippet will be appended to{' '}
+                {t('wizard.preview.intro')}
                 <code data-testid="target-path">{state.targetPath}</code>
                 {state.alreadyInstalled ? (
-                  <> — <strong>it looks like it is already installed</strong>.</>
+                  <> — <strong>{t('wizard.preview.alreadyInstalled')}</strong>.</>
                 ) : (
-                  <> ({bodyLineCount} lines of script, wrapped in a guarded block).</>
+                  <> ({t('wizard.preview.lineCount', { count: bodyLineCount })}).</>
                 )}
               </p>
               <pre className={styles.snippet} data-testid="snippet-preview">
@@ -235,7 +230,7 @@ export function Wizard(props: WizardProps) {
 
           {state.phase === 'error' ? (
             <div data-testid="step-error">
-              <p className={styles.error}>{state.message ?? 'Unknown error.'}</p>
+              <p className={styles.error}>{state.message ?? t('wizard.error.unknown')}</p>
             </div>
           ) : null}
         </div>
@@ -244,7 +239,7 @@ export function Wizard(props: WizardProps) {
           {state.phase === 'detect' ? (
             <>
               <Button type="button" onClick={onClose} variant="ghost">
-                Not now
+                {t('wizard.button.notNow')}
               </Button>
               <Button
                 type="button"
@@ -253,7 +248,7 @@ export function Wizard(props: WizardProps) {
                 disabled={busy}
                 data-testid="wizard-preview-button"
               >
-                {busy ? 'Loading…' : 'Preview snippet'}
+                {busy ? t('wizard.button.previewLoading') : t('wizard.button.preview')}
               </Button>
             </>
           ) : null}
@@ -261,14 +256,14 @@ export function Wizard(props: WizardProps) {
           {state.phase === 'preview' ? (
             <>
               <Button type="button" onClick={onClose} variant="ghost">
-                Cancel
+                {t('wizard.button.cancel')}
               </Button>
               <Button
                 type="button"
                 onClick={handleCopy}
                 data-testid="wizard-copy-button"
               >
-                Copy
+                {t('wizard.button.copy')}
               </Button>
               <Button
                 type="button"
@@ -277,14 +272,18 @@ export function Wizard(props: WizardProps) {
                 disabled={busy}
                 data-testid="wizard-install-button"
               >
-                {busy ? 'Installing…' : state.alreadyInstalled ? 'Re-check' : 'Install'}
+                {busy
+                  ? t('wizard.button.installLoading')
+                  : state.alreadyInstalled
+                    ? t('wizard.button.recheck')
+                    : t('wizard.button.install')}
               </Button>
             </>
           ) : null}
 
           {state.phase === 'done' || state.phase === 'error' ? (
             <Button type="button" onClick={onClose} variant="primary">
-              Close
+              {t('wizard.button.close')}
             </Button>
           ) : null}
         </div>

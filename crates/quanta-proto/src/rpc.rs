@@ -53,7 +53,9 @@ pub enum RpcMethod {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateSession {
+    #[serde(default)]
     pub shell: Option<String>,
+    #[serde(default)]
     pub cwd: Option<String>,
     pub cols: u16,
     pub rows: u16,
@@ -86,6 +88,7 @@ pub enum InputMode {
 pub struct SubmitInputResult {
     /// The block id the submission created, if any. `Submit` always creates a
     /// block; `Passthrough` does not.
+    #[serde(default)]
     pub block_id: Option<BlockId>,
 }
 
@@ -112,13 +115,16 @@ pub struct ListSessions;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ListSessionsResult {
+    #[serde(default)]
     pub sessions: Vec<SessionSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: SessionId,
+    #[serde(default)]
     pub shell: String,
+    #[serde(default)]
     pub started_at: String,
 }
 

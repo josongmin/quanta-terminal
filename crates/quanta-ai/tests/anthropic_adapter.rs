@@ -242,3 +242,48 @@ async fn whitespace_only_command_maps_to_parse_error() {
         .expect_err("whitespace-only command must parse-error");
     assert!(matches!(err, SuggestionProviderError::Parse(_)), "{err:?}");
 }
+
+/// FIX 3: a successful `suggest()` must record an observation on the
+/// `ai.request.latency_ms` histogram. We inject an `InMemoryRecorder` via
+/// the builder and assert the histogram's count is `>= 1` after one call.
+#[tokio::test]
+async fn successful_suggest_records_latency_histogram() {
+    use std::sync::Arc;
+
+    use quanta_ai::METRIC_REQUEST_LATENCY_MS;
+    use quanta_metrics::{InMemoryRecorder, MetricsRecorder};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_body("ls")))
+        .mount(&server)
+        .await;
+
+    let recorder = InMemoryRecorder::new_arc();
+    let rec_trait: Arc<dyn MetricsRecorder> = recorder.clone();
+    let provider = AnthropicProvider::builder("test-api-key".into())
+        .endpoint(format!("{}/v1/messages", server.uri()))
+        .model("claude-test-model")
+        .timeout(Duration::from_millis(1500))
+        .recorder(rec_trait)
+        .build();
+
+    provider
+        .suggest(SuggestionRequest::new("list files"))
+        .await
+        .expect("ok");
+
+    let snap = recorder.snapshot();
+    let hist = snap
+        .histograms
+        .iter()
+        .find(|(k, _)| k == METRIC_REQUEST_LATENCY_MS)
+        .map(|(_, v)| v.clone())
+        .expect("latency histogram must be present after a suggest call");
+    assert!(
+        hist.count >= 1,
+        "expected >=1 latency observation, got {}",
+        hist.count
+    );
+}

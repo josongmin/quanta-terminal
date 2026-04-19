@@ -96,6 +96,76 @@ export interface InstallShellIntegrationReply {
 }
 
 /**
+ * Inverse of {@link InstallShellIntegrationOptions}. Same two-phase
+ * semantics — `confirm: false` returns the region that would be removed
+ * without mutating, `confirm: true` actually strips the guarded block.
+ * Idempotent: second call when the block is already gone returns
+ * `alreadyAbsent: true` and does NOT mutate.
+ */
+export interface UninstallShellIntegrationOptions {
+  readonly shell: ShellKind;
+  /** `true` to actually remove the block; `false` (default) = preview only. */
+  readonly confirm?: boolean;
+}
+
+export interface UninstallShellIntegrationReply {
+  /** Absolute path to the dotfile we previewed or mutated. */
+  readonly targetPath: string;
+  /**
+   * The region that was (or would be) removed, including guard markers.
+   * Empty string when the block is not present.
+   */
+  readonly removedRegion: string;
+  /** True iff the file existed but contained no guard block. */
+  readonly alreadyAbsent: boolean;
+  /** True iff the dotfile does not exist at all (treated as "already absent"). */
+  readonly fileMissing: boolean;
+  /** True only when this invocation mutated the file. */
+  readonly mutated: boolean;
+  /** Line count of the file AFTER this call (zero when missing / emptied). */
+  readonly lineCount: number;
+}
+
+/* ------------------------------------------------------------------------ */
+/*                  Structured error wire protocol (ADR P1)                  */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Closed enumeration of the errors the host bridge can surface. Callers
+ * switch on `.code` to branch (e.g. "show Auth re-prompt" vs "show retry
+ * banner") rather than string-matching on a localised message. Every new
+ * code MUST also be emitted by at least one host to avoid a UI branch that
+ * is statically unreachable; the Rust side owns the set of values.
+ */
+export type HostBridgeErrorCode =
+  | 'session-not-found'
+  | 'session-unresponsive'
+  | 'editor-not-found'
+  | 'editor-invalid-path'
+  | 'shell-integration-outside-home'
+  | 'shell-integration-missing'
+  | 'ai-suggest-auth-failed'
+  | 'ai-suggest-rate-limited'
+  | 'ai-suggest-network'
+  | 'ai-suggest-timeout'
+  | 'sidecar-unavailable'
+  | 'bridge-internal'
+  | 'unknown';
+
+/**
+ * Structured error shape returned by the Rust side. `code` is the stable
+ * machine-readable selector; `userMessage` is the only string the UI is
+ * allowed to render verbatim (it has been sanitised on the Rust side so it
+ * does not carry file paths, stack traces, or the bare OS error text).
+ */
+export interface HostBridgeError {
+  readonly code: HostBridgeErrorCode;
+  readonly userMessage: string;
+  /** Structured diagnostic context — safe to log but not display raw. */
+  readonly context?: Readonly<Record<string, unknown>>;
+}
+
+/**
  * Phase-1 bridge surface. The real engine will replace this with JSON-RPC over
  * a Unix socket (see ADR 0004); the UI never sees that difference because it
  * only knows this interface.
@@ -172,6 +242,31 @@ export interface HostBridge {
   ): Promise<InstallShellIntegrationReply>;
 
   /**
+   * Symmetric inverse of {@link HostBridge.installShellIntegration}. Removes
+   * the guarded block from the user's dotfile (or previews the region that
+   * would be removed). Rejects with a {@link HostBridgeErrorThrown} (host-
+   * tauri) carrying `code: 'shell-integration-outside-home'` when the target
+   * resolves outside `$HOME`. Returns `alreadyAbsent: true` (no rejection)
+   * when the file is missing or already has no block.
+   */
+  uninstallShellIntegration(
+    options: UninstallShellIntegrationOptions,
+  ): Promise<UninstallShellIntegrationReply>;
+
+  /**
+   * Post an OS-level notification (title + body). Used by the long-running
+   * command completion detector (`features/notifications`). Hosts that
+   * cannot post notifications — the mock adapter, headless dev shells —
+   * resolve silently rather than reject so the UI doesn't have to branch.
+   *
+   * Tauri note: the host-tauri bridge routes through Tauri's notification
+   * plugin which is gated by `notification:default` in
+   * `src-tauri/capabilities/`. Track β owns that capabilities file; the
+   * UI side only needs the method to exist on every adapter.
+   */
+  notify(options: NotifyOptions): Promise<void>;
+
+  /**
    * Ask the host for an AI suggestion given a natural-language prompt.
    *
    * Phase 5 (ADR 0012): the Tauri host delegates to the `quanta-ai` crate's
@@ -187,12 +282,35 @@ export interface HostBridge {
   aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion>;
 }
 
+/** Input to `HostBridge.notify`. */
+export interface NotifyOptions {
+  readonly title: string;
+  readonly body: string;
+}
+
 /** Input to `aiSuggest`. Phase 5 only uses `prompt`; `cwd` is reserved for a
- *  later phase where the classifier weighs workspace-relative paths. */
+ *  later phase where the classifier weighs workspace-relative paths.
+ *
+ *  `timeoutMs` (FIX 2): optional caller-supplied hard deadline in
+ *  milliseconds. When omitted, hosts apply {@link AI_SUGGEST_DEFAULT_TIMEOUT_MS}
+ *  (8 s) — strictly under the Anthropic adapter's 10 s absolute cap so the
+ *  caller's deadline always wins. Shorter values let UIs fail fast
+ *  (e.g. an inline completion widget) without blocking on a stuck provider.
+ *  A non-positive value is treated as "use the default". */
 export interface AiSuggestOptions {
   readonly prompt: string;
   readonly cwd?: string;
+  readonly timeoutMs?: number;
 }
+
+/**
+ * Default `timeoutMs` applied when `AiSuggestOptions.timeoutMs` is omitted.
+ * Mirrors `AI_SUGGEST_DEFAULT_TIMEOUT_MS` on the Rust side; keep the two in
+ * lockstep so host + UI never disagree on how long a suggestion is allowed to
+ * take. 8 s is generous for LLM-backed providers and strictly under
+ * Anthropic's 10 s absolute request cap.
+ */
+export const AI_SUGGEST_DEFAULT_TIMEOUT_MS = 8_000;
 
 /** Result of `aiSuggest`. Shape mirrors the `quanta-ai` crate's
  *  `SuggestionResponse` + nested `ClassifiedCommand`. */

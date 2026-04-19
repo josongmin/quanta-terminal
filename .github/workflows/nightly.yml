@@ -1,0 +1,122 @@
+name: Nightly
+
+# Runs the release build matrix every night at 06:00 UTC against `main`
+# so platform-specific regressions surface before a tag. Artifacts are
+# ephemeral (7-day retention) and never published to a GitHub release.
+#
+# Skipping vs failing:
+#   - When there have been no commits since the previous nightly, the job
+#     still runs so we catch issues introduced by upstream dependency or
+#     toolchain drift.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  PNPM_VERSION: '9.12.0'
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: nightly (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-arm64
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+          - label: macos-x86_64
+            os: macos-13
+            rust_target: x86_64-apple-darwin
+          - label: windows-x86_64
+            os: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+          - label: linux-x86_64
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-${{ matrix.label }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev libglib2.0-dev pkg-config \
+            imagemagick gnupg
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build sidecar
+        shell: bash
+        run: ./scripts/package-sidecar.sh
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+      - name: pnpm -r test
+        run: pnpm -r --if-present test
+
+      - name: Build Tauri bundle (unsigned)
+        shell: bash
+        run: pnpm --filter @quanta/host-tauri tauri build --target ${{ matrix.rust_target }}
+
+      - name: Collect nightly artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/quanta-nightly/${{ matrix.label }}"
+          mkdir -p "$STAGE"
+          BUNDLE_DIR="packages/host-tauri/src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          if [ -d "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \
+              \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' \
+                 -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \) \
+              -exec cp -v {} "$STAGE/" \;
+          fi
+          ls -la "$STAGE" || true
+          echo "STAGE_DIR=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Upload nightly artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.label }}-${{ github.run_id }}
+          path: ${{ env.STAGE_DIR }}
+          retention-days: 7
+          if-no-files-found: warn

@@ -101,6 +101,24 @@ jobs:
       - name: Run check-hex-imports
         run: cargo run --quiet -p check-hex-imports -- --root .
 
+  check-event-topic-names:
+    name: check-event-topic-names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu-latest
+          save-if: 'false'
+
+      - name: Run check-event-topic-names
+        run: cargo run --quiet -p check-event-topic-names -- --root .
+
   ts:
     name: ts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

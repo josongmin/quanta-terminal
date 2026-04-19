@@ -22,6 +22,7 @@ import { Button } from '../../shared/ui/button/index.js';
 import { useBannerStore, selectVisibleConditions } from '../../entities/banner/index.js';
 import { pickBannerCondition, type BannerCondition } from '../../shared/lib/banner-precedence.js';
 import type { BannerKind } from '../../shared/ui/banner/index.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './banner-host.module.css';
 
 /**
@@ -50,30 +51,30 @@ interface ConditionPresentation {
 const PRESENTATION: Readonly<Record<BannerCondition, ConditionPresentation>> = {
   crash: {
     kind: 'danger',
-    message: 'Your shell exited unexpectedly. Session has been recovered.',
-    actionLabel: 'View crash details',
-    dismissLabel: 'Dismiss',
+    message: t('banner.crash.message'),
+    actionLabel: t('banner.crash.action'),
+    dismissLabel: t('banner.dismissDefault'),
     role: 'alert',
   },
   quota: {
     kind: 'warning',
-    message: 'History storage is above the soft quota. Older blocks may be pruned.',
-    actionLabel: 'Open history settings',
-    dismissLabel: 'Dismiss',
+    message: t('banner.quota.message'),
+    actionLabel: t('banner.quota.action'),
+    dismissLabel: t('banner.dismissDefault'),
     role: 'status',
   },
   secret_rescan: {
     kind: 'info',
-    message: 'Secret redaction rules changed. Rescanning recent history.',
-    actionLabel: 'Review rules',
-    dismissLabel: 'Dismiss',
+    message: t('banner.secretRescan.message'),
+    actionLabel: t('banner.secretRescan.action'),
+    dismissLabel: t('banner.dismissDefault'),
     role: 'status',
   },
   shell_integration: {
     kind: 'info',
-    message: 'Shell integration is not installed — cwd and prompts are estimated.',
-    actionLabel: 'Install shell integration',
-    dismissLabel: 'Not now',
+    message: t('banner.shellIntegration.message'),
+    actionLabel: t('banner.shellIntegration.action'),
+    dismissLabel: t('banner.shellIntegration.dismiss'),
     role: 'status',
   },
 };

@@ -39,18 +39,32 @@ pub enum Producer {
 ///
 /// The `payload` type parameter is the event's body. See the `events::Event` enum
 /// for the typed payload union.
+///
+/// Schema-evolution note: additive / cross-cutting fields carry `#[serde(default)]`
+/// so an older decoder can still ingest newer envelopes that gained
+/// optional metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope<P> {
     pub event_id: EventId,
     pub monotonic_seq: u64,
     pub session_id: SessionId,
+    #[serde(default = "none_block")]
     pub block_id: Option<BlockId>,
     #[serde(with = "time::serde::rfc3339")]
     pub wall_clock_ts: OffsetDateTime,
     pub producer_id: Producer,
     pub schema_version: SchemaVersion,
+    #[serde(default = "none_event")]
     pub causation_id: Option<EventId>,
     pub payload: P,
+}
+
+fn none_block() -> Option<BlockId> {
+    None
+}
+
+fn none_event() -> Option<EventId> {
+    None
 }
 
 impl<P> Envelope<P> {

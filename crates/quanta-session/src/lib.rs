@@ -8,6 +8,6 @@ pub mod adapters;
 pub mod domain;
 pub mod ports;
 
-pub use adapters::SessionActor;
+pub use adapters::{SessionActor, METRIC_APPEND_LATENCY_US, METRIC_ENVELOPE_APPENDED};
 pub use domain::{InputSubmission, SessionConfig, SessionId, SessionSnapshot};
 pub use ports::{SessionError, SessionHandle};

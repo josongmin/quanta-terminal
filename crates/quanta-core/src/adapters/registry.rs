@@ -2,6 +2,7 @@
 //! RPC calls into the `Engine` and event fetch into the shared broadcast
 //! channel fed by `FanoutSink`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,7 +16,13 @@ use quanta_proto::rpc::{
 use quanta_protocol::{ControlHandler, ReplayError};
 use quanta_session::{InputSubmission, SessionHandle as _};
 use tokio::sync::{broadcast, Mutex};
-use tracing::warn;
+use tracing::{debug, warn};
+
+/// Lag summaries are emitted every LAG_SUMMARY_INTERVAL observed `Lagged`
+/// events; the counter then resets. Keeps operational visibility to
+/// backpressure without producing log storms when a slow subscriber keeps
+/// lagging for an extended period. See FIX 4 in the audit.
+const LAG_SUMMARY_INTERVAL: u64 = 100;
 
 use super::engine::Engine;
 
@@ -33,6 +40,16 @@ const NEXT_EVENT_WAIT: Duration = Duration::from_millis(20);
 pub struct ControlRegistry {
     pub engine: Engine,
     rx: Mutex<broadcast::Receiver<Envelope<Event>>>,
+    /// Running total of envelopes dropped due to broadcast lag since the
+    /// last summary log. Incremented on every `RecvError::Lagged(n)` with
+    /// `n`, then reset each time we log a summary. See
+    /// [`LAG_SUMMARY_INTERVAL`].
+    lag_counter: AtomicU64,
+    /// Count of Lagged occurrences (not envelopes) since last summary, so
+    /// the interval is in terms of events observed by the receiver, not a
+    /// raw envelope count — matches the task spec: "every 100 lags, log
+    /// once with the total and reset".
+    lag_events_since_summary: AtomicU64,
 }
 
 impl std::fmt::Debug for ControlRegistry {
@@ -46,7 +63,16 @@ impl ControlRegistry {
         Arc::new(Self {
             engine,
             rx: Mutex::new(rx),
+            lag_counter: AtomicU64::new(0),
+            lag_events_since_summary: AtomicU64::new(0),
         })
+    }
+
+    /// Observed-but-not-yet-summarized lag-dropped envelope count. Exposed
+    /// for tests.
+    #[must_use]
+    pub fn lag_counter_snapshot(&self) -> u64 {
+        self.lag_counter.load(Ordering::Relaxed)
     }
 }
 
@@ -161,10 +187,31 @@ impl ControlHandler for ControlRegistry {
             Ok(Ok(env)) => Some(env),
             Ok(Err(broadcast::error::RecvError::Closed)) => None,
             Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
-                warn!(
+                // FIX 4: broadcast send never distinguishes Lagged from
+                // NoSubscribers (the sender side only ever sees "no
+                // subscribers"); lag is observed HERE on the receiver. We
+                // accumulate a running total and summarize every
+                // LAG_SUMMARY_INTERVAL Lagged occurrences. Individual drops
+                // stay at debug level so a burst of lag doesn't produce a
+                // log storm.
+                self.lag_counter.fetch_add(n, Ordering::Relaxed);
+                debug!(
                     dropped = n,
-                    "control registry: broadcast subscriber lagged; events replayable via event log"
+                    "control registry: broadcast subscriber lagged; envelope recoverable via event log"
                 );
+                let observed = self
+                    .lag_events_since_summary
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1;
+                if observed >= LAG_SUMMARY_INTERVAL {
+                    let total = self.lag_counter.swap(0, Ordering::Relaxed);
+                    self.lag_events_since_summary.store(0, Ordering::Relaxed);
+                    warn!(
+                        total_dropped = total,
+                        over_lag_events = observed,
+                        "control registry: broadcast backpressure summary (subscriber cannot keep up)"
+                    );
+                }
                 None
             }
             Err(_timeout) => None,

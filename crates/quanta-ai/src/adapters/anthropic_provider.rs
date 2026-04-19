@@ -26,12 +26,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use quanta_metrics::{MetricsRecorder, NoopRecorder};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::HeuristicClassifier;
 use crate::domain::{SuggestionRequest, SuggestionResponse};
 use crate::ports::{RiskClassifier, SuggestionProvider, SuggestionProviderError};
+
+/// Metric name: histogram of per-request latency (ms). See FIX 3.
+///
+/// Units: milliseconds (wall-clock from before `.send()` to either the
+/// successful parse, a non-2xx status decode, or a transport error).
+pub const METRIC_REQUEST_LATENCY_MS: &str = "ai.request.latency_ms";
 
 /// Default Claude model used when the caller does not override via
 /// [`AnthropicProviderBuilder::model`].
@@ -103,6 +110,10 @@ pub struct AnthropicProvider {
     model: String,
     api_key: ApiKey,
     classifier: Arc<dyn RiskClassifier>,
+    /// FIX 3: optional metrics recorder. Defaults to `NoopRecorder` when
+    /// the caller doesn't wire one; production callers inject the shared
+    /// `InMemoryRecorder` via [`AnthropicProviderBuilder::recorder`].
+    recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl AnthropicProvider {
@@ -142,6 +153,7 @@ pub struct AnthropicProviderBuilder {
     api_key: ApiKey,
     classifier: Arc<dyn RiskClassifier>,
     timeout: Duration,
+    recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl AnthropicProviderBuilder {
@@ -154,6 +166,7 @@ impl AnthropicProviderBuilder {
             api_key: ApiKey::new(api_key),
             classifier: Arc::new(HeuristicClassifier::new()),
             timeout: REQUEST_TIMEOUT,
+            recorder: Arc::new(NoopRecorder::new()),
         }
     }
 
@@ -187,6 +200,15 @@ impl AnthropicProviderBuilder {
         self
     }
 
+    /// Override the metrics recorder. Production binds this to the shared
+    /// `InMemoryRecorder` so every suggest call contributes to the
+    /// [`METRIC_REQUEST_LATENCY_MS`] histogram.
+    #[must_use]
+    pub fn recorder(mut self, recorder: Arc<dyn MetricsRecorder>) -> Self {
+        self.recorder = recorder;
+        self
+    }
+
     /// Finalize the builder into an [`AnthropicProvider`].
     #[must_use]
     pub fn build(self) -> AnthropicProvider {
@@ -200,6 +222,7 @@ impl AnthropicProviderBuilder {
             model: self.model,
             api_key: self.api_key,
             classifier: self.classifier,
+            recorder: self.recorder,
         }
     }
 }
@@ -214,6 +237,25 @@ impl SuggestionProvider for AnthropicProvider {
         if prompt.is_empty() {
             return Err(SuggestionProviderError::InvalidPrompt(
                 "prompt is empty".into(),
+            ));
+        }
+        // Null bytes inside a prompt are rejected at the adapter rather
+        // than forwarded to Anthropic. Reasons:
+        //   1. The HTTP JSON body accepts null bytes via `\u0000` escape,
+        //      so the request wouldn't fail at the transport layer — it
+        //      would reach the model and produce an opaque "invalid
+        //      content" server error the UI can't act on meaningfully.
+        //   2. A null byte is a plausible smuggling vector (C-string
+        //      truncation in any downstream logger / audit trail).
+        // Reject early with a specific [`SuggestionProviderError::InvalidPrompt`]
+        // so the user gets a clean "invalid prompt" message before we
+        // pay the network round-trip cost. Unicode content (combining
+        // marks, RTL overrides, ZWJ sequences) is NOT filtered here;
+        // those are legitimate prompt contents and the adapter forwards
+        // them byte-transparent per its UTF-8 contract.
+        if prompt.as_bytes().contains(&0) {
+            return Err(SuggestionProviderError::InvalidPrompt(
+                "prompt contains a null byte".into(),
             ));
         }
 
@@ -247,12 +289,18 @@ impl SuggestionProvider for AnthropicProvider {
         let response = match http_result {
             Ok(r) => r,
             Err(err) if err.is_timeout() => {
+                let failed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                self.recorder
+                    .record_histogram(METRIC_REQUEST_LATENCY_MS, failed_ms);
                 tracing::warn!(model = %self.model, "anthropic: request timed out");
                 return Err(SuggestionProviderError::Timeout(
                     "request exceeded 10s cap".into(),
                 ));
             }
             Err(err) => {
+                let failed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                self.recorder
+                    .record_histogram(METRIC_REQUEST_LATENCY_MS, failed_ms);
                 tracing::warn!(model = %self.model, ?err, "anthropic: network failure");
                 return Err(SuggestionProviderError::Network(format!(
                     "request failed: {err}"
@@ -264,6 +312,12 @@ impl SuggestionProvider for AnthropicProvider {
         let latency_ms = started.elapsed().as_millis();
 
         if !status.is_success() {
+            // FIX 3: still record the latency for non-2xx so dashboards
+            // see the full distribution (success + auth + rate-limit).
+            self.recorder.record_histogram(
+                METRIC_REQUEST_LATENCY_MS,
+                u64::try_from(latency_ms).unwrap_or(u64::MAX),
+            );
             tracing::warn!(
                 model = %self.model,
                 status = status.as_u16(),
@@ -297,6 +351,14 @@ impl SuggestionProvider for AnthropicProvider {
 
         let classified = self.classifier.classify(command);
 
+        // FIX 3: record the end-to-end wall time of a successful request
+        // in milliseconds. We log the same value at info level already;
+        // the histogram is the machine-readable twin.
+        self.recorder.record_histogram(
+            METRIC_REQUEST_LATENCY_MS,
+            u64::try_from(latency_ms).unwrap_or(u64::MAX),
+        );
+
         tracing::info!(
             model = %self.model,
             status = status.as_u16(),
@@ -313,6 +375,33 @@ impl SuggestionProvider for AnthropicProvider {
             classified,
             rationale: None,
         })
+    }
+
+    /// Override the default trait implementation so a caller-supplied
+    /// timeout races against a `tokio::time::timeout` AND the underlying
+    /// reqwest client's own hard cap. The effective deadline is
+    /// `min(caller, REQUEST_TIMEOUT)` — a longer caller timeout is
+    /// clamped down to the adapter's 10 s ceiling per ADR-documented
+    /// provider hygiene; a shorter caller timeout wins.
+    ///
+    /// `tokio::time::timeout` on `suggest()` is cheap when the call
+    /// finishes on time (no wake-ups on the hot path); we deliberately
+    /// do NOT rebuild the `reqwest::Client` per-call because that
+    /// leaks connection-pool cost. The adapter's own client already
+    /// enforces the hard cap, so the caller-supplied wrap is purely
+    /// additive.
+    async fn suggest_with_timeout(
+        &self,
+        request: SuggestionRequest,
+        timeout: Duration,
+    ) -> Result<SuggestionResponse, SuggestionProviderError> {
+        let effective = timeout.min(REQUEST_TIMEOUT);
+        match tokio::time::timeout(effective, self.suggest(request)).await {
+            Ok(res) => res,
+            Err(_elapsed) => Err(SuggestionProviderError::Timeout(format!(
+                "anthropic provider exceeded {effective:?}"
+            ))),
+        }
     }
 }
 

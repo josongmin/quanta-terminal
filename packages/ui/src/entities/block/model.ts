@@ -54,6 +54,15 @@ export const DEFAULT_BLOCK_SESSION_ID = '__default__' as SessionId;
  */
 export const DEFAULT_BLOCK_WATCHDOG_MS = 30_000;
 
+/**
+ * Audit P0 (fix 2): upper bound on the per-store LRU of applied event ids.
+ * Chosen to comfortably exceed the sidecar's resume-replay window (a few
+ * dozen events on a typical reconnect) while staying small enough that the
+ * backing Set fits in a handful of kilobytes. FIFO eviction is adequate —
+ * event ids monotonically age out as new ones arrive.
+ */
+export const APPLIED_EVENT_ID_LRU_CAPACITY = 256;
+
 export interface Block {
   /** Stable id (UUID v4 via crypto.randomUUID, ulid-lite fallback). */
   readonly id: string;
@@ -103,6 +112,19 @@ export interface BlockState {
    * setActiveBlockId call.
    */
   readonly activeBlockId: string | null;
+  /**
+   * Audit P0 (fix 2): bounded FIFO LRU of applied event ids. Event-bearing
+   * actions (see `BlockActions`) consult this set before mutating so
+   * replayed events from a sidecar reconnect don't flip terminal state.
+   * Kept inside `BlockState` so resetting the store (tests, clear) wipes it
+   * too; consumers should never observe it directly.
+   *
+   * We pair the `Set` (O(1) membership) with an `order` array so FIFO
+   * eviction at capacity is trivial. Insertion order is preserved by JS
+   * `Set` semantics in principle, but the explicit array makes the eviction
+   * code obvious and allows tests to introspect size deterministically.
+   */
+  readonly appliedEventIds: ReadonlySet<string>;
 }
 
 export interface StartBlockOptions {
@@ -120,6 +142,13 @@ export interface StartBlockOptions {
    * multi-session call sites pass the session id that spawned the PTY write.
    */
   readonly sessionId?: SessionId;
+  /**
+   * Audit P0 (fix 2): optional event envelope id. When present, the action
+   * is deduped against the per-store applied-id LRU — a second call with
+   * the same id is a no-op. Callers that don't source from an event (tests,
+   * composer) may omit this.
+   */
+  readonly eventId?: string;
 }
 
 export interface CreateBlockOptions {
@@ -127,6 +156,19 @@ export interface CreateBlockOptions {
   readonly rerunOf?: string | null;
   /** See StartBlockOptions.sessionId. */
   readonly sessionId?: SessionId;
+  /** See StartBlockOptions.eventId. */
+  readonly eventId?: string;
+}
+
+/**
+ * Audit P1 (fix 4): optional match guard for the `setActiveBlockId` action.
+ * When `requireSessionMatch` is set, the action is a no-op unless the
+ * targeted block belongs to that session id. Callers that own a specific
+ * session (router disposers, composer) pass their owning id so a racing
+ * caller cannot overwrite another session's active pointer.
+ */
+export interface SetActiveBlockIdOptions {
+  readonly requireSessionMatch?: SessionId;
 }
 
 export interface BlockActions {
@@ -140,16 +182,21 @@ export interface BlockActions {
    * `createBlock` and `setActive` calls.
    */
   startBlock(command: string, cwd: string, options?: StartBlockOptions): string;
-  appendBlockOutput(id: string, chunk: Uint8Array): void;
-  completeBlock(id: string, exitCode: number | null): void;
-  cancelBlock(id: string): void;
-  errorBlock(id: string, message: string): void;
+  appendBlockOutput(id: string, chunk: Uint8Array, eventId?: string): void;
+  completeBlock(id: string, exitCode: number | null, eventId?: string): void;
+  cancelBlock(id: string, eventId?: string): void;
+  errorBlock(id: string, message: string, eventId?: string): void;
   /**
    * Set the active block pointer directly. Most callers should use
    * `startBlock` instead; this action exists for the router (which clears
    * the pointer on boundary detection) and for tests.
+   *
+   * Audit P1 (fix 4): when `options.requireSessionMatch` is present, the
+   * mutation applies only if the (non-null) target block is owned by that
+   * session. Used to close the router↔composer race where two callers on
+   * different sessions can stomp each other's active pointer.
    */
-  setActiveBlockId(id: string | null): void;
+  setActiveBlockId(id: string | null, options?: SetActiveBlockIdOptions): void;
   toggleCollapse(id: string): void;
   togglePin(id: string): void;
   /** Wipe non-pinned blocks. Pinned blocks preserve their position. */
@@ -172,6 +219,7 @@ const INITIAL: BlockState = {
   order: [],
   entities: {},
   activeBlockId: null,
+  appliedEventIds: new Set<string>(),
 };
 
 /**
@@ -180,12 +228,37 @@ const INITIAL: BlockState = {
  * would be meaningless and subscribers don't care about their identity.
  * Keyed by block id; cleared on terminal transitions.
  */
-const watchdogTimers = new Map<string, ReturnType<typeof setTimeout>>();
+interface WatchdogHandle {
+  readonly timerId: ReturnType<typeof setTimeout>;
+  /** Monotonic timestamp (performance.now) at which the watchdog was armed. */
+  readonly armedAt: number;
+  /** Full timeout in ms — used when the inner callback needs to check
+   *  elapsed time against monotonic clock regardless of system clock jumps. */
+  readonly timeoutMs: number;
+}
+
+const watchdogTimers = new Map<string, WatchdogHandle>();
+
+/**
+ * Audit P0 (fix 5): the block entity uses monotonic time (`performance.now`)
+ * for DURATION measurements and watchdog scheduling, while keeping
+ * `Date.now` for wall-clock metadata (`startedAt`, `completedAt`). The
+ * subtle rule: "how long did this take" must survive system-clock jumps
+ * (NTP sync, DST, suspend/resume); "when did this happen" is a display
+ * value and should reflect the user's clock.
+ */
+function monotonicNow(): number {
+  const g = globalThis as typeof globalThis & {
+    performance?: { now?: () => number };
+  };
+  if (g.performance?.now) return g.performance.now();
+  return Date.now();
+}
 
 function clearWatchdog(id: string): void {
   const t = watchdogTimers.get(id);
   if (t !== undefined) {
-    clearTimeout(t);
+    clearTimeout(t.timerId);
     watchdogTimers.delete(id);
   }
 }
@@ -193,7 +266,18 @@ function clearWatchdog(id: string): void {
 function armWatchdog(id: string, ms: number, onFire: () => void): void {
   clearWatchdog(id);
   if (!Number.isFinite(ms) || ms <= 0) return;
-  watchdogTimers.set(id, setTimeout(onFire, ms));
+  // Audit P0 (fix 5): `setTimeout`'s scheduling is already a monotonic
+  // construct in every host we target — it measures host-ticks, not wall
+  // clock, so a backward `Date.now()` jump does not delay it. We therefore
+  // hand the firing decision to the timer itself and deliberately do NOT
+  // implement a `Date.now() - startedAt` elapsed check in the callback
+  // (that was the audit's explicit anti-pattern). The monotonic checkpoint
+  // (`armedAt`) is captured for telemetry / future elapsed reporting; the
+  // callback guards against late-fire against terminal state via the
+  // consumer's `onFire` closure (see `startBlock` / `appendBlockOutput`).
+  const armedAt = monotonicNow();
+  const timerId = setTimeout(onFire, ms);
+  watchdogTimers.set(id, { timerId, armedAt, timeoutMs: ms });
 }
 
 /**
@@ -214,12 +298,36 @@ function nextId(): string {
   return `blk_${ts}_${rand}`;
 }
 
+/**
+ * Audit P0 (fix 2): bounded FIFO eviction helper. Adds `eventId` to the set
+ * and, when over capacity, evicts the OLDEST entry using JS Set's insertion-
+ * order guarantee. Returns a NEW Set (the store holds it as a value; zustand
+ * consumers expect reference equality checks to detect change).
+ */
+function withAppliedEventId(prev: ReadonlySet<string>, eventId: string): Set<string> {
+  if (prev.has(eventId)) {
+    // Caller is responsible for short-circuiting before we reach here; defend
+    // anyway so a mis-threaded call doesn't silently double-count capacity.
+    return new Set(prev);
+  }
+  const next = new Set(prev);
+  next.add(eventId);
+  while (next.size > APPLIED_EVENT_ID_LRU_CAPACITY) {
+    const oldest = next.values().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
 export const useBlockStore = create<BlockState & BlockActions>()(
   subscribeWithSelector((set, get) => ({
     ...INITIAL,
 
     createBlock: (command, cwd, options) => {
       const id = nextId();
+      // Audit P0 (fix 5): wall-clock for the user-visible timestamp; monotonic
+      // is reserved for durations and watchdog scheduling.
       const now = Date.now();
       const block: Block = {
         id,
@@ -236,10 +344,22 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         errorMessage: null,
         rerunOfId: options?.rerunOf ?? null,
       };
-      set((prev) => ({
-        order: [...prev.order, id],
-        entities: { ...prev.entities, [id]: block },
-      }));
+      const eventId = options?.eventId;
+      set((prev) => {
+        // Audit P0 (fix 2): event-id idempotency — if the sidecar already
+        // delivered this event (typical after a resume-replay) we must not
+        // re-create the block. Replayed events without an id (tests) skip
+        // the dedupe path entirely for backward compat.
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          return prev;
+        }
+        return {
+          order: [...prev.order, id],
+          entities: { ...prev.entities, [id]: block },
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
+        };
+      });
       return id;
     },
 
@@ -264,8 +384,17 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         errorMessage: null,
         rerunOfId: options?.rerunOf ?? null,
       };
+      const eventId = options?.eventId;
       let previousActiveId: string | null = null;
+      let skipped = false;
       set((prev) => {
+        // Audit P0 (fix 2): skip replayed starts — a duplicate startBlock
+        // event from a resume cursor must not spawn a second block with its
+        // own side effects (watchdog arm, cancel-previous).
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          skipped = true;
+          return prev;
+        }
         const nextEntities = { ...prev.entities };
         const prevActive = prev.activeBlockId;
         if (prevActive !== null) {
@@ -284,8 +413,11 @@ export const useBlockStore = create<BlockState & BlockActions>()(
           order: [...prev.order, id],
           entities: nextEntities,
           activeBlockId: id,
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
         };
       });
+      if (skipped) return id;
       // Clear any lingering watchdog from the superseded block — we just
       // transitioned it to canceled, but the timer would still fire.
       if (previousActiveId !== null) clearWatchdog(previousActiveId);
@@ -304,11 +436,34 @@ export const useBlockStore = create<BlockState & BlockActions>()(
       return id;
     },
 
-    setActiveBlockId: (id) => set(() => ({ activeBlockId: id })),
+    setActiveBlockId: (id, options) =>
+      set((prev) => {
+        // Audit P1 (fix 4): session-match guard — skip the write when the
+        // caller required a specific owning session and the targeted block
+        // doesn't belong to that session. A `null` target with a match guard
+        // also skips unless the CURRENT active block belongs to the session
+        // (otherwise a router disposer would blanket-clear cross-session).
+        const required = options?.requireSessionMatch;
+        if (required !== undefined) {
+          if (id !== null) {
+            const targetBlock = prev.entities[id];
+            if (!targetBlock || targetBlock.sessionId !== required) return prev;
+          } else {
+            const active = prev.activeBlockId;
+            if (active === null) return prev;
+            const activeBlock = prev.entities[active];
+            if (!activeBlock || activeBlock.sessionId !== required) return prev;
+          }
+        }
+        return { ...prev, activeBlockId: id };
+      }),
 
-    appendBlockOutput: (id, chunk) => {
+    appendBlockOutput: (id, chunk, eventId) => {
       let reset = false;
       set((prev) => {
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          return prev;
+        }
         const b = prev.entities[id];
         if (!b) return prev;
         // Copy the chunk defensively: callers often reuse buffers for the
@@ -321,6 +476,8 @@ export const useBlockStore = create<BlockState & BlockActions>()(
             ...prev.entities,
             [id]: { ...b, outputChunks: [...b.outputChunks, owned] },
           },
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
         };
       });
       if (reset) {
@@ -342,11 +499,15 @@ export const useBlockStore = create<BlockState & BlockActions>()(
       }
     },
 
-    completeBlock: (id, exitCode) => {
-      clearWatchdog(id);
+    completeBlock: (id, exitCode, eventId) => {
+      let applied = false;
       set((prev) => {
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          return prev;
+        }
         const b = prev.entities[id];
         if (!b || b.status !== 'running') return prev;
+        applied = true;
         const nextActive = prev.activeBlockId === id ? null : prev.activeBlockId;
         return {
           ...prev,
@@ -355,15 +516,22 @@ export const useBlockStore = create<BlockState & BlockActions>()(
             [id]: { ...b, status: 'completed', exitCode, completedAt: Date.now() },
           },
           activeBlockId: nextActive,
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
         };
       });
+      if (applied) clearWatchdog(id);
     },
 
-    cancelBlock: (id) => {
-      clearWatchdog(id);
+    cancelBlock: (id, eventId) => {
+      let applied = false;
       set((prev) => {
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          return prev;
+        }
         const b = prev.entities[id];
         if (!b || b.status !== 'running') return prev;
+        applied = true;
         const nextActive = prev.activeBlockId === id ? null : prev.activeBlockId;
         return {
           ...prev,
@@ -372,15 +540,28 @@ export const useBlockStore = create<BlockState & BlockActions>()(
             [id]: { ...b, status: 'canceled', completedAt: Date.now() },
           },
           activeBlockId: nextActive,
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
         };
       });
+      if (applied) clearWatchdog(id);
     },
 
-    errorBlock: (id, message) => {
-      clearWatchdog(id);
+    errorBlock: (id, message, eventId) => {
+      let applied = false;
       set((prev) => {
+        if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
+          return prev;
+        }
         const b = prev.entities[id];
-        if (!b) return prev;
+        // Audit P0 (fix 1): errorBlock must be guarded the same way
+        // completeBlock/cancelBlock are — a late-firing watchdog (e.g. a
+        // 35s-delayed callback on a block that already reported exit=0)
+        // would otherwise REWRITE a completed block to `error`, losing the
+        // original exit code and confusing the UI. Mirror the terminal-state
+        // guard: only apply when the block is currently `running`.
+        if (!b || b.status !== 'running') return prev;
+        applied = true;
         const nextActive = prev.activeBlockId === id ? null : prev.activeBlockId;
         return {
           ...prev,
@@ -394,8 +575,11 @@ export const useBlockStore = create<BlockState & BlockActions>()(
             },
           },
           activeBlockId: nextActive,
+          appliedEventIds:
+            eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
         };
       });
+      if (applied) clearWatchdog(id);
     },
 
     toggleCollapse: (id) =>
@@ -471,10 +655,30 @@ export const useBlockStore = create<BlockState & BlockActions>()(
 
     resetAll: () => {
       for (const id of [...watchdogTimers.keys()]) clearWatchdog(id);
-      set(() => ({ ...INITIAL }));
+      set(() => ({ ...INITIAL, appliedEventIds: new Set<string>() }));
     },
   })),
 );
+
+/**
+ * Audit P1 (fix 3): clear every watchdog timer that belongs to a block in
+ * `removedId`. Exposed as a plain function so `features/command/bind-block-
+ * entity.ts` (the single cross-slice seam) can invoke it from inside the
+ * session-removal hook it already binds. The block entity stays sibling-
+ * free: it does NOT import from `entities/session`; the hook wiring lives
+ * in the feature layer, which is allowed to compose entities.
+ */
+export function clearWatchdogsForSession(sessionId: SessionId): void {
+  const state = useBlockStore.getState();
+  for (const [blockId, block] of Object.entries(state.entities)) {
+    if (block.sessionId === sessionId) clearWatchdog(blockId);
+  }
+}
+
+/** Test-only: check if a watchdog timer is currently armed for a block. */
+export function __hasWatchdogForTests(blockId: string): boolean {
+  return watchdogTimers.has(blockId);
+}
 
 /**
  * Utility — concatenate a block's output chunks into one byte array. The card

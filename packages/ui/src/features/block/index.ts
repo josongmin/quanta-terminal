@@ -4,3 +4,12 @@ export { copyBlock } from './copy.js';
 export type { CopyOptions, CopyResult, CopyScope } from './copy.js';
 export { clearBlocks } from './clear.js';
 export type { ClearBlocksResult } from './clear.js';
+export {
+  exportBlockAs,
+  exportAsMarkdown,
+  exportAsJson,
+  exportAsText,
+  inferCodeFenceLang,
+  stripAnsi,
+} from './export.js';
+export type { ExportFormat } from './export.js';

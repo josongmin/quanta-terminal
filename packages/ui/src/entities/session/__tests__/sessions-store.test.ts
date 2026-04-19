@@ -159,6 +159,56 @@ describe('useSessionStore mirror', () => {
   });
 });
 
+describe('reorderSessions', () => {
+  it('moves a session from one index to another', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A });
+    coll.addSession({ id: B });
+    coll.addSession({ id: C });
+    coll.reorderSessions(0, 2);
+    expect(useSessionsStore.getState().order).toEqual([B, C, A]);
+  });
+
+  it('supports moving backwards', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A });
+    coll.addSession({ id: B });
+    coll.addSession({ id: C });
+    coll.reorderSessions(2, 0);
+    expect(useSessionsStore.getState().order).toEqual([C, A, B]);
+  });
+
+  it('preserves activeId across a reorder', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A });
+    coll.addSession({ id: B });
+    coll.setActive(B);
+    coll.reorderSessions(1, 0);
+    expect(useSessionsStore.getState().activeId).toBe(B);
+    expect(useSessionsStore.getState().order).toEqual([B, A]);
+  });
+
+  it('is a no-op for out-of-range indices', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A });
+    coll.addSession({ id: B });
+    const before = useSessionsStore.getState().order;
+    coll.reorderSessions(-1, 0);
+    coll.reorderSessions(0, 99);
+    expect(useSessionsStore.getState().order).toEqual(before);
+  });
+
+  it('is a no-op when fromIndex === toIndex', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A });
+    coll.addSession({ id: B });
+    const ref = useSessionsStore.getState();
+    coll.reorderSessions(1, 1);
+    // Same reference — no re-render would fire.
+    expect(useSessionsStore.getState()).toBe(ref);
+  });
+});
+
 describe('audit P1 (fix 3): bindSessionRemovalHook', () => {
   let unbind: (() => void) | undefined;
   afterEach(() => {

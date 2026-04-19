@@ -1,0 +1,20 @@
+[package]
+name = "check-paint-no-width-override"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — enforces invariant I-4: the renderer MUST NOT override semantic cell width."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-paint-no-width-override"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+walkdir = "2"

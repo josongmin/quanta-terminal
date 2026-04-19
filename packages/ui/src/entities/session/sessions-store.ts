@@ -80,6 +80,12 @@ export interface SessionsActions {
    * pty_exit event arrived).
    */
   markExited(id: SessionId, exitCode: number | null): void;
+  /**
+   * Reorder the visual tab row by moving the session at `fromIndex` to
+   * `toIndex`. Out-of-range indices / no-op moves are silently ignored. The
+   * `activeId` is preserved — reordering must not swap which tab is active.
+   */
+  reorderSessions(fromIndex: number, toIndex: number): void;
   /** Test helper — wipe everything. */
   reset(): void;
 }
@@ -209,6 +215,27 @@ export const useSessionsStore = create<SessionsState & SessionsActions>()(
             [id]: { ...existing, health: 'exited', exitCode },
           },
         };
+      }),
+
+    reorderSessions: (fromIndex, toIndex) =>
+      set((prev) => {
+        const order = prev.order;
+        if (
+          !Number.isInteger(fromIndex) ||
+          !Number.isInteger(toIndex) ||
+          fromIndex < 0 ||
+          fromIndex >= order.length ||
+          toIndex < 0 ||
+          toIndex >= order.length ||
+          fromIndex === toIndex
+        ) {
+          return prev;
+        }
+        const next = order.slice();
+        const [moved] = next.splice(fromIndex, 1);
+        if (moved === undefined) return prev;
+        next.splice(toIndex, 0, moved);
+        return { ...prev, order: next };
       }),
 
     reset: () => set(() => ({ ...INITIAL })),

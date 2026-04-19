@@ -172,6 +172,46 @@
   color: var(--q-fg-faint);
 }
 
+.exportWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.exportMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  box-shadow: var(--q-shadow-pop);
+}
+
+.exportMenuItem {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: var(--q-radius-sm);
+  color: var(--q-fg);
+  font-family: inherit;
+  font-size: var(--q-font-size-sm);
+  text-align: left;
+  padding: var(--q-space-2) var(--q-space-3);
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out);
+}
+
+.exportMenuItem:hover,
+.exportMenuItem:focus-visible {
+  background: var(--q-bg-elev-1);
+  outline: none;
+}
+
 .caret {
   display: inline-flex;
   transition: transform var(--q-dur-fast) var(--q-ease-out);
@@ -219,6 +259,18 @@
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-sm);
   border-top: 1px solid var(--q-border-subtle);
+}
+/*
+ * Audit P1 (fix 7): the summary chip is the primary affordance in the
+ * collapsed row — "cmd · N lines · 1.2s · exit 0" — so it gets the card's
+ * foreground color and flexes naturally. The optional last-line preview to
+ * its right fades to faint and ellipses when space runs out.
+ */
+.peekSummary {
+  flex: 0 0 auto;
+  color: var(--q-fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .peekText {
   flex: 1 1 auto;

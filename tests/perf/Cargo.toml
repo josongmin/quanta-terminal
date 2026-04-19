@@ -1,0 +1,39 @@
+[package]
+name = "quanta-perf-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — criterion benches for RFC 0001 §13.12–§13.13 perf budgets."
+publish = false
+
+[lints]
+workspace = true
+
+# The harness is a bench-only crate. It intentionally holds no library
+# or binary surface: criterion discovers each `benches/*.rs` file via
+# `[[bench]]` entries. Keeping the crate bench-only means `cargo test
+# --workspace` doesn't compile benchmark dependencies on unrelated
+# workflows; benches are opt-in via `cargo bench -p quanta-perf-harness`.
+
+[dependencies]
+quanta-metrics = { path = "../../crates/quanta-metrics" }
+
+[dev-dependencies]
+# `html_reports` is off to keep the bench artefacts small on CI; the
+# workflow parses `target/criterion/<bench>/<case>/estimates.json`
+# directly.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "keystroke_latency"
+harness = false
+
+[[bench]]
+name = "delta_throughput"
+harness = false
+
+[[bench]]
+name = "atlas_miss"
+harness = false

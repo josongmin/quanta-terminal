@@ -200,4 +200,67 @@ mod tests {
         assert_eq!(a.classified.tier, b.classified.tier);
         assert_eq!(a.id, b.id);
     }
+
+    /// `suggest_with_timeout` wraps `suggest` and MUST surface
+    /// [`SuggestionProviderError::Timeout`] when the caller's deadline
+    /// elapses. We stall the provider by wrapping it in a thin adapter
+    /// that sleeps longer than the supplied timeout, then assert the
+    /// variant.
+    #[tokio::test]
+    async fn suggest_with_timeout_returns_timeout_variant_when_exceeded() {
+        use std::time::Duration;
+
+        /// Decorator that delays before delegating to `inner.suggest`.
+        /// Kept inside the test module so production code stays clean.
+        #[derive(Debug)]
+        struct SlowMock {
+            inner: MockProvider,
+            delay: Duration,
+        }
+
+        #[async_trait]
+        impl crate::ports::SuggestionProvider for SlowMock {
+            async fn suggest(
+                &self,
+                request: SuggestionRequest,
+            ) -> Result<crate::domain::SuggestionResponse, crate::ports::SuggestionProviderError>
+            {
+                tokio::time::sleep(self.delay).await;
+                self.inner.suggest(request).await
+            }
+        }
+
+        let slow = SlowMock {
+            inner: MockProvider::new(),
+            delay: Duration::from_secs(1),
+        };
+        let err = crate::ports::SuggestionProvider::suggest_with_timeout(
+            &slow,
+            SuggestionRequest::new("git status"),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect_err("must timeout");
+        assert!(
+            matches!(err, SuggestionProviderError::Timeout(_)),
+            "expected Timeout; got {err:?}"
+        );
+    }
+
+    /// Fast path: when the provider completes within the deadline,
+    /// `suggest_with_timeout` returns `Ok` with the same payload as
+    /// `suggest`.
+    #[tokio::test]
+    async fn suggest_with_timeout_returns_ok_when_under_budget() {
+        use std::time::Duration;
+        let p = MockProvider::new();
+        let resp = crate::ports::SuggestionProvider::suggest_with_timeout(
+            &p,
+            SuggestionRequest::new("git status"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("under budget");
+        assert_eq!(resp.classified.command, "git status");
+    }
 }

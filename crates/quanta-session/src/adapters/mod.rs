@@ -2,4 +2,4 @@
 
 mod actor;
 
-pub use actor::SessionActor;
+pub use actor::{SessionActor, METRIC_APPEND_LATENCY_US, METRIC_ENVELOPE_APPENDED};

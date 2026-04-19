@@ -17,6 +17,14 @@ pub enum SessionError {
     /// The session has already been closed; further operations are rejected.
     #[error("session closed")]
     Closed,
+    /// The input channel accepted no command within the configured deadline.
+    /// The session is alive (it hasn't been closed) but the input task is
+    /// stuck — typically because a prior write is blocked on an unresponsive
+    /// PTY. Callers should treat this as "session unresponsive" and surface
+    /// a distinct UI state rather than retrying indefinitely. See FIX 5 in
+    /// the audit.
+    #[error("session unresponsive: input channel accepted no command within deadline")]
+    Unresponsive,
     /// The underlying PTY adapter returned an error.
     #[error("pty error: {0}")]
     Pty(#[from] quanta_pty::PtyError),

@@ -41,12 +41,26 @@ function makeInMemoryBridge(): ProbeBridge {
       // through the sidecar; adapters that can't cancel (this one, the
       // mock bridge) resolve silently to keep the Stop button idempotent.
     },
+    async notify() {
+      // Reference bridge: notify is a silent no-op. The UI falls through to
+      // the Web Notification API when present.
+    },
     async openInEditor() {},
     async installShellIntegration(options) {
       return {
         targetPath: `/tmp/mock-${options.shell}rc`,
         snippet: '# >>> quanta shell integration >>>\n# <<< quanta shell integration <<<\n',
         alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async uninstallShellIntegration(options) {
+      return {
+        targetPath: `/tmp/mock-${options.shell}rc`,
+        removedRegion: '',
+        alreadyAbsent: true,
+        fileMissing: true,
         mutated: false,
         lineCount: 0,
       };

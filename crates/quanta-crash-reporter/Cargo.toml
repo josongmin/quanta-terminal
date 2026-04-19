@@ -1,0 +1,31 @@
+[package]
+name = "quanta-crash-reporter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — crash reporter abstraction (file sink + noop adapters)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Domain layer is pure; ports uses async-trait; adapters/file_sink touches
+# the filesystem, which is why the tokio runtime is pulled in. Keep the
+# adapter sync so tests don't need a live runtime.
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+time = { workspace = true }
+# `adapters/file_sink.rs` calls `tokio::task::block_in_place` so the async
+# adapter can run blocking FS IO under a multi-thread runtime. The crate's
+# sync helper (`report_blocking`) keeps tests runtime-free; this dep is for
+# the async path only.
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

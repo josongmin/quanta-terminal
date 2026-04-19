@@ -11,6 +11,7 @@ import type { HostBridge } from '@quanta/host-common';
 import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
 import {
   openInEditor,
+  openInEditorMessageForReason,
   resolveAbsolutePath,
   isAbsolutePath,
   validatePathForNav,
@@ -198,5 +199,31 @@ describe('openInEditor', () => {
     expect(result.ok).toBe(true);
     // With empty cwd we pass the path through unchanged (host will resolve).
     expect(spy).toHaveBeenCalledWith({ path: 'src/a.ts', line: 1 });
+  });
+});
+
+describe('openInEditorMessageForReason — audit P1 (fix 5)', () => {
+  it('no-bridge points the user at $CODE_BIN / editor install', () => {
+    const msg = openInEditorMessageForReason('no-bridge', '/tmp/a.rs');
+    expect(msg).toMatch(/\$CODE_BIN|VS Code|Cursor/);
+  });
+
+  it('bridge-failed interpolates the path', () => {
+    const msg = openInEditorMessageForReason('bridge-failed', '/tmp/a.rs');
+    expect(msg).toContain('/tmp/a.rs');
+    expect(msg).toMatch(/didn['’]t respond|bridge-failed|respond/);
+  });
+
+  it('invalid-path interpolates the path and labels it invalid', () => {
+    const msg = openInEditorMessageForReason('invalid-path', '/tmp/bad\\nname');
+    expect(msg).toContain('/tmp/bad\\nname');
+    expect(msg).toMatch(/invalid path/);
+  });
+
+  it('each reason yields a distinct message', () => {
+    const a = openInEditorMessageForReason('no-bridge', '/x');
+    const b = openInEditorMessageForReason('bridge-failed', '/x');
+    const c = openInEditorMessageForReason('invalid-path', '/x');
+    expect(new Set([a, b, c]).size).toBe(3);
   });
 });

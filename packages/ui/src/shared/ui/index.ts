@@ -5,4 +5,5 @@ export * from './error-boundary/index.js';
 export * from './kbd/index.js';
 export * from './separator/index.js';
 export * from './spinner/index.js';
+export * from './toast/index.js';
 export * from './tooltip/index.js';

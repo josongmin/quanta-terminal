@@ -78,9 +78,11 @@ export function filterCommands(
   });
 }
 
+import { t } from '../../shared/i18n/index.js';
+
 export const SECTION_ORDER: readonly CommandSection[] = ['sessions', 'actions', 'history'];
 export const SECTION_TITLE: Readonly<Record<CommandSection, string>> = {
-  sessions: 'Sessions',
-  actions: 'Actions',
-  history: 'Search history',
+  sessions: t('commandPalette.section.sessions'),
+  actions: t('commandPalette.section.actions'),
+  history: t('commandPalette.section.history'),
 };

@@ -57,12 +57,20 @@ import {
   useBlockStore,
   type Block,
   type BlockHeaderView,
+  type BlockStatus,
   type BlockStreamView,
 } from '../../entities/block/index.js';
-import { openInEditor } from '../../features/navigation/index.js';
+import {
+  openInEditor,
+  openInEditorMessageForReason,
+  type OpenInEditorResult,
+} from '../../features/navigation/index.js';
+import { exportBlockAs, type ExportFormat } from '../../features/block/export.js';
 import { cx } from '../../shared/lib/cx.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
+import { showToast } from '../../shared/ui/toast/index.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './block-card.module.css';
 
 const log = createLogger('widgets/block-card');
@@ -112,6 +120,28 @@ function lastLine(text: string): string {
   const trimmed = text.endsWith('\n') ? text.slice(0, -1) : text;
   const i = trimmed.lastIndexOf('\n');
   return i === -1 ? trimmed : trimmed.slice(i + 1);
+}
+
+/**
+ * Audit P1 (fix 7): count visible lines across a list of raw byte chunks.
+ * Cheaper than decoding+splitting because we only count newline bytes (0x0A).
+ * An output that ends without a trailing newline still counts its last line,
+ * so a one-line echo shows "1 line", not "0 lines".
+ */
+function countLines(chunks: readonly Uint8Array[]): number {
+  let newlines = 0;
+  let anyBytes = false;
+  let endsWithNewline = false;
+  for (const chunk of chunks) {
+    if (chunk.byteLength === 0) continue;
+    anyBytes = true;
+    for (let i = 0; i < chunk.byteLength; i += 1) {
+      if (chunk[i] === 0x0a) newlines += 1;
+    }
+    endsWithNewline = chunk[chunk.byteLength - 1] === 0x0a;
+  }
+  if (!anyBytes) return 0;
+  return endsWithNewline ? newlines : newlines + 1;
 }
 
 function BlockCardImpl(props: BlockCardProps) {
@@ -188,6 +218,99 @@ function BlockCardImpl(props: BlockCardProps) {
       onRerun?.(header.id);
     },
     [header.id, onRerun, stop],
+  );
+
+  // Export menu state — a tiny local dropdown. Opens on button click, closes
+  // on selection / outside click / Escape.
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportWrapRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDocClick = (ev: globalThis.MouseEvent) => {
+      const wrap = exportWrapRef.current;
+      if (!wrap) return;
+      if (ev.target instanceof Node && wrap.contains(ev.target)) return;
+      setExportOpen(false);
+    };
+    const onDocKey = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key === 'Escape') setExportOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onDocKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onDocKey);
+    };
+  }, [exportOpen]);
+
+  const onExportToggle = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      setExportOpen((v) => !v);
+    },
+    [stop],
+  );
+
+  const runExport = useCallback(
+    async (format: ExportFormat) => {
+      setExportOpen(false);
+      const text = exportBlockAs(header.id, format);
+      if (text === null) {
+        showToast({
+          kind: 'warning',
+          message: t('blockCard.export.toastFailed', { reason: 'not-found' }),
+        });
+        return;
+      }
+      const clipboard =
+        typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard : null;
+      if (!clipboard || typeof clipboard.writeText !== 'function') {
+        showToast({
+          kind: 'warning',
+          message: t('blockCard.export.toastFailed', { reason: 'no-clipboard' }),
+        });
+        return;
+      }
+      try {
+        await clipboard.writeText(text);
+        const key =
+          format === 'markdown'
+            ? 'blockCard.export.toastMarkdown'
+            : format === 'json'
+              ? 'blockCard.export.toastJson'
+              : 'blockCard.export.toastText';
+        showToast({ kind: 'info', message: t(key) });
+      } catch (err) {
+        log.warn('export clipboard write failed', err);
+        showToast({
+          kind: 'warning',
+          message: t('blockCard.export.toastFailed', { reason: 'write-failed' }),
+        });
+      }
+    },
+    [header.id],
+  );
+
+  const onExportMarkdown = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      void runExport('markdown');
+    },
+    [runExport, stop],
+  );
+  const onExportJson = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      void runExport('json');
+    },
+    [runExport, stop],
+  );
+  const onExportText = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      void runExport('text');
+    },
+    [runExport, stop],
   );
 
   const onCompareClick = useCallback(
@@ -322,6 +445,57 @@ function BlockCardImpl(props: BlockCardProps) {
               <CopyIcon />
             </button>
           </Tooltip>
+          <span className={styles.exportWrap} ref={exportWrapRef}>
+            <Tooltip content={<>{t('blockCard.export.tooltip')}</>}>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={onExportToggle}
+                aria-label={t('blockCard.export.menuLabel')}
+                aria-haspopup="menu"
+                aria-expanded={exportOpen ? 'true' : 'false'}
+                data-testid={`block-card-export-${header.id}`}
+              >
+                <ExportIcon />
+              </button>
+            </Tooltip>
+            {exportOpen && (
+              <div
+                role="menu"
+                aria-label={t('blockCard.export.menuLabel')}
+                className={styles.exportMenu}
+                data-testid={`block-card-export-menu-${header.id}`}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.exportMenuItem}
+                  onClick={onExportMarkdown}
+                  data-testid={`block-card-export-markdown-${header.id}`}
+                >
+                  {t('blockCard.export.markdown')}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.exportMenuItem}
+                  onClick={onExportJson}
+                  data-testid={`block-card-export-json-${header.id}`}
+                >
+                  {t('blockCard.export.json')}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.exportMenuItem}
+                  onClick={onExportText}
+                  data-testid={`block-card-export-text-${header.id}`}
+                >
+                  {t('blockCard.export.text')}
+                </button>
+              </div>
+            )}
+          </span>
           <Tooltip
             content={
               <>
@@ -363,6 +537,10 @@ function BlockCardImpl(props: BlockCardProps) {
         blockId={header.id}
         collapsed={header.collapsed}
         errorMessage={header.errorMessage}
+        command={header.command}
+        duration={duration}
+        exitCode={header.exitCode}
+        status={header.status}
       />
     </article>
   );
@@ -411,6 +589,16 @@ interface BlockBodyProps {
   readonly blockId: string;
   readonly collapsed: boolean;
   readonly errorMessage: string | null;
+  /**
+   * Audit P1 (fix 7): chrome bits forwarded from the header so the collapsed
+   * summary row (`COMMAND · 42 lines · 1.2s · exit 0`) can render without a
+   * second subscription. All four are cheap/stable; re-passing them on every
+   * stream tick is free because the body re-renders on chunk append anyway.
+   */
+  readonly command: string;
+  readonly duration: string;
+  readonly exitCode: number | null;
+  readonly status: BlockStatus;
 }
 
 /**
@@ -421,7 +609,15 @@ interface BlockBodyProps {
  * "spread-and-replace" pattern that would allocate a fresh array per chunk.
  */
 const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
-  const { blockId, collapsed, errorMessage } = props;
+  const {
+    blockId,
+    collapsed,
+    errorMessage,
+    command,
+    duration,
+    exitCode,
+    status: headerStatus,
+  } = props;
   const stream: BlockStreamView | undefined = useBlockOutputChunks(blockId);
 
   // Stable spans array: the parser pushes into it in place. The cursor ref
@@ -478,6 +674,11 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
 
   const bytes = useMemo(() => totalBytes(chunks), [chunks]);
 
+  // Audit P1 (fix 7): cheap byte-level line count — exact to the byte without
+  // decoding. Only materialized when collapsed since expanded mode shows the
+  // real output.
+  const lineCount = useMemo(() => (collapsed ? countLines(chunks) : 0), [collapsed, chunks]);
+
   const decodedForPeek = useMemo(() => {
     if (!collapsed) return '';
     if (chunks.length === 0) return '';
@@ -487,22 +688,45 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
   // Phase 3: click on a detected `path:line:col` in the output. We dispatch
   // through `features/navigation` which resolves relative paths against the
   // session cwd and then delegates to the host bridge.
+  //
+  // Audit P1 (fix 5): previously the failure path was log-only. Now we
+  // surface a short-lived toast keyed by `reason` so the user gets feedback
+  // when the editor isn't installed / the path is invalid / the bridge
+  // didn't respond. Success stays silent.
   const onPathClick = useCallback((payload: PathClickPayload) => {
     void openInEditor({
       path: payload.path,
       line: payload.line,
       ...(payload.column !== undefined ? { column: payload.column } : {}),
-    }).then((result) => {
-      if (!result.ok) {
-        log.warn('open-in-editor failed', result.reason, result.error?.message);
-      }
+    }).then((result: OpenInEditorResult) => {
+      if (result.ok) return;
+      log.warn('open-in-editor failed', result.reason, result.error?.message);
+      showToast({
+        kind: 'warning',
+        message: openInEditorMessageForReason(result.reason, payload.path),
+      });
     });
   }, []);
 
   if (collapsed) {
+    // Audit P1 (fix 7): Warp-style summary line
+    //   "<command> · <N lines> · <duration> · exit <code>"
+    // Segments missing the relevant state are omitted (a still-running block
+    // has no exit code; a zero-byte block has no line count). The last-line
+    // preview remains as supplementary context beneath for users who want to
+    // glance at the final output without expanding.
+    const linesLabel = lineCount === 1 ? '1 line' : `${lineCount} lines`;
+    const summary: string[] = [command, linesLabel, duration];
+    if (exitCode !== null) summary.push(`exit ${exitCode}`);
+    if (headerStatus === 'error') summary.push('error');
+    if (headerStatus === 'canceled') summary.push('canceled');
+    const peek = lastLine(decodedForPeek);
     return (
-      <div className={styles.peek}>
-        <span className={styles.peekText}>{lastLine(decodedForPeek) || <em>no output</em>}</span>
+      <div className={styles.peek} data-testid={`block-peek-${blockId}`}>
+        <span className={styles.peekSummary} data-testid={`block-summary-${blockId}`}>
+          {summary.join(' · ')}
+        </span>
+        {peek ? <span className={styles.peekText}>{peek}</span> : null}
         <span className={styles.peekBytes}>{bytes}B</span>
       </div>
     );
@@ -598,6 +822,30 @@ function CaretIcon() {
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
       <path
         d="M3 4.5L6 7.5L9 4.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ExportIcon() {
+  // "Box with arrow" glyph — a conventional export / share mark readable at
+  // 14px. Two strokes (arrow + container) so the arrow reads against the
+  // icon-button background without extra fills.
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M7 1.5v7.5M4.5 4l2.5-2.5L9.5 4"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M2.5 8.5v3a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-3"
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinecap="round"

@@ -141,6 +141,74 @@ export function isMac(): boolean {
 }
 
 /**
+ * `formatShortcutHint` — renders a shortcut spec (as consumed by
+ * `useKeymap`) into the user-visible label we show in menus / tooltips.
+ *
+ * Rules
+ * -----
+ *   - `mod` resolves to `⌘` on macOS, `Ctrl` elsewhere.
+ *   - `shift` → `⇧` on macOS, `Shift` elsewhere.
+ *   - `alt` → `⌥` on macOS, `Alt` elsewhere.
+ *   - On macOS, parts are joined with no separator (Apple HIG). On other
+ *     platforms they are joined with `+`.
+ *   - Single letters are upper-cased; named keys pass through the same
+ *     normalization `parseShortcut` uses (so `enter` renders as `↵` on Mac).
+ *
+ * Limitation — layout awareness
+ * -----------------------------
+ * This helper formats the SHORTCUT HINT but does NOT remap the key for
+ * non-QWERTY layouts. The runtime matcher (`matchesShortcut`) matches on
+ * `event.key` which is the physical key the OS reports, so the UI hint and
+ * the actual trigger can drift on AZERTY / Dvorak layouts. A full fix would
+ * need `navigator.keyboard.getLayoutMap()` (Chrome-only) or a per-key
+ * remap table. For now we document the limitation; most tools take the
+ * same shortcut.
+ */
+export function formatShortcutHint(spec: Shortcut): string {
+  const parsed = parseShortcut(spec);
+  const mac = isMac();
+  const parts: string[] = [];
+  if (parsed.mod || (parsed.ctrl && !mac)) {
+    parts.push(mac ? '⌘' : 'Ctrl');
+  } else if (parsed.ctrl) {
+    parts.push(mac ? '⌃' : 'Ctrl');
+  }
+  if (parsed.meta && !parsed.mod) {
+    parts.push(mac ? '⌘' : 'Win');
+  }
+  if (parsed.alt) parts.push(mac ? '⌥' : 'Alt');
+  if (parsed.shift) parts.push(mac ? '⇧' : 'Shift');
+
+  parts.push(prettyKey(parsed.key, mac));
+  return mac ? parts.join('') : parts.join('+');
+}
+
+function prettyKey(key: string, mac: boolean): string {
+  switch (key) {
+    case 'escape':
+      return 'Esc';
+    case 'enter':
+      return mac ? '↵' : 'Enter';
+    case 'arrowup':
+      return '↑';
+    case 'arrowdown':
+      return '↓';
+    case 'arrowleft':
+      return '←';
+    case 'arrowright':
+      return '→';
+    case ' ':
+      return 'Space';
+    case ',':
+      return ',';
+    case '`':
+      return '`';
+    default:
+      return key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1);
+  }
+}
+
+/**
  * Check whether a keyboard event matches a parsed shortcut. Exported for
  * tests; the runtime listener calls this inline.
  */

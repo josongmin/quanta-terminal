@@ -29,7 +29,9 @@ impl ProtocolVersion {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Hello {
     pub host_protocol_version: ProtocolVersion,
+    #[serde(default)]
     pub host_version: String,
+    #[serde(default)]
     pub client_id: String,
     /// Per ADR 0011 §Resume Cursor: a reconnecting host may ask the sidecar to
     /// replay events for specific sessions starting from the last seq the host
@@ -42,13 +44,17 @@ pub struct Hello {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ready {
     pub core_protocol_version: ProtocolVersion,
+    #[serde(default)]
     pub core_version: String,
+    #[serde(default)]
     pub sidecar_id: String,
+    #[serde(default)]
     pub session_recovery_available: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Incompatible {
+    #[serde(default)]
     pub reason: String,
     pub core_protocol_version: ProtocolVersion,
 }

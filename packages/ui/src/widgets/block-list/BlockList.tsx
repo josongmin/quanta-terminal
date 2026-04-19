@@ -34,6 +34,7 @@ import { Kbd } from '../../shared/ui/kbd/index.js';
 import { BlockCard } from '../block-card/index.js';
 import { useBlock, useBlockIds, useBlocksForSession } from '../../entities/block/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './block-list.module.css';
 
 export interface BlockListProps {
@@ -185,9 +186,16 @@ export function BlockList(props: BlockListProps) {
 
   if (ids.length === 0) {
     return (
-      <div className={styles.scroll} data-testid="block-list-empty">
+      <div
+        ref={scrollRef}
+        className={styles.scroll}
+        data-testid="block-list-empty"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label={t('blockList.ariaLabel')}
+      >
         <div className={styles.empty}>
-          <div>Type a command below to get started.</div>
+          <div>{t('blockList.empty')}</div>
           <div className={styles.emptyHint}>
             Press <Kbd>Enter</Kbd> to submit.
           </div>
@@ -200,7 +208,14 @@ export function BlockList(props: BlockListProps) {
   const totalSize = virtualizer.getTotalSize();
 
   return (
-    <div ref={scrollRef} className={styles.scroll} data-testid="block-list">
+    <div
+      ref={scrollRef}
+      className={styles.scroll}
+      data-testid="block-list"
+      aria-live="polite"
+      aria-relevant="additions"
+      aria-label={t('blockList.ariaLabel')}
+    >
       <div className={styles.inner} style={{ height: `${totalSize}px` }}>
         {items.map((item) => {
           const id = ids[item.index];

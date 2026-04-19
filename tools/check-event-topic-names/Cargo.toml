@@ -1,0 +1,20 @@
+[package]
+name = "check-event-topic-names"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — enforces quanta:// topic registry per crates/quanta-proto/src/topics.rs"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-event-topic-names"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+walkdir = "2"

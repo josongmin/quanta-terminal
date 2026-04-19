@@ -153,3 +153,35 @@ export async function openInEditorOrThrow(input: OpenInEditorInput): Promise<str
   if (!result.ok) throw result.error ?? new Error(`openInEditor failed: ${result.reason}`);
   return result.resolvedPath;
 }
+
+/**
+ * Audit P1 (fix 5): reason → human-readable message mapping for the toast
+ * dispatched at the BlockCard callsite. Kept here (not at the widget) so the
+ * reason taxonomy stays colocated with the result type and test fixtures can
+ * assert messages without instantiating the widget.
+ *
+ * The `path` is interpolated verbatim — we deliberately do not truncate it.
+ * Editor-not-installed / path-invalid errors benefit from showing the full
+ * path so the user can see what was detected; truncation is the toast
+ * component's job (CSS ellipsis).
+ */
+export function openInEditorMessageForReason(
+  reason: Exclude<OpenInEditorResult, { ok: true }>['reason'],
+  path: string,
+): string {
+  switch (reason) {
+    case 'no-bridge':
+      return 'No editor configured. Set $CODE_BIN or install VS Code / Cursor.';
+    case 'bridge-failed':
+      return `Couldn't open ${path}: editor didn't respond`;
+    case 'invalid-path':
+      return `Couldn't open ${path}: invalid path`;
+    default: {
+      // Exhaustiveness check — adding a reason variant without extending the
+      // switch will trip TS. We keep the fallback message generic.
+      const _exhaustive: never = reason;
+      void _exhaustive;
+      return `Couldn't open ${path}`;
+    }
+  }
+}

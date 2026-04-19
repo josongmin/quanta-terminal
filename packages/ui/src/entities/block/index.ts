@@ -1,8 +1,11 @@
 export {
   useBlockStore,
   concatChunks,
+  clearWatchdogsForSession,
   DEFAULT_BLOCK_SESSION_ID,
   DEFAULT_BLOCK_WATCHDOG_MS,
+  APPLIED_EVENT_ID_LRU_CAPACITY,
+  __hasWatchdogForTests,
 } from './model.js';
 export type {
   Block,
@@ -11,6 +14,7 @@ export type {
   BlockActions,
   StartBlockOptions,
   CreateBlockOptions,
+  SetActiveBlockIdOptions,
 } from './model.js';
 export {
   useBlockIds,

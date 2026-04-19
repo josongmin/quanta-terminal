@@ -310,14 +310,22 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
+        // Tests run in parallel inside a single process, so both
+        // `process::id()` and `SystemTime::now()` can collide at
+        // nanosecond granularity. A monotonically-increasing atomic
+        // counter is race-free and sufficient: each call burns one
+        // unique suffix even under heavy parallelism. Using `Instant`
+        // instead of `SystemTime` also hardens against NTP clock jumps
+        // (B2 hygiene): the suffix uniqueness does not depend on wall
+        // clock ordering.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut p = std::env::temp_dir();
         p.push(format!(
             "fixtures-runner-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0),
+            seq
         ));
         std::fs::create_dir_all(&p).unwrap();
         p

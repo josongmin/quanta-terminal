@@ -1,0 +1,152 @@
+/*
+ * Settings panel — modal overlay, mirrored on the command palette's motion
+ * tokens so both surfaces feel like siblings. A section-based layout with a
+ * left rail is overkill at four sections; instead we render stacked sections
+ * with hairline dividers.
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--q-overlay-bg);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1000;
+}
+
+.panel {
+  width: min(640px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-palette-radius);
+  box-shadow: var(--q-shadow-overlay);
+  overflow: hidden;
+  font-family: var(--q-font-sans);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--q-space-4) var(--q-space-5);
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+
+.title {
+  font-size: var(--q-font-size-lg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.closeButton {
+  background: transparent;
+  color: var(--q-fg-muted);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: var(--q-space-1) var(--q-space-2);
+  font-family: inherit;
+  font-size: var(--q-font-size-sm);
+  cursor: pointer;
+  transition: color var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+.closeButton:hover {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+}
+
+.body {
+  overflow-y: auto;
+  padding: var(--q-space-3) var(--q-space-5) var(--q-space-5);
+}
+
+.section {
+  padding: var(--q-space-4) 0;
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+.section:last-child {
+  border-bottom: none;
+}
+
+.sectionTitle {
+  font-size: var(--q-font-size-md);
+  font-weight: 600;
+  margin: 0 0 var(--q-space-2);
+}
+
+.sectionDescription {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-sm);
+  margin: 0 0 var(--q-space-3);
+}
+
+.themeRow {
+  display: flex;
+  gap: var(--q-space-2);
+  flex-wrap: wrap;
+}
+
+.themeButton {
+  flex: 1 1 auto;
+  min-width: 88px;
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  padding: var(--q-space-2) var(--q-space-3);
+  font-family: inherit;
+  font-size: var(--q-font-size-md);
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out);
+}
+.themeButton:hover {
+  border-color: var(--q-border-strong);
+}
+.themeButtonActive {
+  background: var(--q-accent);
+  color: var(--q-fg-on-accent);
+  border-color: var(--q-accent);
+}
+
+.shortcutList {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--q-space-2) var(--q-space-4);
+  align-items: center;
+}
+
+.shortcutLabel {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-md);
+}
+
+.shortcutHint {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: 2px var(--q-space-2);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-3);
+  margin-bottom: var(--q-space-3);
+}
+
+.privacyNote {
+  color: var(--q-fg-faint);
+  font-size: var(--q-font-size-sm);
+  margin-top: var(--q-space-2);
+}

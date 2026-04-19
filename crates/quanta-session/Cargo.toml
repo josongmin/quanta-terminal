@@ -18,6 +18,7 @@ quanta-output = { path = "../quanta-output" }
 quanta-events = { path = "../quanta-events" }
 quanta-security = { path = "../quanta-security" }
 quanta-diagnostic = { path = "../quanta-diagnostic" }
+quanta-metrics = { path = "../quanta-metrics" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }

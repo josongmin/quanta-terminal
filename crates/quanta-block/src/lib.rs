@@ -17,6 +17,7 @@ pub mod ports;
 
 pub use adapters::VteBoundaryDetector;
 pub use domain::{
-    reduce, reduce_many, Block, BlockEvent, BlockState, BoundaryEvent, BoundarySink, SubState,
+    reduce, reduce_many, try_reduce, Block, BlockEvent, BlockReducer, BlockState, BoundaryEvent,
+    BoundarySink, ReducerError, SubState,
 };
 pub use ports::BoundaryDetector;

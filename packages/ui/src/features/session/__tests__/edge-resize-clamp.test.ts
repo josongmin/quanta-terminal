@@ -39,12 +39,23 @@ function makeBridge(): HostBridge & { resize: ReturnType<typeof vi.fn> } {
     resize: vi.fn(() => Promise.resolve()),
     async close() {},
     async cancelBlock() {},
+    async notify() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {
         targetPath: '/tmp/stub',
         snippet: '',
         alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async uninstallShellIntegration() {
+      return {
+        targetPath: '/tmp/stub',
+        removedRegion: '',
+        alreadyAbsent: true,
+        fileMissing: false,
         mutated: false,
         lineCount: 0,
       };

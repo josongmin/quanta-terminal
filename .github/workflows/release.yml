@@ -1,0 +1,398 @@
+name: Release
+
+# Builds, signs, and publishes a multi-platform desktop bundle.
+#
+# Triggers:
+#   - git tag of the form `vX.Y.Z` (or `vX.Y.Z-rc1`, etc.). Any tag beginning
+#     with `v` and three dotted components kicks off the full matrix.
+#   - manual dispatch with an explicit `version` input. Useful for rehearsing
+#     the pipeline against `main` before cutting the real tag. When dispatched
+#     manually, the workflow runs end-to-end but uploads artifacts as
+#     workflow artifacts (no GitHub release is created) — only tag-triggered
+#     runs publish to the Releases page.
+#
+# Dry-run posture:
+#   Every signing step is wrapped with `if: ${{ secrets.<NAME> != '' }}`, so
+#   a fork or a repository without the production secrets provisioned can
+#   still exercise the full matrix without failing. The jobs that skip
+#   signing append a clearly-marked `UNSIGNED` warning line in the summary.
+#
+# Secrets consumed (document canonical provisioning in docs/RELEASE.md):
+#   macOS:    APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_ID,
+#             APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
+#   Windows:  WINDOWS_CERTIFICATE_PFX, WINDOWS_CERTIFICATE_PASSWORD
+#   Linux:    LINUX_GPG_KEY, LINUX_GPG_PASSPHRASE
+#   Updater:  TAURI_UPDATER_PRIVATE_KEY, TAURI_UPDATER_KEY_PASSWORD
+#             (only needed once the Tauri updater plugin's pubkey is
+#             committed; until then the manifest step uses the placeholder).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver version to build (e.g. 0.2.0). Omit the leading v.'
+        required: true
+        type: string
+
+# Releases are point-in-time artifacts; a stale run on the same ref can be
+# cancelled safely. Tag-triggered runs each have a unique ref so they never
+# cancel each other in practice, but dispatch runs against `main` can.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  # `contents: write` is required to upload release assets.
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  PNPM_VERSION: '9.12.0'
+  NODE_VERSION: '20'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Pre-flight: full correctness gate. Fails fast so we never sign a broken
+  # binary. Mirrors ci.yml so a tagged build cannot regress past the PR gate.
+  # --------------------------------------------------------------------------
+  gate:
+    name: gate (test + clippy + fmt + layers + topics)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu-latest
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+      - name: check-hex-imports
+        run: cargo run --quiet -p check-hex-imports -- --root .
+
+      - name: check-event-topic-names
+        run: cargo run --quiet -p check-event-topic-names -- --root .
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: prettier --check
+        run: pnpm run format:check
+
+      - name: pnpm -r typecheck
+        run: pnpm -r --if-present typecheck
+
+      - name: pnpm -r lint
+        run: pnpm -r --if-present lint
+
+      - name: pnpm -r test
+        run: pnpm -r --if-present test
+
+      - name: check-fsd-layers
+        run: node tools/check-fsd-layers.mjs
+
+  # --------------------------------------------------------------------------
+  # Build matrix — one job per target triple. Each job:
+  #   1. Builds the sidecar binary for its native triple.
+  #   2. Runs `tauri build` to assemble the platform bundle.
+  #   3. Signs / notarizes / packages per platform.
+  #   4. Uploads resulting artifacts.
+  # Matrix jobs run in parallel; the manifest job below depends on all of
+  # them and assembles the signed update manifest.
+  # --------------------------------------------------------------------------
+  build:
+    needs: gate
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-arm64
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            bundle_ext: dmg
+          - label: macos-x86_64
+            os: macos-13
+            rust_target: x86_64-apple-darwin
+            bundle_ext: dmg
+          - label: windows-x86_64
+            os: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+            bundle_ext: msi
+          - label: linux-x86_64
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bundle_ext: appimage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.label }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev libglib2.0-dev pkg-config \
+            imagemagick gnupg
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build sidecar
+        shell: bash
+        run: ./scripts/package-sidecar.sh
+
+      # --- Platform-specific pre-build: import signing certs ----------------
+
+      - name: Import Apple codesigning certificate (macOS)
+        if: startsWith(matrix.os, 'macos') && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PW=$(openssl rand -hex 16)
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          rm -f /tmp/cert.p12
+
+      - name: Import Authenticode certificate (Windows)
+        if: matrix.os == 'windows-2022' && env.WINDOWS_CERTIFICATE_PFX != ''
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+        run: |
+          $pfx = "$env:RUNNER_TEMP\cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX))
+          "WINDOWS_PFX_PATH=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Import GPG key (Linux)
+        if: matrix.os == 'ubuntu-22.04' && env.LINUX_GPG_KEY != ''
+        env:
+          LINUX_GPG_KEY: ${{ secrets.LINUX_GPG_KEY }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          echo "$LINUX_GPG_KEY" | base64 --decode | \
+            gpg --batch --passphrase "$LINUX_GPG_PASSPHRASE" --import
+
+      # --- Tauri build -----------------------------------------------------
+
+      - name: Build Tauri bundle
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @quanta/host-tauri tauri build --target ${{ matrix.rust_target }}
+
+      # --- Platform-specific post-build: sign / notarize / package ---------
+
+      - name: Warn on missing Apple secrets (macOS dry run)
+        if: startsWith(matrix.os, 'macos') && env.APPLE_ID == ''
+        run: |
+          echo "::warning::APPLE_ID secret unset — macOS bundle is UNSIGNED and will not notarize. Configure secrets per docs/RELEASE.md before production release."
+
+      - name: Warn on missing Authenticode secrets (Windows dry run)
+        if: matrix.os == 'windows-2022' && env.WINDOWS_CERTIFICATE_PFX == ''
+        run: |
+          echo "::warning::WINDOWS_CERTIFICATE_PFX secret unset — Windows bundle is UNSIGNED. Configure secrets per docs/RELEASE.md before production release."
+
+      - name: Warn on missing GPG secrets (Linux dry run)
+        if: matrix.os == 'ubuntu-22.04' && env.LINUX_GPG_KEY == ''
+        run: |
+          echo "::warning::LINUX_GPG_KEY secret unset — Linux artifacts are UNSIGNED. Configure secrets per docs/RELEASE.md before production release."
+
+      - name: Sign Linux artifacts (detached .sig)
+        if: matrix.os == 'ubuntu-22.04' && env.LINUX_GPG_KEY != ''
+        env:
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="packages/host-tauri/src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          for f in $(find "$BUNDLE_DIR" -type f \( -name '*.AppImage' -o -name '*.deb' \)); do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$LINUX_GPG_PASSPHRASE" \
+              --detach-sign --armor "$f"
+          done
+
+      # --- Collect artifacts -----------------------------------------------
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/quanta-release/${{ matrix.label }}"
+          mkdir -p "$STAGE"
+          BUNDLE_DIR="packages/host-tauri/src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          if [ -d "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \
+              \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' \
+                 -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \
+                 -o -name '*.asc' -o -name '*.sig' \) \
+              -exec cp -v {} "$STAGE/" \;
+          else
+            echo "::warning::bundle directory $BUNDLE_DIR not found; nothing to stage"
+          fi
+          ls -la "$STAGE"
+          echo "STAGE_DIR=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.label }}
+          path: ${{ env.STAGE_DIR }}
+          retention-days: 30
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  # Build and publish the signed update manifest. Consumes every matrix
+  # artifact, runs `tools/update-manifest-gen` once per target, merges into
+  # a single `latest.json` suitable for the Tauri updater endpoint.
+  # --------------------------------------------------------------------------
+  manifest:
+    needs: build
+    name: update manifest
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-manifest
+
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Build update-manifest-gen
+        run: cargo build --release -p update-manifest-gen
+
+      - name: Generate manifest
+        env:
+          TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION_INPUT="${{ inputs.version }}"
+          TAG_REF="${GITHUB_REF#refs/tags/v}"
+          if [ -n "$VERSION_INPUT" ]; then
+            VERSION="$VERSION_INPUT"
+          elif [ "$GITHUB_REF" != "$TAG_REF" ]; then
+            VERSION="$TAG_REF"
+          else
+            VERSION="0.0.0-dev+${GITHUB_SHA::7}"
+          fi
+          mkdir -p out
+          ./target/release/update-manifest-gen \
+            --version "$VERSION" \
+            --bundles-dir artifacts \
+            --output-path out/latest.json
+          cat out/latest.json
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-manifest
+          path: out/latest.json
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Publish to the GitHub release (tag-triggered only). Pre-release tags
+  # (those containing `-`) are marked pre-release on the Releases page so
+  # the updater can consume stable-only by filtering server-side.
+  # --------------------------------------------------------------------------
+  publish:
+    needs: [build, manifest]
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: publish github release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find artifacts -type f -exec cp -v {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

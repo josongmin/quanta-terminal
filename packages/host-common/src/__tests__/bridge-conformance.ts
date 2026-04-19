@@ -122,6 +122,18 @@ export function runHostBridgeConformance(name: string, factory: BridgeFactory): 
       await p.catch(() => {});
     });
 
+    it('uninstallShellIntegration is implemented and returns a Promise', async () => {
+      // Symmetric inverse of the install contract. Every HostBridge exposes
+      // `uninstallShellIntegration`. Preview-mode (`confirm: false`) MUST NOT
+      // mutate the dotfile; a rejection is acceptable for stub adapters. We
+      // pin only the Promise-returning shape and argument acceptance.
+      const bridge = await factory();
+      expect(typeof bridge.uninstallShellIntegration).toBe('function');
+      const p = bridge.uninstallShellIntegration({ shell: 'bash', confirm: false });
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
+
     it('cancelBlock is a function and returns a Promise', async () => {
       // Phase-5 cancel contract: every HostBridge exposes `cancelBlock`.
       // The Stop button on BlockCard calls the bridge directly, so any
@@ -133,6 +145,17 @@ export function runHostBridgeConformance(name: string, factory: BridgeFactory): 
       const bridge = await factory();
       expect(typeof bridge.cancelBlock).toBe('function');
       const p = bridge.cancelBlock('sess-conformance', 'blk-conformance');
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
+
+    it('notify is implemented and returns a Promise', async () => {
+      // Every adapter must expose `notify(title, body)`. Mock / reference
+      // bridges resolve silently; the Tauri bridge routes to the Rust side.
+      // We only pin the Promise-returning surface here.
+      const bridge = await factory();
+      expect(typeof bridge.notify).toBe('function');
+      const p = bridge.notify({ title: 'conformance', body: 'probe' });
       expect(typeof (p as { then?: unknown }).then).toBe('function');
       await p.catch(() => {});
     });

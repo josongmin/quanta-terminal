@@ -13,7 +13,7 @@
  *     that exercise the feature in isolation.
  */
 
-import { useBlockStore } from '../../entities/block/index.js';
+import { clearWatchdogsForSession, useBlockStore } from '../../entities/block/index.js';
 import { bindSessionRemovalHook } from '../../entities/session/index.js';
 import { bindBlockStore, type BlockStoreActions } from './block-store-port.js';
 import { setRouterBlockSessionLookup } from './route-output.js';
@@ -31,23 +31,23 @@ export function bindBlockEntity(): () => void {
     startBlock(command, cwd, options) {
       return useBlockStore.getState().startBlock(command, cwd, options) as BlockId;
     },
-    setActiveBlockId(id: BlockId | null): void {
-      useBlockStore.getState().setActiveBlockId(id);
+    setActiveBlockId(id: BlockId | null, options?: { requireSessionMatch?: SessionId }): void {
+      useBlockStore.getState().setActiveBlockId(id, options);
     },
     getActiveBlockId(): BlockId | null {
       return (useBlockStore.getState().activeBlockId as BlockId | null) ?? null;
     },
-    appendBlockOutput(blockId: BlockId, chunk: Uint8Array): void {
-      useBlockStore.getState().appendBlockOutput(blockId, chunk);
+    appendBlockOutput(blockId: BlockId, chunk: Uint8Array, eventId?: string): void {
+      useBlockStore.getState().appendBlockOutput(blockId, chunk, eventId);
     },
-    completeBlock(blockId: BlockId, exitCode: number | null): void {
-      useBlockStore.getState().completeBlock(blockId, exitCode);
+    completeBlock(blockId: BlockId, exitCode: number | null, eventId?: string): void {
+      useBlockStore.getState().completeBlock(blockId, exitCode, eventId);
     },
-    cancelBlock(blockId: BlockId): void {
-      useBlockStore.getState().cancelBlock(blockId);
+    cancelBlock(blockId: BlockId, eventId?: string): void {
+      useBlockStore.getState().cancelBlock(blockId, eventId);
     },
-    errorBlock(blockId: BlockId, message: string): void {
-      useBlockStore.getState().errorBlock(blockId, message);
+    errorBlock(blockId: BlockId, message: string, eventId?: string): void {
+      useBlockStore.getState().errorBlock(blockId, message, eventId);
     },
     getRunningBlockIds(): readonly BlockId[] {
       // Derived — the store surfaces `order`/`entities` but not a
@@ -81,6 +81,13 @@ export function bindBlockEntity(): () => void {
   // boundary: the session entity knows nothing about blocks; the command
   // feature, which is already the seam between the two, owns the wiring.
   const unbindRemoval = bindSessionRemovalHook((removedId: SessionId) => {
+    // Audit P1 (fix 3): clear every watchdog timer owned by the closing
+    // session BEFORE we touch the active pointer. A block that is still
+    // `running` at session teardown would otherwise leave a ~30s orphan
+    // timer — firing against a block the user can no longer see — and,
+    // worse, would promote it to `error` via the guarded errorBlock path.
+    clearWatchdogsForSession(removedId);
+
     const state = useBlockStore.getState();
     const active = state.activeBlockId;
     if (active === null) return;

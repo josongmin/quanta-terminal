@@ -26,6 +26,12 @@ tempfile = "3"
 [dependencies]
 tauri = { version = "2.0", features = ["macos-private-api"] }
 tauri-plugin-shell = "2.0"
+# The updater plugin is always compiled in so release builds ship with
+# auto-update support. The endpoint + pubkey are configured in
+# `tauri.conf.json` under `plugins.updater`; see docs/RELEASE.md for how to
+# generate the signing keypair. Until the pubkey placeholder is replaced,
+# the plugin will refuse updates at signature-verification time.
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.40", features = ["full"] }
@@ -37,10 +43,20 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 parking_lot = "0.12"
+# Inline redactor in `crash.rs` uses these — cheaper than a full dep on
+# `quanta-security` (which pulls in its own fixtures + versioning story).
+once_cell = "1"
+regex = "1"
 
 # Phase-5 AI suggestion flow (ADR 0012). Path-depped so the host-tauri crate
 # — which lives outside the main workspace — picks up the in-repo source.
 quanta-ai = { path = "../../../crates/quanta-ai" }
+
+# Crash-reporter integration point. The host wires `std::panic::set_hook`
+# and a `quanta_report_crash` IPC command to the `FileSinkReporter` by
+# default; a future PR can swap in a `SentryReporter`/`BugsnagReporter`
+# adapter without touching this file.
+quanta-crash-reporter = { path = "../../../crates/quanta-crash-reporter" }
 
 # Phase-1 dev stub only — remove when the real `quanta-core` sidecar ships
 # per ADR 0001 / ADR 0004. The `embedded-shell` feature gates this path.

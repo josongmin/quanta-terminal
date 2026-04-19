@@ -1,0 +1,20 @@
+[package]
+name = "check-ui-no-ansi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — enforces invariant I-2: UI MUST NOT parse ANSI / CSI / OSC."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-ui-no-ansi"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+walkdir = "2"

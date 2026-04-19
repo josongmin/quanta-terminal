@@ -65,6 +65,22 @@ describe('<BlockList />', () => {
     expect(screen.getByTestId(`block-card-${a}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`block-card-${b}`)).toBeNull();
   });
+
+  it('exposes aria-live="polite" on the scroll container so screen readers hear new blocks', () => {
+    render(<BlockList />);
+    const empty = screen.getByTestId('block-list-empty');
+    expect(empty.getAttribute('aria-live')).toBe('polite');
+    expect(empty.getAttribute('aria-relevant')).toBe('additions');
+    expect(empty.getAttribute('aria-label')).toBeTruthy();
+  });
+
+  it('keeps aria-live on the populated list too', () => {
+    useBlockStore.getState().createBlock('alpha', '/');
+    render(<BlockList />);
+    const list = screen.getByTestId('block-list');
+    expect(list.getAttribute('aria-live')).toBe('polite');
+    expect(list.getAttribute('aria-relevant')).toBe('additions');
+  });
 });
 
 describe('<BlockList /> — ResizeObserver rAF batching', () => {

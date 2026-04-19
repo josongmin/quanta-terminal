@@ -26,7 +26,7 @@
  * ADR 0014 §Schema Sharing.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -406,15 +406,30 @@ describe('TS mirrors carry every Rust enum variant', () => {
 });
 
 describe('Event discriminator convention', () => {
-  it('outer Event enum declares #[serde(tag = "kind", rename_all = "snake_case")]', () => {
+  it('event payloads carry a snake_case `kind` discriminator', () => {
     // The TS side relies on `kind` as the discriminator and on the snake_case
-    // rename rule. If the Rust side ever flips either of those, every TS
-    // consumer of `HostEvent` breaks silently — assert the exact attribute
-    // pair immediately preceding `pub enum Event`.
-    const src = readRust('events.rs');
-    const re =
-      /#\[serde\(tag\s*=\s*"kind"\s*,\s*rename_all\s*=\s*"snake_case"\s*\)\][\s\S]{0,40}pub\s+enum\s+Event\s*\{/u;
-    expect(re.test(src), 'Event must carry tag="kind", rename_all="snake_case"').toBe(true);
+    // rename rule. The Rust side previously declared this via
+    // `#[serde(tag = "kind", rename_all = "snake_case")]`, but the enum now
+    // uses a hand-rolled Serialize/Deserialize pair to support `Event::Unknown`
+    // (serde's `#[serde(other)]` cannot carry payload data in an internally
+    // tagged enum). Rather than grep for an attribute that no longer exists,
+    // assert the wire contract via committed golden snapshots — if Rust flips
+    // the discriminator or casing, the snapshot regeneration forces a visible
+    // diff that the TS parity test catches before ship.
+    const fixturesDir = join(REPO_ROOT, 'crates', 'quanta-proto', 'tests', 'fixtures', 'schemas');
+    const snapshotFiles = readdirSync(fixturesDir).filter((f) => f.endsWith('.golden.json'));
+    expect(snapshotFiles.length, 'golden schema snapshots must be committed').toBeGreaterThan(0);
+    for (const file of snapshotFiles) {
+      const json = JSON.parse(readFileSync(resolve(fixturesDir, file), 'utf8')) as {
+        payload?: { kind?: unknown };
+      };
+      const kind = json.payload?.kind;
+      expect(typeof kind, `${file}: payload.kind must exist`).toBe('string');
+      expect(
+        /^[a-z][a-z0-9_]*$/u.test(kind as string),
+        `${file}: payload.kind must be snake_case, got ${JSON.stringify(kind)}`,
+      ).toBe(true);
+    }
   });
 
   it('every inner enum that the wire surfaces uses rename_all = "snake_case"', () => {

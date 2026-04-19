@@ -1,0 +1,24 @@
+[package]
+name = "quanta-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — minimum-viable metrics surface (counters, histograms, gauges) with an in-memory recorder."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pure value types in `domain/`; the adapter layer owns the runtime-facing
+# `Mutex` + `DashMap` plumbing. Deliberately no tokio / async-trait so the
+# recorder port can be called from blocking contexts as well as async ones
+# without splitting the trait.
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -54,12 +54,23 @@ function makeBridge(sessionId: SessionId = 'sess-int' as SessionId): ScriptedBri
     async resize() {},
     async close() {},
     async cancelBlock() {},
+    async notify() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {
         targetPath: '/tmp/stub',
         snippet: '',
         alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async uninstallShellIntegration() {
+      return {
+        targetPath: '/tmp/stub',
+        removedRegion: '',
+        alreadyAbsent: true,
+        fileMissing: true,
         mutated: false,
         lineCount: 0,
       };

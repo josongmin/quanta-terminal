@@ -44,6 +44,7 @@ import { AnsiParser } from '../../shared/lib/ansi-parser/index.js';
 import { AnsiOutput, type AnsiSpan } from '../../shared/ui/ansi-output/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { cx } from '../../shared/lib/cx.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './compare-panel.module.css';
 
 /** Viewport width below which we collapse to the unified single-column view. */
@@ -216,15 +217,15 @@ function ComparePanelMounted(props: MountedProps) {
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Compare runs"
+        aria-label={t('comparePanel.dialogLabel')}
         className={styles.panel}
         tabIndex={-1}
         onKeyDown={handleKey}
         data-layout={layout}
       >
         <header className={styles.header}>
-          <span className={styles.title}>Compare runs</span>
-          <div className={styles.chips} role="group" aria-label="Summary deltas">
+          <span className={styles.title}>{t('comparePanel.title')}</span>
+          <div className={styles.chips} role="group" aria-label={t('comparePanel.deltaGroupLabel')}>
             {headerChips.map((chip) => (
               <span
                 key={chip.key}
@@ -241,15 +242,14 @@ function ComparePanelMounted(props: MountedProps) {
             type="button"
             className={styles.closeButton}
             onClick={onClose}
-            aria-label="Close compare panel"
+            aria-label={t('comparePanel.closeLabel')}
           >
-            Close <Kbd>Esc</Kbd>
+            {t('comparePanel.close')} <Kbd>Esc</Kbd>
           </button>
         </header>
         {view.diff.didTruncate ? (
           <div className={styles.truncatedBanner} role="status">
-            Diff truncated to 10,000 lines per side. Compare shorter outputs
-            for a full view.
+            {t('comparePanel.truncated')}
           </div>
         ) : null}
         <div className={styles.body} data-testid="compare-panel-body">
@@ -261,10 +261,13 @@ function ComparePanelMounted(props: MountedProps) {
         </div>
         <footer className={styles.footer}>
           <span className={styles.footerHint}>
-            <Kbd>j</Kbd>/<Kbd>k</Kbd> next/prev hunk
+            <Kbd>j</Kbd>/<Kbd>k</Kbd> {t('comparePanel.nextPrevHunk')}
           </span>
           <span className={styles.footerHint}>
-            {hunks.length} hunk{hunks.length === 1 ? '' : 's'}
+            {hunks.length}{' '}
+            {hunks.length === 1
+              ? t('comparePanel.hunkSingular')
+              : t('comparePanel.hunkPlural')}
           </span>
         </footer>
       </div>
@@ -294,7 +297,7 @@ const SideBySideDiff = memo(function SideBySideDiffImpl(props: DiffSubProps) {
     >
       <div className={styles.column}>
         <div className={styles.columnHeader}>
-          <span>previous run</span>
+          <span>{t('comparePanel.previousRun')}</span>
           <span>{view.left.command}</span>
         </div>
         {rows.map((row, i) => {
@@ -316,7 +319,7 @@ const SideBySideDiff = memo(function SideBySideDiffImpl(props: DiffSubProps) {
       </div>
       <div className={styles.column}>
         <div className={styles.columnHeader}>
-          <span>new run</span>
+          <span>{t('comparePanel.newRun')}</span>
           <span>{view.right.command}</span>
         </div>
         {rows.map((row, i) => {

@@ -1,0 +1,30 @@
+[package]
+name = "quanta-replay-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — CLI replay tool for a profile's event log."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "quanta-replay"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+quanta-events = { path = "../quanta-events" }
+quanta-proto = { path = "../quanta-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

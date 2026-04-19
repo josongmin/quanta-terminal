@@ -14,6 +14,7 @@
 import type { ReactNode } from 'react';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { useSessionStore } from '../../entities/session/index.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './title-bar.module.css';
 
 export interface TitleBarProps {
@@ -36,7 +37,7 @@ export function TitleBar(props: TitleBarProps) {
       className={styles.bar}
       data-tauri-drag-region="true"
       role="banner"
-      aria-label="Quanta window title bar"
+      aria-label={t('titleBar.region')}
     >
       <div className={styles.trafficCutout} data-tauri-drag-region="false" aria-hidden />
       <div className={styles.left} data-tauri-drag-region="true">
@@ -44,7 +45,7 @@ export function TitleBar(props: TitleBarProps) {
         <span className={styles.sep} aria-hidden>
           ·
         </span>
-        <span className={styles.subtle}>{shell ? shortenCwd(cwd) : 'booting'}</span>
+        <span className={styles.subtle}>{shell ? shortenCwd(cwd) : t('titleBar.booting')}</span>
       </div>
       <div className={styles.center} data-tauri-drag-region="true" aria-hidden />
       <div className={styles.right} data-tauri-drag-region="false">
@@ -53,8 +54,8 @@ export function TitleBar(props: TitleBarProps) {
           type="button"
           className={styles.paletteHint}
           onClick={onOpenPalette}
-          aria-label="Open command palette"
-          title="Open command palette"
+          aria-label={t('titleBar.openPalette')}
+          title={t('titleBar.openPalette')}
         >
           <Kbd>⌘</Kbd>
           <Kbd>K</Kbd>

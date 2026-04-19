@@ -42,7 +42,7 @@ pub mod ports;
 
 pub use adapters::{
     AnthropicProvider, AnthropicProviderBuilder, ApiKey, HeuristicClassifier, MockProvider,
-    DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL,
+    DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL, METRIC_REQUEST_LATENCY_MS,
 };
 pub use domain::{
     ClassifiedCommand, RiskFlags, RiskModifier, RiskTier, SuggestionId, SuggestionRequest,

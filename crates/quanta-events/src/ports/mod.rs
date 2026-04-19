@@ -36,6 +36,13 @@ pub enum EventLogError {
     /// accept. Defends replay against zstd bombs.
     #[error("record payload too large: {observed} bytes (limit {limit})")]
     PayloadTooLarge { observed: usize, limit: usize },
+    /// Two adjacent records in a session are not strictly consecutive by
+    /// `monotonic_seq`. Per ADR 0011 §Monotonic Seq, gaps are a corruption
+    /// signal (the writer is the sole authority on seq assignment; a gap
+    /// means a segment was dropped, reordered, or tampered with) and replay
+    /// refuses to proceed rather than silently return a truncated history.
+    #[error("monotonic_seq gap during replay: expected {expected}, got {actual}")]
+    SeqGap { expected: u64, actual: u64 },
     #[error("event log closed")]
     Closed,
 }

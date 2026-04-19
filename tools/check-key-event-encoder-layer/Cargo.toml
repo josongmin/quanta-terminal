@@ -1,0 +1,20 @@
+[package]
+name = "check-key-event-encoder-layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — enforces invariant I-6: KeyboardEvent bytes MUST go through the input encoder layer."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "check-key-event-encoder-layer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+walkdir = "2"

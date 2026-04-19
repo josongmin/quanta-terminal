@@ -12,5 +12,5 @@ mod reducer;
 mod state;
 
 pub use boundary::{BoundaryEvent, BoundarySink};
-pub use reducer::{reduce, reduce_many, BlockEvent};
+pub use reducer::{reduce, reduce_many, try_reduce, BlockEvent, BlockReducer, ReducerError};
 pub use state::{Block, BlockState, SubState};

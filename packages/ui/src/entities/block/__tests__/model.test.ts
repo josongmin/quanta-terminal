@@ -113,6 +113,42 @@ describe('block store — lifecycle transitions', () => {
     expect(b.status).toBe('error');
     expect(b.errorMessage).toBe('spawn EACCES');
   });
+
+  // Audit P0 (fix 1): late-watchdog safety — a 35s-delayed watchdog callback
+  // firing after the block already completed must NOT rewrite the block to
+  // `error` and blow away its exit code. Mirrors the guard completeBlock /
+  // cancelBlock already had.
+  describe('errorBlock — terminal-state guard (fix 1)', () => {
+    it('is a no-op on a completed block, preserving exit code', () => {
+      const id = useBlockStore.getState().createBlock('true', '/');
+      useBlockStore.getState().completeBlock(id, 0);
+      const snap = getBlock(id);
+      useBlockStore.getState().errorBlock(id, 'late watchdog');
+      const after = getBlock(id);
+      expect(after).toBe(snap);
+      expect(after.status).toBe('completed');
+      expect(after.exitCode).toBe(0);
+      expect(after.errorMessage).toBeNull();
+    });
+
+    it('is a no-op when errorBlock is called twice (second call ignored)', () => {
+      const id = useBlockStore.getState().createBlock('nope', '/');
+      useBlockStore.getState().errorBlock(id, 'first');
+      const snap = getBlock(id);
+      useBlockStore.getState().errorBlock(id, 'second');
+      expect(getBlock(id)).toBe(snap);
+      expect(getBlock(id).errorMessage).toBe('first');
+    });
+
+    it('is a no-op on a canceled block, preserving the canceled status', () => {
+      const id = useBlockStore.getState().createBlock('sleep 9', '/');
+      useBlockStore.getState().cancelBlock(id);
+      const snap = getBlock(id);
+      useBlockStore.getState().errorBlock(id, 'late watchdog');
+      expect(getBlock(id)).toBe(snap);
+      expect(getBlock(id).status).toBe('canceled');
+    });
+  });
 });
 
 describe('block store — toggles', () => {

@@ -25,6 +25,7 @@ import {
   detect,
   type DetectionResult,
 } from '../../features/shell-integration-wizard/index.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './shell-integration-banner.module.css';
 
 export interface ShellIntegrationBannerProps {
@@ -88,7 +89,7 @@ export function ShellIntegrationBanner(props: ShellIntegrationBannerProps) {
         <Banner
           kind="info"
           onDismiss={handleDismiss}
-          dismissLabel="Not now"
+          dismissLabel={t('shellIntegrationBanner.dismiss')}
           action={
             <Button
               type="button"
@@ -96,12 +97,11 @@ export function ShellIntegrationBanner(props: ShellIntegrationBannerProps) {
               onClick={handleInstall}
               data-testid="shell-integration-banner-install"
             >
-              Install
+              {t('shellIntegrationBanner.install')}
             </Button>
           }
         >
-          Shell integration is not installed — block boundaries are estimated. Install a small
-          script into your {detection.shell} config for authoritative framing.
+          {t('shellIntegrationBanner.body', { shell: detection.shell })}
         </Banner>
       </div>
       <Wizard {...wizardProps} />
