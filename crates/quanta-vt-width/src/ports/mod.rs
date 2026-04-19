@@ -24,7 +24,7 @@ pub trait WidthClassifier: Send + Sync {
     /// `s` SHOULD be exactly one cluster; callers who have a larger string
     /// should segment first (using [`WidthClassifier::classify_str`]).
     /// Implementations MUST NOT panic on malformed or empty input — they
-    /// return `(Grapheme::from_str(""), CellWidth::Zero)` as the neutral
+    /// return `(Grapheme::from_str_infallible(""), CellWidth::Zero)` as the neutral
     /// element.
     fn classify_grapheme(&self, s: &str) -> (Grapheme, CellWidth);
 

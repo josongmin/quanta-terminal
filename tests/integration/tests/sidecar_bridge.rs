@@ -248,6 +248,16 @@ fn event_kind_name(e: &quanta_proto::envelope::Envelope<Event>) -> &'static str 
         Event::SuggestionGenerated(_) => "SuggestionGenerated",
         Event::SuggestionReviewed(_) => "SuggestionReviewed",
         Event::HistoryIndexed(_) => "HistoryIndexed",
+        Event::GridSnapshot(_) => "GridSnapshot",
+        Event::GridDelta(_) => "GridDelta",
+        Event::CursorMoved(_) => "CursorMoved",
+        Event::ModeChanged(_) => "ModeChanged",
+        Event::TitleChanged(_) => "TitleChanged",
+        Event::BellRequested(_) => "BellRequested",
+        Event::HyperlinkAdded(_) => "HyperlinkAdded",
+        Event::HyperlinkRemoved(_) => "HyperlinkRemoved",
+        Event::ClipboardRequest(_) => "ClipboardRequest",
+        Event::SynchronizedUpdate(_) => "SynchronizedUpdate",
         Event::Unknown { .. } => "Unknown",
     }
 }

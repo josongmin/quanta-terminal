@@ -301,6 +301,7 @@ async fn spawn_mock_session(
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, sid) = SessionActor::spawn(port, log.clone(), cfg).await.unwrap();
     (actor, log, controller, sid)
@@ -720,6 +721,7 @@ async fn tui_enter_exit_churn_body(pairs: usize, deadline: Duration) {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, _sid) = SessionActor::spawn(port, sink_trait, cfg).await.unwrap();
 
@@ -839,6 +841,7 @@ async fn command_done_alone_flips_shell_integration_status_to_installed() {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, _sid) = SessionActor::spawn(port, sink_trait, cfg).await.unwrap();
 
@@ -921,6 +924,7 @@ async fn tui_bytes_accumulate_across_non_boundary_chunks() {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, _sid) = SessionActor::spawn(port, sink_trait, cfg).await.unwrap();
 

@@ -51,7 +51,9 @@ fn classify_str_matches_grapheme_corpus() {
             continue;
         }
         let mut parts = line.splitn(3, '\t');
-        let hex = parts.next().unwrap_or_else(|| panic!("line {} no hex", idx + 1));
+        let hex = parts
+            .next()
+            .unwrap_or_else(|| panic!("line {} no hex", idx + 1));
         let count_str = parts
             .next()
             .unwrap_or_else(|| panic!("line {} no count", idx + 1));

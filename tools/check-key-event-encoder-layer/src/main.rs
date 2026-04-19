@@ -1,3 +1,4 @@
+#![allow(clippy::needless_raw_string_hashes)]
 //! `check-key-event-encoder-layer` — enforces RFC 0001 invariant **I-6**:
 //! `KeyboardEvent` → encoder → bytes. Never browser → bridge → PTY
 //! directly.
@@ -51,7 +52,13 @@ use walkdir::WalkDir;
 const UI_ROOT: &str = "packages/ui/src";
 const ENCODER_MODULE_PATH: &str = "features/input";
 const SCAN_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
-const SKIP_DIR_NAMES: &[&str] = &["node_modules", "dist", "build", "generated", "__generated__"];
+const SKIP_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    "dist",
+    "build",
+    "generated",
+    "__generated__",
+];
 
 /// Patterns indicating a file holds a `KeyboardEvent`. Substring match;
 /// false positive surface is limited because `KeyboardEvent` is the
@@ -157,9 +164,7 @@ fn run(root: &Path) -> Result<usize> {
         }
     }
 
-    println!(
-        "check-key-event-encoder-layer: scanned {scanned} file(s); {violations} violation(s)",
-    );
+    println!("check-key-event-encoder-layer: scanned {scanned} file(s); {violations} violation(s)",);
     Ok(violations)
 }
 
@@ -195,7 +200,9 @@ pub fn scan_text(text: &str) -> Vec<Hit> {
             if line.contains(marker) {
                 hits.push(Hit {
                     line: line_no,
-                    pattern: format!("KeyboardEvent + direct `{marker}...)` without encoder import"),
+                    pattern: format!(
+                        "KeyboardEvent + direct `{marker}...)` without encoder import"
+                    ),
                 });
             }
         }

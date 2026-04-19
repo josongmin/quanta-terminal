@@ -300,7 +300,7 @@ async fn reader_loop(
                     dispatch_control(msg, &pending);
                 }
                 Ok(Some(Frame::Event(env))) => {
-                    if event_tx.send(env).await.is_err() {
+                    if event_tx.send(*env).await.is_err() {
                         // Receiver dropped — nothing is listening to events,
                         // but RPCs may still be in flight. Keep the reader
                         // alive so control responses still get delivered.
@@ -388,9 +388,14 @@ fn fail_all_pending(pending: &Arc<StdMutex<PendingMap>>) {
 }
 
 /// Internal: one decoded frame off the wire.
+///
+/// `Envelope<Event>` is ~320 B once the `Event` enum carries grid payloads;
+/// a direct variant would force every `Frame` stack slot to reserve that
+/// much even for the ~112 B `Control` variant. Boxing the event keeps the
+/// enum compact and makes the cost explicit at dispatch time.
 enum Frame {
     Control(ControlMessage),
-    Event(Envelope<Event>),
+    Event(Box<Envelope<Event>>),
 }
 
 async fn write_control(
@@ -439,7 +444,7 @@ fn try_take_frame(buf: &mut Vec<u8>) -> Result<Option<Frame>, ProtocolError> {
             buf.drain(..5 + len);
             let env: Envelope<Event> =
                 rmp_serde::from_slice(&body).map_err(|e| ProtocolError::Codec(e.to_string()))?;
-            Ok(Some(Frame::Event(env)))
+            Ok(Some(Frame::Event(Box::new(env))))
         }
         other => Err(ProtocolError::Codec(format!(
             "unknown channel byte 0x{other:02x}"

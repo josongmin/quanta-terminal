@@ -65,6 +65,7 @@ async fn shell_exits_before_any_write_emits_clean_session_ended() {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, sid) = SessionActor::spawn(pty, log.clone(), cfg).await.unwrap();
 
@@ -290,6 +291,7 @@ async fn shell_that_prints_and_exits_drains_cleanly() {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, _sid) = SessionActor::spawn(pty, log, cfg).await.unwrap();
     // Give the shell a moment to run and exit.

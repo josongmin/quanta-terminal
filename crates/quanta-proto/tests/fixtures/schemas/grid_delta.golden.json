@@ -1,0 +1,47 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 42,
+  "session_id": "01J00000000000000000000001",
+  "block_id": null,
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "grid",
+  "schema_version": 1,
+  "causation_id": null,
+  "grid_epoch": 1,
+  "payload": {
+    "kind": "grid_delta",
+    "row_deltas": [
+      {
+        "row": 10,
+        "revision_before": 17,
+        "revision_after": 18,
+        "spans": [
+          {
+            "cols": 2,
+            "sgr": "0x018000FF00FF000033",
+            "graphemes": {
+              "utf8": [
+                237,
+                149,
+                156
+              ]
+            },
+            "hyperlink_id": 0,
+            "ext": null
+          },
+          {
+            "cols": 78,
+            "sgr": "0x0000000000000000",
+            "graphemes": "blank",
+            "hyperlink_id": 0,
+            "ext": null
+          }
+        ],
+        "continuation": false,
+        "hyperlink_refs": []
+      }
+    ],
+    "scrolls": [],
+    "scrollback_appended": 0
+  }
+}

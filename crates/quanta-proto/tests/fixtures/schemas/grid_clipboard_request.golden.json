@@ -1,0 +1,19 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 33,
+  "session_id": "01J00000000000000000000001",
+  "block_id": null,
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "grid",
+  "schema_version": 1,
+  "causation_id": null,
+  "grid_epoch": 1,
+  "payload": {
+    "kind": "clipboard_request",
+    "selection": "clipboard",
+    "op": {
+      "op": "set",
+      "base64_data": "SGVsbG8sIHdvcmxkIQ=="
+    }
+  }
+}

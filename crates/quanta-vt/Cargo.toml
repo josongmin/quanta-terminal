@@ -1,0 +1,39 @@
+[package]
+name = "quanta-vt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quanta Terminal — VT engine core (EPIC-B). Grid, alt-screen, cursor, SGR, DEC modes, OSC, scrollback, damage tracker."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The ANSI / CSI / OSC / DCS parser. Only imported in `adapters/vte_processor.rs`
+# per ADR 0014 hex rule; domain/ports never see raw bytes.
+vte = { workspace = true }
+# Width / grapheme / wrap classification SSOT (EPIC-A / ADR 0015).
+quanta-vt-width = { path = "../quanta-vt-width" }
+# Metrics counters (EPIC-J). Emits telemetry for unknown CSI/OSC, etc.
+quanta-metrics = { path = "../quanta-metrics" }
+# Public payload types are serde-serializable so EPIC-C wire format can consume
+# them without re-definition.
+serde = { workspace = true }
+# No `panic!` / `unwrap` in library code — fallible paths return errors.
+thiserror = { workspace = true }
+# Tracing only; NO `println!` in library code.
+tracing = { workspace = true }
+# Inline-small storage to match quanta-vt-width Grapheme inline size (8 bytes).
+smallstr = { workspace = true }
+# Cell attribute bitflags.
+bitflags = { version = "2", features = ["serde"] }
+# Grapheme segmentation (pending flush decisions — does NOT replace the
+# quanta-vt-width classifier; used only for streaming cluster boundary detection).
+unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rstest = { workspace = true }
+serde_json = { workspace = true }

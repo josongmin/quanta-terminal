@@ -1,0 +1,20 @@
+{
+  "id": "korean-2set-esc-cancel",
+  "ime": "korean-2set",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": "" },
+    { "tMs": 50, "kind": "compositionupdate", "data": "ㅎ" },
+    { "tMs": 120, "kind": "compositionupdate", "data": "하" },
+    { "tMs": 180, "kind": "keydown", "key": "Escape" }
+  ],
+  "expectedPtyBytesHex": "",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": "" },
+    { "afterTMs": 50, "visible": true, "text": "ㅎ" },
+    { "afterTMs": 120, "visible": true, "text": "하" },
+    { "afterTMs": 180, "visible": false, "text": "" }
+  ],
+  "notes": "T5: Esc during Composing cancels and does NOT forward to PTY."
+}

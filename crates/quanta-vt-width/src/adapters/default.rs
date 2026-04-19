@@ -167,7 +167,7 @@ impl WidthClassifier for DefaultClassifier {
         // avoids misclassifying ZWJ sequences as multiple clusters.
         let first = s.graphemes(true).next().unwrap_or("");
         let width = self.cluster_width(first);
-        (Grapheme::from_str(first), width)
+        (Grapheme::from_str_infallible(first), width)
     }
 
     fn wrap_eligible(

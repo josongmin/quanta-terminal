@@ -7,6 +7,15 @@ use quanta_pty::PtySize;
 
 use crate::domain::{InputSubmission, SessionSnapshot};
 
+// EPIC-F — VT port re-exports. Downstream consumers import VT event / envelope
+// surfaces through `quanta_session::ports::*` so they don't have to know whether
+// the types live in `quanta_vt` or this crate. Per the contract freeze in
+// `docs/plans/0001-custom-vt-engine-xterm-removal/epic-F-session-integration.md` §14.
+pub use quanta_vt::{
+    BufferKind, CellRun, EventEnvelope, GridDelta, GridSnapshot, ModeChangedPayload, RectDamage,
+    RowDelta, TerminalEvent,
+};
+
 /// Errors returned from a [`SessionHandle`].
 ///
 /// Two of the variants (`Pty`, `EventLog`) carry the original error so the

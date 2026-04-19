@@ -97,7 +97,11 @@ pub const OVERRIDES: &[Override] = &[
     // -----------------------------------------------------------------------
     o(0x0000_200B, CellWidth::Zero, OverrideReason::FormatControl),
     o(0x0000_200C, CellWidth::Zero, OverrideReason::FormatControl),
-    o(0x0000_200D, CellWidth::Zero, OverrideReason::ZeroWidthJoiner),
+    o(
+        0x0000_200D,
+        CellWidth::Zero,
+        OverrideReason::ZeroWidthJoiner,
+    ),
     o(0x0000_200E, CellWidth::Zero, OverrideReason::FormatControl),
     o(0x0000_200F, CellWidth::Zero, OverrideReason::FormatControl),
     // -----------------------------------------------------------------------
@@ -112,11 +116,31 @@ pub const OVERRIDES: &[Override] = &[
     //   narrow-ambiguous mode.
     // U+2500..U+257F BOX DRAWING: see dedicated block below. Not here.
     // -----------------------------------------------------------------------
-    o(0x0000_2026, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_2190, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_2191, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_2192, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_2193, CellWidth::One, OverrideReason::AmbiguousException),
+    o(
+        0x0000_2026,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_2190,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_2191,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_2192,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_2193,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
     // -----------------------------------------------------------------------
     // DEC / Unicode line-drawing block (U+2500..U+257F).
     //
@@ -145,14 +169,33 @@ pub const OVERRIDES: &[Override] = &[
     // U+2605/U+2606 BLACK/WHITE STAR: ambiguous; pin narrow — selector
     //   glyphs in fzf-style UIs expect 1 cell.
     // -----------------------------------------------------------------------
-    o(0x0000_25CB, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_25CF, CellWidth::One, OverrideReason::AmbiguousException),
+    o(
+        0x0000_25CB,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_25CF,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
     o(0x0000_2600, CellWidth::Two, OverrideReason::EmojiWidening),
     o(0x0000_2601, CellWidth::Two, OverrideReason::EmojiWidening),
     o(0x0000_2602, CellWidth::Two, OverrideReason::EmojiWidening),
     o(0x0000_2603, CellWidth::Two, OverrideReason::EmojiWidening),
-    o(0x0000_2605, CellWidth::One, OverrideReason::AmbiguousException),
-    o(0x0000_2606, CellWidth::One, OverrideReason::AmbiguousException),
+    o(
+        0x0000_2605,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    o(
+        0x0000_2606,
+        CellWidth::One,
+        OverrideReason::AmbiguousException,
+    ),
+    // U+2728 SPARKLES — terminals render at 2 cells; `unicode-width`
+    // reports 1 without VS16. Pin wide to match TS mirror + user expectation.
+    o(0x0000_2728, CellWidth::Two, OverrideReason::EmojiWidening),
     // -----------------------------------------------------------------------
     // Variation selectors (U+FE00..U+FE0F).
     //
@@ -163,28 +206,101 @@ pub const OVERRIDES: &[Override] = &[
     // width to zero so a lookup that happens to hit VS on its own cannot
     // return a non-zero (wrong) width.
     // -----------------------------------------------------------------------
-    o(0x0000_FE00, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE01, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE02, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE03, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE04, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE05, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE06, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE07, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE08, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE09, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE0A, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE0B, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE0C, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE0D, CellWidth::Zero, OverrideReason::VariationSelector),
-    o(0x0000_FE0E, CellWidth::Zero, OverrideReason::VariationSelector), // VS15 — text presentation
-    o(0x0000_FE0F, CellWidth::Zero, OverrideReason::VariationSelector), // VS16 — emoji presentation
+    o(
+        0x0000_FE00,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE01,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE02,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE03,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE04,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE05,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE06,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE07,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE08,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE09,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE0A,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE0B,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE0C,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE0D,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ),
+    o(
+        0x0000_FE0E,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ), // VS15 — text presentation
+    o(
+        0x0000_FE0F,
+        CellWidth::Zero,
+        OverrideReason::VariationSelector,
+    ), // VS16 — emoji presentation
     // -----------------------------------------------------------------------
     // Format control at U+FEFF.
     //
     // BOM / ZERO-WIDTH NO-BREAK SPACE. Invisible in a terminal grid.
     // -----------------------------------------------------------------------
     o(0x0000_FEFF, CellWidth::Zero, OverrideReason::FormatControl),
+    // -----------------------------------------------------------------------
+    // High-plane emoji widening (U+1Fxxx).
+    //
+    // `unicode-width` returns 1 for a handful of "tool" / "symbol" emoji in
+    // the U+1F5xx range without VS16. Real terminals render these as 2
+    // cells and the TS mirror's base-width-table agrees. Pin them here so
+    // Rust ↔ TS parity holds on the grapheme corpus.
+    // -----------------------------------------------------------------------
+    o(0x0001_F58C, CellWidth::Two, OverrideReason::EmojiWidening),
 ];
 
 /// Binary-search the override table. `O(log n)` on a `const` slice —
@@ -223,24 +339,12 @@ mod tests {
     #[test]
     fn lookup_finds_known_entries() {
         // VS15 / VS16
-        assert_eq!(
-            lookup(0xFE0E).map(|o| o.width),
-            Some(CellWidth::Zero)
-        );
-        assert_eq!(
-            lookup(0xFE0F).map(|o| o.width),
-            Some(CellWidth::Zero)
-        );
+        assert_eq!(lookup(0xFE0E).map(|o| o.width), Some(CellWidth::Zero));
+        assert_eq!(lookup(0xFE0F).map(|o| o.width), Some(CellWidth::Zero));
         // DEC line drawing
-        assert_eq!(
-            lookup(0x2500).map(|o| o.width),
-            Some(CellWidth::One)
-        );
+        assert_eq!(lookup(0x2500).map(|o| o.width), Some(CellWidth::One));
         // ZWJ
-        assert_eq!(
-            lookup(0x200D).map(|o| o.width),
-            Some(CellWidth::Zero)
-        );
+        assert_eq!(lookup(0x200D).map(|o| o.width), Some(CellWidth::Zero));
     }
 
     #[test]

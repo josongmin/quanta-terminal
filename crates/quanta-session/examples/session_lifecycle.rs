@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, sid) = SessionActor::spawn(pty, log, cfg).await?;
     println!("spawned session {sid}");

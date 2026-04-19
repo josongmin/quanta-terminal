@@ -17,6 +17,7 @@ members = [
     "crates/quanta-core",
     "crates/quanta-replay-cli",
     "crates/quanta-vt-width",
+    "crates/quanta-vt",
     "tools/check-hex-imports",
     "tools/check-adr-compliance",
     "tools/check-event-topic-names",
@@ -113,6 +114,8 @@ dashmap = "6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 base64 = "0.22"
 tempfile = "3"
+bitflags = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v4"] }
 
 # Testing
 insta = { version = "1.40", features = ["yaml", "json"] }

@@ -11,6 +11,11 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::events_grid::{
+    BellRequestedPayload, ClipboardRequestPayload, CursorMovedPayload, GridDeltaPayload,
+    GridSnapshotPayload, HyperlinkAddedPayload, HyperlinkRemovedPayload, ModeChangedPayload,
+    SynchronizedUpdatePayload, TitleChangedPayload,
+};
 use crate::ids::{BlockId, DiagnosticId, SessionId, SpanId, SuggestionId, WorkspaceId};
 
 /// The complete union of event payloads.
@@ -62,6 +67,29 @@ pub enum Event {
 
     // --- history ---
     HistoryIndexed(HistoryIndexed),
+
+    // --- grid (EPIC-C) ---
+    /// Full grid snapshot — emitted on connect/resume/resize/revision-resync.
+    /// See `crates/quanta-proto/src/events_grid.rs` for the payload.
+    GridSnapshot(GridSnapshotPayload),
+    /// Incremental grid delta — steady-state output.
+    GridDelta(GridDeltaPayload),
+    /// Cursor-only move. Decoupled so blink / idle moves don't dirty rows.
+    CursorMoved(CursorMovedPayload),
+    /// One or more DEC / xterm mode transitions batched atomically.
+    ModeChanged(ModeChangedPayload),
+    /// OSC 0 / 2 title change.
+    TitleChanged(TitleChangedPayload),
+    /// BEL received.
+    BellRequested(BellRequestedPayload),
+    /// OSC 8 hyperlink announced (id → URI table entry).
+    HyperlinkAdded(HyperlinkAddedPayload),
+    /// OSC 8 hyperlink retired (id released).
+    HyperlinkRemoved(HyperlinkRemovedPayload),
+    /// OSC 52 clipboard request (Set / Query).
+    ClipboardRequest(ClipboardRequestPayload),
+    /// DECSET 2026 / DCS BSU/ESU synchronized-update transition.
+    SynchronizedUpdate(SynchronizedUpdatePayload),
 
     /// Catch-all for an unknown event kind (forward compatibility per ADR 0011).
     ///
@@ -176,6 +204,16 @@ enum KnownEvent {
     SuggestionGenerated(SuggestionGenerated),
     SuggestionReviewed(SuggestionReviewed),
     HistoryIndexed(HistoryIndexed),
+    GridSnapshot(GridSnapshotPayload),
+    GridDelta(GridDeltaPayload),
+    CursorMoved(CursorMovedPayload),
+    ModeChanged(ModeChangedPayload),
+    TitleChanged(TitleChangedPayload),
+    BellRequested(BellRequestedPayload),
+    HyperlinkAdded(HyperlinkAddedPayload),
+    HyperlinkRemoved(HyperlinkRemovedPayload),
+    ClipboardRequest(ClipboardRequestPayload),
+    SynchronizedUpdate(SynchronizedUpdatePayload),
 }
 
 impl KnownEvent {
@@ -203,6 +241,16 @@ impl KnownEvent {
             KnownEvent::SuggestionGenerated(x) => Event::SuggestionGenerated(x),
             KnownEvent::SuggestionReviewed(x) => Event::SuggestionReviewed(x),
             KnownEvent::HistoryIndexed(x) => Event::HistoryIndexed(x),
+            KnownEvent::GridSnapshot(x) => Event::GridSnapshot(x),
+            KnownEvent::GridDelta(x) => Event::GridDelta(x),
+            KnownEvent::CursorMoved(x) => Event::CursorMoved(x),
+            KnownEvent::ModeChanged(x) => Event::ModeChanged(x),
+            KnownEvent::TitleChanged(x) => Event::TitleChanged(x),
+            KnownEvent::BellRequested(x) => Event::BellRequested(x),
+            KnownEvent::HyperlinkAdded(x) => Event::HyperlinkAdded(x),
+            KnownEvent::HyperlinkRemoved(x) => Event::HyperlinkRemoved(x),
+            KnownEvent::ClipboardRequest(x) => Event::ClipboardRequest(x),
+            KnownEvent::SynchronizedUpdate(x) => Event::SynchronizedUpdate(x),
         }
     }
 }
@@ -231,6 +279,16 @@ enum KnownEventRef<'a> {
     SuggestionGenerated(&'a SuggestionGenerated),
     SuggestionReviewed(&'a SuggestionReviewed),
     HistoryIndexed(&'a HistoryIndexed),
+    GridSnapshot(&'a GridSnapshotPayload),
+    GridDelta(&'a GridDeltaPayload),
+    CursorMoved(&'a CursorMovedPayload),
+    ModeChanged(&'a ModeChangedPayload),
+    TitleChanged(&'a TitleChangedPayload),
+    BellRequested(&'a BellRequestedPayload),
+    HyperlinkAdded(&'a HyperlinkAddedPayload),
+    HyperlinkRemoved(&'a HyperlinkRemovedPayload),
+    ClipboardRequest(&'a ClipboardRequestPayload),
+    SynchronizedUpdate(&'a SynchronizedUpdatePayload),
 }
 
 impl<'a> KnownEventRef<'a> {
@@ -258,6 +316,16 @@ impl<'a> KnownEventRef<'a> {
             Event::SuggestionGenerated(x) => KnownEventRef::SuggestionGenerated(x),
             Event::SuggestionReviewed(x) => KnownEventRef::SuggestionReviewed(x),
             Event::HistoryIndexed(x) => KnownEventRef::HistoryIndexed(x),
+            Event::GridSnapshot(x) => KnownEventRef::GridSnapshot(x),
+            Event::GridDelta(x) => KnownEventRef::GridDelta(x),
+            Event::CursorMoved(x) => KnownEventRef::CursorMoved(x),
+            Event::ModeChanged(x) => KnownEventRef::ModeChanged(x),
+            Event::TitleChanged(x) => KnownEventRef::TitleChanged(x),
+            Event::BellRequested(x) => KnownEventRef::BellRequested(x),
+            Event::HyperlinkAdded(x) => KnownEventRef::HyperlinkAdded(x),
+            Event::HyperlinkRemoved(x) => KnownEventRef::HyperlinkRemoved(x),
+            Event::ClipboardRequest(x) => KnownEventRef::ClipboardRequest(x),
+            Event::SynchronizedUpdate(x) => KnownEventRef::SynchronizedUpdate(x),
             Event::Unknown { .. } => return None,
         })
     }

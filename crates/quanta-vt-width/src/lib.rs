@@ -1,3 +1,7 @@
+// Stylistic clippy lints we live with for the L4 stabilisation window.
+// Each entry has a reason; see the matching note in `quanta-vt`.
+#![allow(clippy::match_same_arms, clippy::doc_overindented_list_items)]
+
 //! `quanta-vt-width` — width, grapheme, and line-break single source of truth.
 //!
 //! This crate is the **sole** authority for:

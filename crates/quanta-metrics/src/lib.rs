@@ -1,3 +1,5 @@
+#![allow(clippy::match_same_arms, clippy::float_cmp)]
+
 //! `quanta-metrics` — metrics surface for the Quanta sidecar.
 //!
 //! # Scope

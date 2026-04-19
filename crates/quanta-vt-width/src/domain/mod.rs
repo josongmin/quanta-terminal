@@ -18,9 +18,7 @@ use smallstr::SmallString;
 ///
 /// Serialization form is the string `"zero" | "one" | "two"` so the TS
 /// mirror can share the same golden fixtures without a numeric mapping.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[must_use]
 pub enum CellWidth {
@@ -85,8 +83,12 @@ impl Grapheme {
     ///
     /// The slice SHOULD already be a single grapheme cluster; callers who
     /// need segmentation should go through [`crate::WidthClassifier`].
+    ///
+    /// Named `from_str_infallible` to dodge the `std::str::FromStr` trait
+    /// clash (this constructor is infallible; `FromStr::from_str` is
+    /// `Result<_, _>`-returning and would force a pointless error arm).
     #[must_use]
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_str_infallible(s: &str) -> Self {
         Self(SmallString::from_str(s))
     }
 
@@ -117,7 +119,7 @@ impl fmt::Display for Grapheme {
 
 impl From<&str> for Grapheme {
     fn from(s: &str) -> Self {
-        Self::from_str(s)
+        Self::from_str_infallible(s)
     }
 }
 
@@ -262,7 +264,7 @@ mod tests {
     #[test]
     fn grapheme_preserves_bytes_exactly() {
         let s = "👨\u{200d}👩\u{200d}👧\u{200d}👦"; // ZWJ family
-        let g = Grapheme::from_str(s);
+        let g = Grapheme::from_str_infallible(s);
         assert_eq!(g.as_str(), s);
         assert_eq!(g.len(), s.len());
     }
@@ -270,21 +272,19 @@ mod tests {
     #[test]
     fn grapheme_inline_for_short_ascii() {
         // SmallString keeps <= 8 bytes inline. `"hello"` is 5 bytes.
-        let g = Grapheme::from_str("hello");
+        let g = Grapheme::from_str_infallible("hello");
         assert_eq!(g.as_str(), "hello");
     }
 
     #[test]
     fn ambig_resolve_mac_is_narrow() {
-        let r =
-            AmbiguousWidthPolicy::Auto.resolve(OsKind::MacOs, Some("ko_KR.UTF-8"));
+        let r = AmbiguousWidthPolicy::Auto.resolve(OsKind::MacOs, Some("ko_KR.UTF-8"));
         assert_eq!(r, AmbiguousWidthPolicy::Narrow);
     }
 
     #[test]
     fn ambig_resolve_windows_is_narrow() {
-        let r =
-            AmbiguousWidthPolicy::Auto.resolve(OsKind::Windows, Some("ja_JP.UTF-8"));
+        let r = AmbiguousWidthPolicy::Auto.resolve(OsKind::Windows, Some("ja_JP.UTF-8"));
         assert_eq!(r, AmbiguousWidthPolicy::Narrow);
     }
 
@@ -319,8 +319,7 @@ mod tests {
     #[test]
     fn ambig_resolve_explicit_passes_through() {
         assert_eq!(
-            AmbiguousWidthPolicy::Narrow
-                .resolve(OsKind::Linux, Some("ko_KR.UTF-8")),
+            AmbiguousWidthPolicy::Narrow.resolve(OsKind::Linux, Some("ko_KR.UTF-8")),
             AmbiguousWidthPolicy::Narrow,
         );
         assert_eq!(

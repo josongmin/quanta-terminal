@@ -71,11 +71,11 @@ fn every_counter_in_catalog_round_trips_through_snapshot() {
 
 #[test]
 fn all_metric_names_matches_the_union_of_counter_and_histogram_lists() {
-    let mut expected: Vec<&'static str> = counter_names().iter().copied().collect();
+    let mut expected: Vec<&'static str> = counter_names().to_vec();
     expected.extend(histogram_names().iter().copied());
     expected.sort_unstable();
 
-    let mut actual: Vec<&'static str> = ALL_METRIC_NAMES.iter().copied().collect();
+    let mut actual: Vec<&'static str> = ALL_METRIC_NAMES.to_vec();
     actual.sort_unstable();
 
     assert_eq!(

@@ -1,3 +1,4 @@
+#![allow(clippy::needless_raw_string_hashes)]
 //! `check-paint-no-width-override` — enforces RFC 0001 invariant **I-4**:
 //! the renderer / paint layer MUST NOT override semantic cell width.
 //!
@@ -79,7 +80,13 @@ const FORBIDDEN_CALLS: &[&str] = &[
 
 const ALLOW_PRAGMA: &str = "// allow-width-override:";
 
-const SKIP_DIR_NAMES: &[&str] = &["node_modules", "dist", "build", "generated", "__generated__"];
+const SKIP_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    "dist",
+    "build",
+    "generated",
+    "__generated__",
+];
 
 struct Cli {
     root: PathBuf,
@@ -168,9 +175,7 @@ fn run(root: &Path) -> Result<usize> {
             }
         }
     }
-    println!(
-        "check-paint-no-width-override: scanned {scanned} file(s); {violations} violation(s)",
-    );
+    println!("check-paint-no-width-override: scanned {scanned} file(s); {violations} violation(s)",);
     Ok(violations)
 }
 
@@ -284,7 +289,8 @@ mod tests {
 
     #[test]
     fn pragma_allows_single_call() {
-        let src = "import { one } from 'x';\n// allow-width-override: legacy\nconst w = charWidth(cp);\n";
+        let src =
+            "import { one } from 'x';\n// allow-width-override: legacy\nconst w = charWidth(cp);\n";
         let hits = scan_text(src);
         let unsuppressed: Vec<_> = hits
             .iter()

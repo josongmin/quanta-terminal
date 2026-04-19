@@ -1,0 +1,20 @@
+{
+  "id": "korean-2set-macos-blur",
+  "ime": "korean-2set",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": "" },
+    { "tMs": 50, "kind": "compositionupdate", "data": "ㅎ" },
+    { "tMs": 150, "kind": "compositionupdate", "data": "하" },
+    { "tMs": 200, "kind": "blur" }
+  ],
+  "expectedPtyBytesHex": "",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": "" },
+    { "afterTMs": 50, "visible": true, "text": "ㅎ" },
+    { "afterTMs": 150, "visible": true, "text": "하" },
+    { "afterTMs": 200, "visible": false, "text": "" }
+  ],
+  "notes": "T7: macOS blur cancels immediately, no bytes emitted."
+}

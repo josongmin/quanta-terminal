@@ -19,13 +19,23 @@ quanta-events = { path = "../quanta-events" }
 quanta-security = { path = "../quanta-security" }
 quanta-diagnostic = { path = "../quanta-diagnostic" }
 quanta-metrics = { path = "../quanta-metrics" }
+# EPIC-F — VT engine integration. Reader task feeds PTY bytes through
+# `quanta_vt::Grid::feed` and emits `TerminalEvent` envelopes.
+quanta-vt = { path = "../quanta-vt" }
+# EPIC-F — width/grapheme SSOT used by the VT engine constructor
+# (`DefaultClassifier`). Required at the actor-side call to `Grid::new`.
+quanta-vt-width = { path = "../quanta-vt-width" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
+# EPIC-F — used to serialize `TerminalEvent` into the `Event::Unknown`
+# placeholder payload until EPIC-C lands the typed `Event::Grid` variants.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
 base64 = { workspace = true }
+serde_json = { workspace = true }

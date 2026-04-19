@@ -105,6 +105,7 @@ impl Engine {
             cwd,
             cols,
             rows,
+            ..SessionConfig::default()
         };
         let (actor, sid) = SessionActor::spawn(
             self.pty_port.clone(),

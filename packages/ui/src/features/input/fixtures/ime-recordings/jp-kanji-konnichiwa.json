@@ -1,0 +1,26 @@
+{
+  "id": "jp-kanji-konnichiwa",
+  "ime": "jp-ime-hiragana",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": "" },
+    { "tMs": 40, "kind": "compositionupdate", "data": "こ" },
+    { "tMs": 80, "kind": "compositionupdate", "data": "こん" },
+    { "tMs": 120, "kind": "compositionupdate", "data": "こんに" },
+    { "tMs": 160, "kind": "compositionupdate", "data": "こんにち" },
+    { "tMs": 200, "kind": "compositionupdate", "data": "こんにちは" },
+    { "tMs": 400, "kind": "compositionend", "data": "こんにちは" }
+  ],
+  "expectedPtyBytesHex": "e38193e38293e381abe381a1e381af",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": "" },
+    { "afterTMs": 40, "visible": true, "text": "こ" },
+    { "afterTMs": 80, "visible": true, "text": "こん" },
+    { "afterTMs": 120, "visible": true, "text": "こんに" },
+    { "afterTMs": 160, "visible": true, "text": "こんにち" },
+    { "afterTMs": 200, "visible": true, "text": "こんにちは" },
+    { "afterTMs": 400, "visible": false, "text": "" }
+  ],
+  "notes": "JP hiragana こんにちは. All mid-composition bytes must be empty."
+}

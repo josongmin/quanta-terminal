@@ -1,0 +1,18 @@
+{
+  "id": "macos-deadkey-eacute",
+  "ime": "macos-deadkey",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": " " },
+    { "tMs": 5, "kind": "compositionupdate", "data": "´" },
+    { "tMs": 120, "kind": "compositionend", "data": "é" }
+  ],
+  "expectedPtyBytesHex": "c3a9",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": " " },
+    { "afterTMs": 5, "visible": true, "text": "´" },
+    { "afterTMs": 120, "visible": false, "text": "" }
+  ],
+  "notes": "Dead-key via macOS Opt+e + e. Overlay briefly shows the accent; commit is é (c3 a9 UTF-8)."
+}

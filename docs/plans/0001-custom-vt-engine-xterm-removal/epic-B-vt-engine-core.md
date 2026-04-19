@@ -1537,4 +1537,285 @@ amendment.
 
 ---
 
+## 16. Definition of Done (DoD)
+
+A testable checklist. Every item maps to a specific test file, CI job, or
+code artifact in this crate. No fluffy items. Items are grouped by the
+contract or audit section they derive from.
+
+### 16.1 Public API present + documented (from §2)
+
+- [ ] `Cell` struct exists with `grapheme`, `width`, `fg`, `bg`, `attrs`,
+      `hyperlink` fields — signature matches §2.1. Rustdoc present; example
+      compiled by `cargo test --doc`.
+- [ ] `Color { Default, Palette8, Palette256, TrueColor { r, g, b } }` exists
+      with per-variant rustdoc — §2.2.
+- [ ] `CellAttrs` bitflags struct with the full attribute set (bold, italic,
+      underline, reverse, strikethrough, blink, invisible, WIDE_CONTINUATION)
+      — §2.1 + §2.3; test in `tests/unit/sgr.rs`.
+- [ ] `Cursor`, `CursorShape`, `CursorSave` with DECSC/DECRC chain;
+      unit-tested in `tests/unit/alt_screen.rs` + `tests/unit/csi_cursor.rs`.
+- [ ] `SgrState` + `CellAttrs` reset semantics — `tests/unit/sgr.rs`.
+- [ ] `CharsetState`, `CharsetSlot`, `CharsetTable` — `tests/unit/charset.rs`.
+- [ ] `Modes` + `DecMode` enum — one test per DEC mode in §5 covered by
+      `tests/unit/dec_modes.rs` (17 tests).
+- [ ] `TerminalModeState` snapshot shape — `tests/unit/mode_state.rs`
+      (12 tests); rustdoc explicitly states "snapshot, never live-read".
+- [ ] `BufferKind { Main, Alt }`, `Rect`, `GridSnapshot`, `GridDelta`,
+      `RowDelta`, `CellRun`, `RectDamage` payload types exist with signatures
+      matching §2.10.
+- [ ] `TerminalEvent` enum with all variants from §2.10 + freeze checklist
+      §15; one test per variant under `tests/unit/events_shape.rs`.
+- [ ] `EventEnvelope<P>` with `session_id`, `grid_epoch`, `sequence_no`,
+      `buffer_kind`, `resize_generation`, `payload` — §2.9; tested in
+      `tests/ordering.rs`.
+- [ ] `TerminalInput` trait with `KeyEvent`, `MouseEvent`, `PasteEvent`,
+      `FocusEvent` — §2.12; compile-check via a dummy impl in
+      `tests/unit/input_trait.rs`.
+
+### 16.2 Engine behavior (from §3 invariant audit, §5 DEC modes, §6 OSC)
+
+- [ ] Every DEC mode listed in §5 has a unit test in `tests/unit/dec_modes.rs`;
+      all 17 pass.
+- [ ] Every OSC listed in §6 has a handler test
+      (`tests/unit/osc_0.rs` … `osc_133.rs`); all pass.
+- [ ] Scrollback ring maintains capacity invariant under fuzz — fuzz target
+      `vte_process.rs` asserts `grid.scrollback_len() <= scrollback_cap`.
+- [ ] Alt-screen enter/exit: 5 scenarios tested in `tests/unit/alt_screen.rs`
+      — enter-exit simple, nested (vim in tmux simulation), 1047 clear-on-exit,
+      1048 save/restore only, 1049 full save+switch+restore.
+- [ ] Resize edge cases: 0 rows rejected (returns Err), 0 cols rejected,
+      shrink during a continuation run reflows correctly, grow re-expands
+      without data loss, alt-buffer resize does NOT reflow — all covered in
+      `tests/unit/resize.rs`.
+- [ ] `vte::Perform::print` buffers graphemes via EPIC-A `WidthClassifier` —
+      integration test `tests/unit/grapheme.rs` asserts Korean `한` occupies
+      2 columns, ZWJ `👨‍👩‍👧‍👦` 1 grapheme / 2 columns, combining `e + U+0301`
+      1 column.
+- [ ] Right-half-of-wide-char marker emitted as `CellWidth::Zero` sibling with
+      `CellAttrs::WIDE_CONTINUATION` — `tests/unit/grapheme.rs`.
+- [ ] Continuation flag set on wrapped rows; explicit `\n` rows not flagged —
+      `tests/unit/csi_cursor.rs` or a dedicated `tests/unit/wrap.rs`.
+
+### 16.3 Ordering + epoch semantics (from ADR 0017, §4 state machines)
+
+- [ ] `sequence_no` is strictly ascending per `grid_epoch` — asserted by
+      `tests/ordering.rs` across a recorded stream of 10k events.
+- [ ] `grid_epoch` increments on `Grid::reinit_epoch()` — `tests/ordering.rs`.
+- [ ] `resize_generation` increments on `Grid::resize()` — `tests/ordering.rs`.
+- [ ] Alt-screen `ModeChanged` arrives before first alt-buffer cell delta —
+      `tests/unit/alt_screen.rs` inspects event order.
+- [ ] Event flush policy per §7.4: mode-changes first, then cursor, then cell
+      deltas, then OSC tail — `tests/ordering.rs`.
+
+### 16.4 Robustness + fuzz
+
+- [ ] `Grid::feed` never panics — fuzz target `vte_process.rs` runs 60 min
+      on CI nightly without a panic finding.
+- [ ] Grid invariants hold under fuzz: row count stable, cursor in range,
+      row revisions monotonic, scrollback bounded — `tests/grid_invariants.rs`
+      property test + fuzz target assertions.
+- [ ] No `panic!`/`unwrap` in library code (`src/**/*.rs`); grep rule in
+      EPIC-K `check-no-unwrap` extended to cover this crate.
+
+### 16.5 Reference-implementation parity
+
+- [ ] Committed golden replay fixture `tests/compat/vim_clean_quickstart/`
+      replays `vim --clean` → the resulting grid matches the Alacritty-recorded
+      reference grid snapshot within ±0 cells.
+- [ ] Committed `tests/compat/tmux_new_session/` replay matches reference
+      within ±0 cells; title change fires.
+- [ ] Committed `tests/compat/htop_snapshot/` replay matches reference; alt
+      screen entered; cell grid populated.
+- [ ] (Note: full compat matrix is EPIC-G; this epic carries three
+      smoke-level fixtures to prove the pipeline.)
+
+### 16.6 Lint + format + coverage
+
+- [ ] `cargo test -p quanta-vt` green.
+- [ ] `cargo clippy -p quanta-vt --all-targets -- -D warnings` clean.
+- [ ] `cargo fmt --all --check` clean.
+- [ ] `cargo tarpaulin -p quanta-vt --fail-under 95` green — line coverage
+      ≥ 95%.
+- [ ] Branch coverage ≥ 85% via `cargo llvm-cov --branch --fail-under 85`.
+
+### 16.7 Spec + ADR artifacts
+
+- [ ] ADR 0017 status → `Accepted` in
+      `docs/adr/0017-reducer-ordering-and-mode-authority.md`.
+- [ ] This design doc's §15 "Contract freeze checklist" all items ticked.
+- [ ] Open questions in §13 all resolved in follow-up commits with inline
+      `// Decision:` comments at the resolution site.
+
+**DoD item count: 34 items.** Every item is a separate checkbox; each maps to
+a file, a test, a CI job, or an explicit ADR state.
+
+---
+
+## 17. Quality Gates
+
+Hard merge blocks for EPIC-B. Each gate names the CI job or script that
+enforces it.
+
+| Gate | Enforced by (CI job) | Failure behavior |
+|---|---|---|
+| Unit tests green | `cargo test -p quanta-vt` step in `.github/workflows/vt-engine.yml` | PR blocked |
+| Grid invariants (proptest) green | `cargo test -p quanta-vt --test grid_invariants` | PR blocked |
+| Ordering invariants green | `cargo test -p quanta-vt --test ordering` | PR blocked |
+| Golden stream smoke (3 fixtures) green | `cargo test -p quanta-vt --test golden_streams` | PR blocked |
+| Clippy clean | `cargo clippy -p quanta-vt --all-targets -- -D warnings` | PR blocked |
+| fmt clean | `cargo fmt --all --check` | PR blocked |
+| Line coverage ≥ 95% | `cargo tarpaulin -p quanta-vt --fail-under 95` | PR blocked |
+| Branch coverage ≥ 85% | `cargo llvm-cov --branch --fail-under 85` | PR blocked |
+| No `\x1b` parsing outside crate | EPIC-K grep rule `check-ui-no-ansi` (extended to whitelist `crates/quanta-vt/` only) | PR blocked |
+| No `panic!`/`unwrap` in lib | EPIC-K grep rule `check-no-unwrap` scoped to `crates/quanta-vt/src/**` | PR blocked |
+| No I/O in crate | Greps `src/**/*.rs` for `std::fs`, `std::net`, `tokio::`, `async_std::` — hit → fail | PR blocked |
+| Fuzz smoke (per PR) | `.github/workflows/fuzz-smoke.yml` — 2 min run on `vte_process` target | PR blocked on panic |
+| Fuzz long-run (nightly `main`) | `.github/workflows/fuzz-nightly.yml` — 60 min run | Regressions filed P0; not a PR blocker |
+| EPIC-A types imported unchanged | Compile-check only — EPIC-B can only reference the `WidthClassifier` / `CellWidth` / `Grapheme` shapes frozen by EPIC-A. Any attempt to re-define them locally fails review. | PR blocked |
+
+All gates above must be green before EPIC-B is marked exit; EPIC-C, F may
+begin spec-freeze implementation once §17 gates hold and §15 freeze checklist
+is ticked.
+
+---
+
+## 18. End-to-end scenarios
+
+7 E2E scenarios that exercise the engine as a whole. Each reads a recorded
+PTY stream, feeds it through `Grid::feed`, and asserts the resulting grid +
+emitted events. Fixtures live under `tests/compat/<name>/` and follow the
+golden-stream format EPIC-G will formalize; for EPIC-B exit these three-file
+shapes suffice: `input.pty` (raw bytes), `expected_grid.json` (snapshot),
+`expected_events.json` (ordered event trace with envelope metadata).
+
+### E2E-B1: `vim --clean` replay → grid match
+
+**Setup**. Fixture `tests/compat/vim_clean_quickstart/` with a recorded
+`vim --clean` session: open, enter insert mode, type `hello\nworld`, `ZZ`.
+Fixed `TERM=xterm-256color`, `LINES=24`, `COLUMNS=80`.
+
+**Run**. `Grid::new(24, 80, scrollback=1000, classifier)`, then
+`grid.feed(&input_bytes)` in 4KB chunks until EOF.
+
+**Assert**.
+- `grid.snapshot()` equals `expected_grid.json` (cell-for-cell, cursor, modes).
+- Alt-screen enter + exit `ModeChanged` fire with correct ordering.
+- Cursor post-`ZZ` lands where recorded.
+- Zero `UnknownCsi` events emitted (vim uses only well-known CSI).
+
+### E2E-B2: `tmux new-session -d \; list-sessions` → title + grid
+
+**Setup**. Fixture `tests/compat/tmux_new_session/` with recorded bytes from a
+`tmux` shell invocation. Expected: title change (OSC 2), basic output, final
+cursor position.
+
+**Run**. Feed bytes; collect events.
+
+**Assert**.
+- Exactly one `TitleChanged` event, payload = `"tmux"`.
+- Grid contains the session listing text in rows 0-2.
+- `ModeChanged(AltScreen, _)` is NOT emitted (tmux daemon mode stays on main).
+
+### E2E-B3: `htop -d 1` 2-second snapshot → alt-screen populated
+
+**Setup**. Fixture `tests/compat/htop_snapshot/` — 2s of htop output.
+
+**Run**. Feed bytes.
+
+**Assert**.
+- `ModeChanged(AltScreen, true)` fires BEFORE first cell delta into the alt
+  buffer.
+- Alt-buffer grid is fully populated (top bar, CPU gauges rows 0-6, process
+  list rows 7-22, footer row 23).
+- `resize_generation` unchanged (no resize in this fixture).
+- Row revisions on populated alt rows are ≥ 1.
+
+### E2E-B4: Fast output (`yes | head -1000`) → bounded revisions
+
+**Setup**. Fixture `tests/compat/yes_1000/` — 1000 lines of `y\n`.
+
+**Run**. Feed bytes in one call.
+
+**Assert**.
+- Scrollback length = min(1000, scrollback_cap); excess trimmed.
+- Row revisions per row stay ≤ 1000 (bounded by number of writes to that row).
+- No panic; no `UnknownCsi`.
+- `sequence_no` strictly ascending across all emitted events.
+
+### E2E-B5: Resize mid-output → `resize_generation` increments
+
+**Setup**. Fixture `tests/compat/resize_midrun/` — start feeding a long line,
+call `grid.resize(24, 60)` mid-stream, continue feeding.
+
+**Run**. Feed prefix, resize, feed suffix.
+
+**Assert**.
+- `resize_generation` bumps exactly once.
+- Events pre-resize carry the old generation; events post-resize carry the new
+  one — verified by event trace.
+- Continuation-tagged rows reflow to 60 columns; non-continuation rows keep
+  their break.
+- Cursor lands where the recorded reference says.
+
+### E2E-B6: Alt-screen enter during active block → ModeChanged before cells
+
+**Setup**. Fixture `tests/compat/alt_enter_racecheck/` — a synthetic stream
+that prints 5 rows, sends DECSET 1049, then prints 3 rows of alt content.
+
+**Run**. Feed bytes.
+
+**Assert**.
+- Event ordering (exact): `[CellsChanged×5-ish] [ModeChanged(AltScreen,true)]
+  [CellsChanged into alt-buffer×3-ish]`.
+- The alt-buffer cell deltas are NEVER interleaved with nor preceded by the
+  `ModeChanged`. Retires RFC §16 #8 at the engine level.
+
+### E2E-B7: Scroll region CSI `r` with small area → rect damage correct
+
+**Setup**. Fixture `tests/compat/scroll_region/` — set scroll region to rows
+5-10 (CSI 6;11r), write enough lines to trigger scroll within that region.
+
+**Run**. Feed bytes.
+
+**Assert**.
+- `RectDamage { top: 5, bottom: 10, .. }` events emitted for scroll content.
+- Rows outside 5-10 have revision unchanged from pre-feed.
+- Scrollback is untouched (scrolling inside a region does not go to scrollback).
+
+---
+
+## 19. Test coverage targets
+
+Operational coverage requirements this epic commits to. All enforced via CI
+(see §17 gates).
+
+- **Line coverage**: ≥ 95% on `crates/quanta-vt/src/**` measured by
+  `cargo llvm-cov` or `cargo tarpaulin`. Failure gates the PR (§17).
+  Uncovered lines require an explicit `// coverage: justified-gap — <reason>`
+  comment.
+
+- **Branch coverage**: ≥ 85% on `crates/quanta-vt/src/**` measured by
+  `cargo llvm-cov --branch`.
+
+- **Fuzz**: nightly 60-minute run on `main` via
+  `.github/workflows/fuzz-nightly.yml` against
+  `fuzz/fuzz_targets/vte_process.rs`. Corpus accumulates; regressions trigger
+  a P0 issue. Per-PR 2-minute smoke run via `fuzz-smoke.yml`.
+
+- **Property tests**: `tests/grid_invariants.rs` (proptest) runs 256 cases per
+  invariant (default) on every PR. Invariants listed in §11. Any counterexample
+  fails the PR; CI prints the minimized case.
+
+- **Golden streams**: 3 smoke fixtures (vim, tmux, htop) on every PR. Full
+  compat suite (≥ 13 programs) is EPIC-G.
+
+- **Ordering fault injection**: `tests/ordering.rs` includes injection cases:
+  stale-epoch event, stale `resize_generation` event, mode change reordered
+  to after cell delta. Each case must be correctly rejected by any future
+  consumer (per ADR 0017); engine-side test confirms events are emitted in
+  the correct order so consumers never see the fault cases in the happy path.
+
+---
+
 **End of document.**

@@ -12,14 +12,24 @@
 
 pub mod envelope;
 pub mod events;
+pub mod events_grid;
 pub mod ids;
 pub mod protocol;
 pub mod rpc;
 pub mod topics;
 pub mod version;
 
-pub use envelope::{Envelope, Producer, SchemaVersion};
+pub use envelope::{BufferKind, Envelope, Producer, SchemaVersion};
 pub use events::Event;
+pub use events_grid::{
+    BellKindWire, BellRequestedPayload, BlankTag, CellSpanWire, ClipboardOpWire,
+    ClipboardRequestPayload, ClipboardSelectionWire, CursorMovedPayload, CursorShapeWire,
+    CursorStateWire, GraphemeRunWire, GridDeltaPayload, GridMetaWire, GridSnapshotPayload,
+    HyperlinkAddedPayload, HyperlinkRemovedPayload, ModeChangeWire, ModeChangedPayload,
+    MouseEncodingWire, MouseTrackingModeWire, RowDeltaWire, ScrollDeltaWire, SpanAttrsExtWire,
+    SyncPhaseWire, SynchronizedUpdatePayload, TerminalModeStateWire, TitleChangedPayload,
+    TitleScopeWire, Utf8Run,
+};
 pub use ids::{BlockId, DiagnosticId, EventId, SessionId, SpanId, SuggestionId, WorkspaceId};
 pub use protocol::{Hello, Incompatible, ProtocolVersion, Ready};
 pub use rpc::{RpcError, RpcRequest, RpcResponse, RpcResult};

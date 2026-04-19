@@ -171,10 +171,10 @@ const RUST_ENUMS: readonly RustEnumSpec[] = [
     rustFile: 'events.rs',
     enumName: 'Event',
     tsFiles: [TS_HOST_COMMON_EVENTS],
-    // The host-common TS mirror only carries the Phase-1 bridge subset of
-    // Event variants. Exclude the remainder from the required-membership check
-    // (they are covered below via their payload structs). We still enforce
-    // that whatever IS in the Rust enum uses the agreed snake_case rule.
+    // The host-common TS mirror carries the Phase-1 bridge subset of Event
+    // variants plus every EPIC-C grid-reducer variant (mirror target for
+    // `GridMirror`). Exclude the remaining block/output/diagnostic payloads
+    // — they are covered via their own payload-struct parity below.
     exclude: [
       'BlockCreated',
       'BlockStarted',
@@ -190,6 +190,59 @@ const RUST_ENUMS: readonly RustEnumSpec[] = [
       'SuggestionReviewed',
       'HistoryIndexed',
     ],
+  },
+  // Grid-reducer (EPIC-C) enums — the TS mirror in host-common/events.ts
+  // must carry every snake_case variant of each Rust enum. Adding a new
+  // variant on either side without the other fails these assertions.
+  {
+    rustFile: 'envelope.rs',
+    enumName: 'BufferKind',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'CursorShapeWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'TitleScopeWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'BellKindWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'ClipboardSelectionWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'MouseTrackingModeWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'MouseEncodingWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'SyncPhaseWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'ClipboardOpWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
+  },
+  {
+    rustFile: 'events_grid.rs',
+    enumName: 'ModeChangeWire',
+    tsFiles: [TS_HOST_COMMON_EVENTS],
   },
   {
     rustFile: 'envelope.rs',

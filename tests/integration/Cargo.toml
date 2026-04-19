@@ -24,6 +24,11 @@ workspace = true
 quanta-core = { path = "../../crates/quanta-core" }
 quanta-proto = { path = "../../crates/quanta-proto" }
 quanta-protocol = { path = "../../crates/quanta-protocol" }
+# EPIC-F resume-replay test needs to reconstruct a `Grid` from replayed
+# OutputChunk bytes and compare it structurally against a reference engine
+# fed the same bytes. See `tests/resume_vt.rs`.
+quanta-vt = { path = "../../crates/quanta-vt" }
+quanta-vt-width = { path = "../../crates/quanta-vt-width" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

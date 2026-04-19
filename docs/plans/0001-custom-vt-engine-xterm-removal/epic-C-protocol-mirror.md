@@ -811,6 +811,15 @@ export class GridMirror {
   snapshotMode(): Readonly<TerminalModeState>;
   getMeta(): Readonly<GridMeta>;
   getDimensions(): { rows: number; cols: number };
+  /**
+   * Accessor for the latest applied `sequence_no` within the current epoch.
+   * Consumed by EPIC-E `ModeSnapshot` to stamp `EncoderOutput.diagnostics.snapshotEpoch`
+   * so encoded bytes are traceable back to the exact reducer state that
+   * produced them. Returns 0n before any delta has been applied.
+   */
+  getAppliedSequence(): bigint;
+  /** Complementary accessor for the current grid_epoch. */
+  getAppliedEpoch(): bigint;
 }
 
 export type ApplyResult =
@@ -1120,3 +1129,334 @@ Items explicitly deferred by this design document; EPIC-C implementation agent m
 6. **OSC 8 refcount race** — when hyperlink refcount drops to 0 mid-stream (scrollback eviction) and a new span in the same delta re-references the id, engine MUST emit `HyperlinkAdded` before the referencing `RowDelta`. EPIC-B impl agent confirms.
 7. **`ResyncRowResponse` flow control** — if UI emits 100 parallel ResyncRow requests (pathological), host-side must coalesce. Design punts: rely on existing RPC backpressure.
 8. **Envelope MessagePack compact form** — ADR 0017 flags potential varint encoding if 25 B/envelope is too heavy. Benchmark before deciding.
+
+---
+
+## 10. Definition of Done (DoD)
+
+Every item below is a binary, testable predicate enforced by CI. Failure of any single item blocks EPIC-C exit.
+
+### 10.1 Wire-format coverage
+
+- **DoD-C-01** — Every payload variant of `TerminalEventPayload` (the 10 `kind` values enumerated in §1.11) has a committed golden JSON under `crates/quanta-proto/tests/fixtures/schemas/grid_*.golden.json`. File count ≥ 10; the 11 templates from §3 satisfy the bar with `synchronized_update_end.golden.json` added for Begin↔End pairing.
+- **DoD-C-02** — `crates/quanta-proto/tests/grid_schema_snapshots.rs` loads each golden, deserializes into `EventEnvelope<TerminalEventPayload>`, re-serializes to canonical JSON (sorted keys, stable trailing newline), and asserts **byte-equal** to the committed file. Missing template or wrongly-serialized payload fails the test.
+- **DoD-C-03** — `crates/quanta-proto/tests/msgpack_roundtrip.rs` round-trips every golden through `serde_json → struct → rmp_serde → struct → serde_json` and asserts shape parity. Proves JSON goldens are faithful to MessagePack wire.
+- **DoD-C-04** — `#[serde(default)]` is present on every additive field of every payload struct: `GridSnapshot.meta`, `GridDelta.scrolls`, `ScrollDelta.left`, `ScrollDelta.right`, `RowDelta.continuation`, `RowDelta.hyperlink_refs`, `CellSpan.hyperlink_id`, `CellSpan.ext`, `HyperlinkAdded.params`. Enforced by `crates/quanta-proto/tests/schema_evolution.rs`.
+- **DoD-C-05** — Schema-evolution test: deserializing an **old-shape** JSON (with a field subsequently removed from the golden by temporary `cfg(test)` shadow type) into the **new-shape** struct succeeds with `default` applied to missing additive fields. No `MissingField` error.
+- **DoD-C-06** — Schema-evolution test, reverse direction: serializing a **new-shape** struct (with an extra `cfg(test)` additive field) and deserializing into the **old-shape** struct **drops the unknown field** without error. Uses `serde(deny_unknown_fields = false)` — asserted via a dedicated test that constructs a JSON with an extra key and confirms deserialization succeeds.
+- **DoD-C-07** — Unknown `ModeChange` variant produces a **typed parse error** (`serde::de::Error::unknown_variant`), NOT a silent drop. Test asserts the exact error kind.
+
+### 10.2 Mirror ordering invariants
+
+- **DoD-C-08** — `GridMirror` applies envelopes strictly in `(grid_epoch, sequence_no)` lexicographic ascending order per session. Verified by `ordering.test.ts`: feed envelopes in reverse order → only the first (highest) applies, rest are discarded.
+- **DoD-C-09** — Stale-epoch envelope (`env.grid_epoch < state.epoch`) is **discarded**; telemetry counter `vt.stale_epoch_events_dropped` increments by exactly 1 per drop. Test asserts counter value.
+- **DoD-C-10** — Stale-`resize_generation` `GridDelta` (`env.resize_generation < state.resizeGeneration`) is **discarded**; counter `vt.stale_resize_generation_events_dropped` increments. Test asserts counter.
+- **DoD-C-11** — Stale-`sequence_no` envelope for non-snapshot payloads (`env.sequence_no <= state.appliedSequence`) is **discarded**; counter `vt.stale_sequence_events_dropped` increments. Test asserts counter.
+- **DoD-C-12** — `GridSnapshot` is accepted regardless of `sequence_no` ordering (it is a reseed). Test: apply delta at seq=100, then apply snapshot at seq=50 → snapshot applies and resets `appliedSequence=50`.
+- **DoD-C-13** — Epoch-advance: when `env.grid_epoch > state.epoch` and payload is NOT `GridSnapshot`, mirror discards and emits `SnapshotRequest`. Test asserts `onSnapshotResyncRequested` fires.
+
+### 10.3 Row-revision recovery
+
+- **DoD-C-14** — `RowDelta.revision_before` mismatch → mirror emits `ResyncRowRequest` via `onResyncRowRequested` callback with `{ session_id, grid_epoch, resize_generation, row }`; counter `vt.row_revision_mismatches` increments. Test asserts emitted payload + counter.
+- **DoD-C-15** — `ResyncRowResponse::Ok` application updates `state.rows[row]` and `state.rowRevisions[row]` to `row_delta.revision_after`; the corresponding mismatch-log entry for that row is removed. Test asserts post-apply row content and revision.
+- **DoD-C-16** — `ResyncRowResponse::ReplayFailed` with any `ReplayFailedReason` → mirror immediately emits `SnapshotRequest` via `onSnapshotResyncRequested`; no further deltas applied until snapshot arrives. Test asserts both the escalation and the lockout-state.
+- **DoD-C-17** — Apply-rest-on-mismatch: when one `RowDelta` in a `GridDelta` mismatches, remaining non-mismatched `RowDelta`s still apply (per §4.3 decision). Test: delta with 3 rows, row 1 mismatches → rows 0 and 2 apply, row 1 triggers resync.
+
+### 10.4 Snapshot-fallback storm
+
+- **DoD-C-18** — Storm threshold: K=5 row mismatches within a W=10s sliding window trigger a full `SnapshotRequest`; counter `vt.snapshot_fallback_storm_triggered` increments. Test feeds 5 mismatches within 10s and asserts the escalation. Defaults come from `GridMirrorOptions.stormThreshold`.
+- **DoD-C-19** — Threshold respects the window: K-1 mismatches spread across > W seconds do NOT trigger a snapshot; the oldest mismatch timestamp ages out of `mismatchLog`. Test spaces mismatches at 3s intervals → no escalation after 4 events.
+- **DoD-C-20** — Separate "storm detector" counter: `vt.snapshot_fallback_events_per_minute` gauge tracks rolling rate; ≥ 3/min flags a P1 telemetry signal per ADR 0017 §5.
+
+### 10.5 Mirror public API
+
+- **DoD-C-21** — `GridMirror.getAppliedSequence(): bigint` returns the latest applied `sequence_no` within the current epoch. Before any apply: `0n`. After snapshot at seq=50: `50n`. After applying delta at seq=51: `51n`. Test covers all three states.
+- **DoD-C-22** — `GridMirror.getAppliedEpoch(): bigint` returns the current `grid_epoch`. Before any apply: `0n`. After snapshot at epoch=3: `3n`. Test covers both states.
+- **DoD-C-23** — `GridMirror.snapshotMode()` returns a **deep-frozen** deep clone of `TerminalModeState`. Test: `Object.isFrozen()` returns `true` at every depth; attempts to mutate throw in strict mode.
+
+### 10.6 Schema parity (host-common ↔ quanta-proto)
+
+- **DoD-C-24** — `packages/host-common/src/__tests__/schema-parity.test.ts` enumerates every `TerminalEventPayload` variant name from the Rust-emitted schema digest fixture (generated by `cargo xtask emit-schema-digest`) and asserts the TS `EventKind` union in `packages/host-common/src/events.ts` has an identical set. Test fails if either side adds/removes without the other.
+- **DoD-C-25** — Enum-variant parity extended to: `BufferKind`, `CursorShape`, `TitleScope`, `BellKind`, `ClipboardSelection`, `ClipboardOp::{Set, Query}`, `MouseTrackingMode`, `MouseEncoding`, `SyncPhase`, `ReplayFailedReason`. Test iterates the list; new enums MUST be added to the list when introduced.
+- **DoD-C-26** — Field-name parity: for each of the 10 payload structs, every top-level field name appears in the TS zod schema (or interface) under the matching camelCase form (`revision_before → revisionBefore`). Test uses the schema digest + TS type-level introspection via `tsc --emitDeclarationOnly` + AST walk.
+
+### 10.7 Wire-size budgets
+
+- **DoD-C-27** — Wire-size budget: 80×24 `GridSnapshot` (blanks throughout, default SGR, no cursor, empty meta) MessagePack-serialized ≤ **12 KB**. Asserted by `crates/quanta-proto/tests/wire_size_budget.rs`. Regression: increase in envelope shape that pushes over 12 KB fails CI.
+- **DoD-C-28** — Wire-size budget: steady-state `GridDelta` representing a single-row update (e.g., prompt redraw, 1 row × 3 spans) MessagePack-serialized ≤ **800 B**. Test feeds the canonical "prompt redraw" fixture and asserts size.
+- **DoD-C-29** — Wire-size budget: burst `GridDelta` representing 40-row repaint (full alt-screen rewrite in an 80-col grid) MessagePack-serialized ≤ **8 KB**. Test feeds the canonical "tmux pane refresh" fixture and asserts size.
+
+### 10.8 Synchronized update
+
+- **DoD-C-30** — `SynchronizedUpdate { phase: Begin }` enters `synced` mode; deltas are applied internally but `GridMirror.onChange` observer is **suppressed**. Test registers an observer, feeds Begin + 50 deltas, asserts 0 observer fires.
+- **DoD-C-31** — `SynchronizedUpdate { phase: End }` fires `onChange` **exactly once** with the accumulated dirty row set from the window. Test asserts single fire + dirty-set union equal to the union of `row`s in the 50 deltas.
+- **DoD-C-32** — 150ms synchronized-update timeout: if `End` does not arrive within 150ms of `Begin`, the mirror force-ends the synced window and fires `onChange` with the accumulated dirty set; counter `vt.synchronized_update_timeouts` increments. Test uses fake timers.
+- **DoD-C-33** — Synchronized-update abort on epoch change: receiving a new-epoch `GridSnapshot` during a synced window aborts the window cleanly (no lost dirty state — snapshot wipes it). Test asserts mirror state equal to snapshot-only state.
+
+### 10.9 Fault injection
+
+- **DoD-C-34** — Drop-every-Nth delta fault injection: `fault_injection.test.ts` generates a 1000-envelope stream, drops every 10th delta before handing to mirror, triggers `ResyncRowRequest` on mismatches, applies `ResyncRowResponse::Ok` replies, and asserts final mirror state matches a clean full-replay. ≥ 100 resyncs expected, 0 snapshot fallbacks (since requests are well-spaced).
+- **DoD-C-35** — Reorder fault injection: randomly permute a window of 10 deltas. Mirror discards out-of-order non-snapshot payloads; final state matches a clean-stream replay minus the out-of-order ones (which get resynced). Test asserts zero lost rows after resync completes.
+
+### 10.10 Coverage targets
+
+- **DoD-C-36** — Line coverage ≥ **90%** on `packages/ui/src/shared/lib/grid-mirror/GridMirror.ts` and the adjacent `EnvelopeGate.ts`, `ResyncStrategy.ts`, `ModeMirror.ts`, `Hyperlinks.ts`. Enforced by `vitest --coverage` with a `--coverage-threshold 90` flag in CI.
+- **DoD-C-37** — Line coverage ≥ **90%** on `crates/quanta-proto/src/events.rs` and `crates/quanta-proto/src/envelope.rs`. Enforced by `cargo llvm-cov --fail-under-lines 90 -p quanta-proto`.
+
+### 10.11 Hyperlink lifecycle
+
+- **DoD-C-38** — `HyperlinkAdded { id, uri, params }` prior to a referencing `RowDelta` resolves the URI via `HyperlinkTable.lookup(id)`. Test feeds the pair in order and asserts `getRow(row).cells[col].hyperlink == { id, uri, params }`.
+- **DoD-C-39** — `HyperlinkRemoved { id }` decrements the refcount; when refcount reaches 0, entry is evicted. Cells still referencing the id by cached reference (scrollback not yet re-rendered) fall back to `{ id, uri: null }` safely without throwing. Test asserts fallback shape.
+- **DoD-C-40** — OSC-8 refcount race (§9 TODO #6): `HyperlinkRemoved` immediately followed by `HyperlinkAdded` reusing the same `id` in a new `RowDelta` works correctly. Test sequences Removed → Added → RowDelta and asserts new URI resolves.
+
+### 10.12 Telemetry emission
+
+- **DoD-C-41** — Every counter enumerated in §4.1 (`MirrorTelemetry`) is emitted at least once by a corresponding test scenario: `stale_epoch_drop`, `sequence_gap_drop`, `resize_generation_drop`, `revision_mismatch`, `snapshot_fallback`, `synchronized_update_timeouts`. Covered by an aggregation test that asserts the counter names match the list.
+
+**Total: 41 testable DoD items** (≥ 25 bar met).
+
+---
+
+## 11. Quality Gates
+
+Gates are CI-enforceable. `failure-behavior` is the exact signal shown to the PR author.
+
+| # | Gate | Enforced by | Failure behavior |
+|---|------|-------------|------------------|
+| QG-C-1 | **Rust proto schema tests** (`grid_schema_snapshots.rs`, `schema_evolution.rs`, `msgpack_roundtrip.rs`) | `cargo test -p quanta-proto` in CI `quanta-proto` job | Red check on PR; diff output from serde_json::to_string_pretty vs committed golden. Log lines annotated with `[DoD-C-02]` / `[DoD-C-05]`. |
+| QG-C-2 | **GridMirror vitest suite** (`ordering.test.ts`, `resync.test.ts`, `apply_delta.test.ts`, `cursor.test.ts`, `mode.test.ts`, `synchronized_update.test.ts`) | `pnpm --filter @quanta/ui test -- grid-mirror` | Red check; vitest stacktrace. Output pipes to `reports/grid-mirror.xml` JUnit consumable by GH Actions. |
+| QG-C-3 | **Schema-parity vitest** (`schema-parity.test.ts`) | `pnpm --filter @quanta/host-common test -- schema-parity` | Red check; explicit diff listing missing/extra variants in either direction. Must be resolved before merge (rename-protection). |
+| QG-C-4 | **Fault-injection integration test** (`fault_injection.test.ts`) | Part of `pnpm --filter @quanta/ui test`, extended run flag | Red check; prints the seed used so the failure is reproducible locally. Each run uses a fixed seed to avoid flakes. |
+| QG-C-5 | **Wire-size budget test** (`wire_size_budget.rs`) | `cargo test -p quanta-proto wire_size_budget` | Red check with per-fixture byte budget vs measured. CI comment summarizes the delta for PR review. |
+| QG-C-6 | **Coverage threshold** | `vitest --coverage` + `cargo llvm-cov --fail-under-lines 90` | Red check; coverage report posted as PR comment with file-level drilldown. |
+| QG-C-7 | **Schema-digest determinism** | `cargo xtask emit-schema-digest --check` | Red check if committed digest differs from freshly emitted; CI prints the diff so author can regenerate. |
+| QG-C-8 | **Telemetry counter presence** | Grep rule in EPIC-K `tools/check-telemetry-counters/` | Red check if a counter declared in ADR 0017 §5 is missing from the `quanta-metrics` registry. |
+| QG-C-9 | **No UI-side ANSI parsing** | EPIC-K grep `tools/check-ui-no-ansi/` | Red check if `\x1b` / `\\u001b` / ANSI parse utility imports appear outside `crates/quanta-vt/` or test fixtures. |
+| QG-C-10 | **`SynchronizedUpdate` timer behavior** | `synchronized_update.test.ts` with `vi.useFakeTimers()` | Red check; test asserts the 150ms timeout fires exactly once and suppresses the second force-end. |
+
+All 10 gates must be green for EPIC-C merge. No waivers; a gate failure triggers a re-spin of the PR (not a manual override).
+
+---
+
+## 12. End-to-end scenarios
+
+Each scenario lists step-by-step actor / action / assertion. Scenarios are implemented as vitest + `tests/integration/` hybrid tests; file locations are given alongside.
+
+### 12.1 E2E-C1 — Full resume
+
+**Goal**: Resume after disconnect; engine replays events; final mirror state matches fresh run. Proves §6 resume contract.
+
+**Fixture**: `tests/integration/tests/resume_fresh_vs_reconnect.rs` drives two mirrors against the same engine-emitted event log.
+
+**Steps**:
+1. **Setup**: Spawn engine, open session, feed 500 synthetic CSI frames producing a grid state with cursor at row=7, col=12, mode `bracketedPaste=true`, `altScreen=false`.
+2. **Mirror A (fresh)**: Subscribes from `grid_epoch=1, sequence_no=0`. Applies all envelopes through the final one.
+3. **Snapshot A**: Capture `getRow(r)` for each r, `getCursor()`, `getMode()`, `getMeta()`, `getAppliedSequence()`, `getAppliedEpoch()`.
+4. **Mirror B (reconnect)**: Applies the first 250 envelopes, then "disconnects" (stop feeding). Re-subscribes with `HelloResumeCursor { last_applied_epoch: 1, last_applied_sequence: 249, last_applied_resize_generation: 0 }`.
+5. **Host decision**: Since engine epoch/resize still match, host returns `subscribe_response { mode: "replay_from", from_seq: 250 }`. Streams envelopes 250..499.
+6. **Snapshot B**: Capture the same outputs.
+
+**Assertions**:
+- `snapshot A == snapshot B` for every public getter.
+- `B.getAppliedSequence() == 499n == A.getAppliedSequence()`.
+- `B.getAppliedEpoch() == 1n`.
+- Telemetry counter `vt.stale_epoch_events_dropped == 0`, `vt.row_revision_mismatches == 0`.
+
+---
+
+### 12.2 E2E-C2 — Epoch change on reconnect
+
+**Goal**: Mirror discards pre-reconnect state, rebuilds from fresh snapshot on epoch bump.
+
+**Fixture**: `tests/integration/tests/resume_epoch_change.rs`.
+
+**Steps**:
+1. Mirror A applies 300 envelopes with `grid_epoch=1`; `getRow(5)` has content "abc def".
+2. Host disconnects and reboots engine; new epoch=2. Session id unchanged.
+3. Mirror A reconnects with `HelloResumeCursor { last_applied_epoch: 1, last_applied_sequence: 299, ... }`.
+4. Host decision: `engine.current_epoch (2) != cursor.last_applied_epoch (1)` → returns `subscribe_response { mode: "reseed" }` + emits `GridSnapshot` with epoch=2, fresh content (row 5 = "xyz").
+5. **Intermediate**: a stale `GridDelta { epoch: 1, sequence_no: 300 }` message (still in the mirror's internal queue from the disconnect period) is delivered AFTER the snapshot.
+
+**Assertions**:
+- After snapshot applies: `getAppliedEpoch() == 2n`, `getRow(5) == "xyz"`.
+- Stale delta discarded: `vt.stale_epoch_events_dropped == 1`.
+- Mirror never shows "abc def" again — `getRow(5)` remains "xyz".
+
+---
+
+### 12.3 E2E-C3 — Mid-stream resize
+
+**Goal**: Pre-resize deltas discarded after `resize_generation` bump.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/resize_generation.e2e.test.ts`.
+
+**Steps**:
+1. Mirror applies envelopes through `grid_epoch=1, sequence_no=100, resize_generation=0`. Grid is 80×24.
+2. Engine processes a SIGWINCH; new envelope is a `GridSnapshot` at `grid_epoch=1, sequence_no=101, resize_generation=1`. Grid is 120×40.
+3. **Out-of-order**: a delayed `GridDelta { grid_epoch: 1, sequence_no: 102, resize_generation: 0 }` arrives (same epoch, old generation) AFTER the snapshot.
+
+**Assertions**:
+- Snapshot applies; `getDimensions() == { rows: 40, cols: 120 }`.
+- Delayed delta discarded: `vt.stale_resize_generation_events_dropped == 1`. `getRow(n)` unchanged.
+- After a fresh `GridDelta { grid_epoch: 1, sequence_no: 103, resize_generation: 1 }`, state updates normally.
+
+---
+
+### 12.4 E2E-C4 — Synchronized-update window
+
+**Goal**: Single render notification for a 50-delta batch inside a DECSET 2026 window.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/synchronized_update.e2e.test.ts`.
+
+**Steps**:
+1. Mirror registers an `onChange` observer (spy).
+2. Apply `SynchronizedUpdate { phase: Begin }` at seq=1000.
+3. Apply 50 `GridDelta` envelopes at seq=1001..1050, each touching a different row.
+4. Apply `SynchronizedUpdate { phase: End }` at seq=1051.
+
+**Assertions**:
+- Observer called **exactly once**, after End.
+- Observer argument contains `dirtyRows` equal to the union of all 50 `RowDelta.row` values.
+- Each of the 50 rows is reflected in `getRow(row)` after End.
+- `getAppliedSequence() == 1051n`.
+
+---
+
+### 12.5 E2E-C5 — Synchronized-update timeout
+
+**Goal**: 160ms elapse without End → mirror force-ends; observer fires with accumulated dirty set.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/synchronized_update_timeout.e2e.test.ts`. Uses `vi.useFakeTimers()`.
+
+**Steps**:
+1. Register observer spy.
+2. Apply `SynchronizedUpdate { phase: Begin }` at seq=2000.
+3. Apply 10 `GridDelta` envelopes at seq=2001..2010.
+4. Advance fake time by 160ms (≥ 150ms threshold).
+5. (No `End` sent.)
+
+**Assertions**:
+- After time advance, observer called exactly once.
+- Counter `vt.synchronized_update_timeouts == 1`.
+- Post-force-end, receiving a late `End` is a no-op and does NOT fire observer again.
+
+---
+
+### 12.6 E2E-C6 — Row-revision divergence
+
+**Goal**: Mirror detects bad `revision_before`, requests `ResyncRow`, applies scoped response.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/resync_row.e2e.test.ts`.
+
+**Steps**:
+1. Mirror applies baseline deltas through seq=500; `state.rowRevisions[7] == 42`.
+2. Inject a crafted `GridDelta` at seq=501 whose `RowDelta { row: 7, revision_before: 99, revision_after: 100 }` — revision mismatch.
+3. Capture `ResyncRowRequest` emission via `onResyncRowRequested` spy.
+4. Simulate host-side handler: respond with `ResyncRowResponse::Ok { grid_epoch: 1, resize_generation: 0, sequence_no: 502, row_delta: RowDelta { row: 7, revision_before: 0, revision_after: 43, spans: [...correct content...], ... } }`.
+
+**Assertions**:
+- After step 3: `onResyncRowRequested` called once with `{ session_id, grid_epoch: 1, resize_generation: 0, row: 7 }`.
+- Other rows in the same delta applied normally (apply-rest-on-mismatch).
+- After step 4: `getRow(7)` = correct content, `state.rowRevisions[7] == 43`, mismatch log entry cleared.
+- Telemetry: `vt.row_revision_mismatches == 1`.
+
+---
+
+### 12.7 E2E-C7 — Storm threshold
+
+**Goal**: 5 mismatches within a 10s window → full snapshot request.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/storm_threshold.e2e.test.ts`. Uses fake timers.
+
+**Steps**:
+1. Configure `GridMirrorOptions.stormThreshold = { k: 5, windowMs: 10_000 }`.
+2. Inject mismatches at t=0s, t=2s, t=4s, t=6s — 4 mismatches.
+3. Assert: no `onSnapshotResyncRequested` fired. Counter `vt.snapshot_fallback_storm_triggered == 0`.
+4. Inject 5th mismatch at t=8s.
+
+**Assertions**:
+- After step 4: `onSnapshotResyncRequested` fires exactly once with `{ session_id, epoch: current, reason: "row_mismatch_storm" }`.
+- Counter `vt.snapshot_fallback_storm_triggered == 1`.
+- Next 10 `GridDelta` envelopes (before snapshot arrives) discarded with `vt.stale_sequence_events_dropped` incrementing.
+- When `GridSnapshot` arrives: mirror resumes normal operation; `mismatchLog` cleared.
+
+---
+
+### 12.8 E2E-C8 — Hyperlink lifecycle
+
+**Goal**: OSC 8 lifecycle: open → reference → close → orphan-safe fallback.
+
+**Fixture**: `packages/ui/src/shared/lib/grid-mirror/__tests__/hyperlink_lifecycle.e2e.test.ts`.
+
+**Steps**:
+1. Apply `HyperlinkAdded { id: 1, uri: "https://example.com", params: null }`.
+2. Apply `GridDelta` whose row 5 contains a `CellSpan { hyperlink_id: 1, ... }`. `RowDelta.hyperlink_refs = [1]`.
+3. Apply `HyperlinkRemoved { id: 1 }`.
+4. Query `getRow(5).cells[col]` for the cell that referenced the hyperlink.
+
+**Assertions**:
+- After step 2: `getRow(5).cells[col].hyperlink == { id: 1, uri: "https://example.com", params: null }`.
+- After step 3: `HyperlinkTable.lookup(1)` returns `null` (or `{ id: 1, uri: null }` fallback — exact shape per impl agent; test pins one).
+- After step 4: cell still references `id: 1` but the resolver returns a safe fallback. **No exception thrown.** No `uri` reconstruction.
+- If a new `HyperlinkAdded { id: 1, uri: "https://new.com" }` arrives, subsequent row deltas resolve to the new URI (id reuse works per §9 TODO #6).
+
+---
+
+### 12.9 E2E-C9 — Schema evolution forward-compat
+
+**Goal**: Old TS client gracefully handles new Rust-added field.
+
+**Fixture**: `packages/host-common/src/__tests__/schema-evolution-forward.e2e.test.ts`.
+
+**Steps**:
+1. Take the `grid_snapshot.golden.json` fixture.
+2. Inject a new key `"future_field": "unknown"` into `payload.meta` (simulating a Rust-side addition the TS hasn't learned yet).
+3. Feed through TS deserialization path.
+
+**Assertions**:
+- Deserialization succeeds without throwing.
+- `unknown` key is dropped (or quarantined into `meta.unknownFields` if that pattern is adopted).
+- Counter `vt.unknown_protocol_field_observed` increments — provides a telemetry signal that rollouts are mismatched.
+
+---
+
+### 12.10 E2E-C10 — MessagePack/JSON cross-encoding
+
+**Goal**: The same envelope encoded as MessagePack and as JSON decodes to an identical structure.
+
+**Fixture**: `crates/quanta-proto/tests/msgpack_roundtrip.rs`.
+
+**Steps**:
+1. Load each golden JSON.
+2. Deserialize into `EventEnvelope<TerminalEventPayload>`.
+3. Re-serialize to MessagePack bytes.
+4. Deserialize MessagePack bytes back to `EventEnvelope<TerminalEventPayload>`.
+5. Re-serialize to JSON.
+
+**Assertions**:
+- Step-5 output byte-equal to the committed golden (after canonicalization: sorted keys, trimmed whitespace).
+- Intermediate MessagePack size recorded and stored in `target/wire-size-report.json` for DoD-C-27/28/29 verification.
+
+---
+
+**Total: 10 E2E scenarios** (≥ 8 bar met). E2E-C9 covers the "unknown field" forward-compat path and E2E-C10 cements the MessagePack↔JSON faithfulness that DoD-C-03 asserts.
+
+---
+
+## 13. Test coverage targets
+
+Explicit thresholds — enforced by CI.
+
+| Target | Threshold | Enforcement |
+|--------|-----------|-------------|
+| `packages/ui/src/shared/lib/grid-mirror/GridMirror.ts` (line coverage) | ≥ 90% | `vitest --coverage --coverage-threshold 90` |
+| `packages/ui/src/shared/lib/grid-mirror/EnvelopeGate.ts` | ≥ 90% | same |
+| `packages/ui/src/shared/lib/grid-mirror/ResyncStrategy.ts` | ≥ 90% | same |
+| `packages/ui/src/shared/lib/grid-mirror/ModeMirror.ts` | ≥ 90% | same |
+| `packages/ui/src/shared/lib/grid-mirror/Hyperlinks.ts` | ≥ 90% | same |
+| `crates/quanta-proto/src/events.rs` | ≥ 90% (lines) | `cargo llvm-cov --fail-under-lines 90 -p quanta-proto` |
+| `crates/quanta-proto/src/envelope.rs` | ≥ 90% (lines) | same |
+| Branch coverage (aggregate) | ≥ 80% | reported in CI comment; non-blocking but tracked |
+| Mutation testing (sample, quarterly) | ≥ 70% mutant kill rate on `GridMirror.ts` | `stryker run`; tracked, not gated |
+
+Coverage reports are uploaded as CI artifacts under `coverage/grid-mirror/` and `coverage/quanta-proto/`. Regression in any line-coverage target is a hard CI failure; branch-coverage and mutation are informational.

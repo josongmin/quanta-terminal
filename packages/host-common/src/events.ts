@@ -47,7 +47,8 @@ export type Producer =
   | 'history'
   | 'security'
   | 'protocol'
-  | 'lifecycle';
+  | 'lifecycle'
+  | 'grid';
 
 /* ----- shared enums (mirror Rust) ----- */
 
@@ -145,6 +146,190 @@ export interface InputSubmittedEvent {
   readonly inputKind: InputKind;
 }
 
+/* ----- grid-reducer events (EPIC-C; mirror Rust `Event::Grid*`) ----- */
+
+/** Which terminal buffer an envelope / snapshot applies to. */
+export type BufferKind = 'main' | 'alt';
+
+export type CursorShape = 'block' | 'underline' | 'bar';
+
+export type TitleScope = 'both' | 'icon' | 'window';
+
+export type BellKind = 'audible' | 'visual' | 'urgency_hint';
+
+export type ClipboardSelection = 'clipboard' | 'primary' | 'secondary' | 'select';
+
+export type MouseTrackingMode = 'off' | 'x10' | 'button_event' | 'any_event';
+
+export type MouseEncoding = 'default' | 'utf8' | 'sgr' | 'url_xterm';
+
+export type SyncPhase = 'begin' | 'end';
+
+/** OSC 52 op: set with base64 data or query. Discriminated via `op`. */
+export type ClipboardOp =
+  | { readonly op: 'set'; readonly base64_data: string }
+  | { readonly op: 'query' };
+
+/** Grapheme-run encoding inside a `CellSpan`. Matches Rust `GraphemeRunWire`. */
+export type GraphemeRun =
+  | 'blank'
+  | { readonly utf8: string | readonly number[] }
+  | { readonly grapheme: string; readonly count: number };
+
+/** Extension map for SGR attrs that don't fit in the u64. */
+export interface SpanAttrsExt {
+  readonly underline_color?: number | null;
+}
+
+/** A run of cells sharing SGR attrs. */
+export interface CellSpan {
+  readonly cols: number;
+  readonly sgr: string;
+  readonly graphemes: GraphemeRun;
+  readonly hyperlink_id?: number;
+  readonly ext?: SpanAttrsExt | null;
+}
+
+/** Per-row replacement content. */
+export interface RowDelta {
+  readonly row: number;
+  readonly revision_before: number;
+  readonly revision_after: number;
+  readonly spans: readonly CellSpan[];
+  readonly continuation?: boolean;
+  readonly hyperlink_refs?: readonly number[];
+}
+
+/** Rectangular scroll op. */
+export interface ScrollDelta {
+  readonly top: number;
+  readonly bottom: number;
+  readonly lines: number;
+  readonly left?: number;
+  readonly right?: number | null;
+}
+
+/** Cursor wire state. */
+export interface CursorState {
+  readonly row: number;
+  readonly col: number;
+  readonly visible: boolean;
+  readonly shape: CursorShape;
+  readonly blinking: boolean;
+  readonly pending_wrap?: boolean;
+}
+
+/** Terminal mode snapshot mirror (ADR 0017 §4). */
+export interface TerminalModeState {
+  readonly decckm?: boolean;
+  readonly bracketed_paste?: boolean;
+  readonly focus_reporting?: boolean;
+  readonly mouse_tracking?: MouseTrackingMode;
+  readonly mouse_encoding?: MouseEncoding;
+  readonly modify_other_keys?: number;
+  readonly kitty_keyboard?: number;
+  readonly alt_screen?: boolean;
+  readonly synchronized_update?: boolean;
+}
+
+/** Ancillary grid-level metadata (additive). */
+export interface GridMeta {
+  readonly title?: string | null;
+  readonly cwd?: string | null;
+  readonly hyperlink_digest?: string | null;
+}
+
+/**
+ * Single DEC / xterm mode transition. Internally tagged on `mode` so an
+ * unknown variant in a newer host JSON produces a deserialize error at the
+ * boundary rather than a silent drop — matches the Rust-side decision.
+ */
+export type ModeChange =
+  | { readonly mode: 'decckm'; readonly value: boolean }
+  | { readonly mode: 'bracketed_paste'; readonly value: boolean }
+  | { readonly mode: 'focus_reporting'; readonly value: boolean }
+  | { readonly mode: 'mouse_tracking'; readonly value: MouseTrackingMode }
+  | { readonly mode: 'mouse_encoding'; readonly value: MouseEncoding }
+  | { readonly mode: 'modify_other_keys'; readonly value: number }
+  | { readonly mode: 'kitty_keyboard'; readonly value: number }
+  | { readonly mode: 'alt_screen'; readonly value: boolean }
+  | { readonly mode: 'synchronized_update'; readonly value: boolean };
+
+/** Full grid snapshot — emitted on connect/resume/resize/revision-resync. */
+export interface GridSnapshotEvent {
+  readonly kind: 'grid_snapshot';
+  readonly rows: number;
+  readonly cols: number;
+  readonly buffer_kind: BufferKind;
+  readonly row_deltas: readonly RowDelta[];
+  readonly cursor?: CursorState | null;
+  readonly mode_state: TerminalModeState;
+  readonly meta?: GridMeta;
+}
+
+/** Incremental grid delta — steady-state event. */
+export interface GridDeltaEvent {
+  readonly kind: 'grid_delta';
+  readonly row_deltas: readonly RowDelta[];
+  readonly scrolls?: readonly ScrollDelta[];
+  readonly scrollback_appended?: number;
+}
+
+/** Cursor-only move. */
+export interface CursorMovedEvent {
+  readonly kind: 'cursor_moved';
+  readonly cursor: CursorState;
+}
+
+/** Mode-change batch. */
+export interface ModeChangedEvent {
+  readonly kind: 'mode_changed';
+  readonly changes: readonly ModeChange[];
+  readonly state: TerminalModeState;
+}
+
+/** OSC 0 / 2 title change. */
+export interface TitleChangedEvent {
+  readonly kind: 'title_changed';
+  readonly title: string;
+  readonly scope?: TitleScope;
+}
+
+/** BEL received. */
+export interface BellRequestedEvent {
+  readonly kind: 'bell_requested';
+  /** Note: inner field name is `kind_of_bell` to avoid colliding with the
+   *  outer event discriminator `kind`. */
+  readonly kind_of_bell?: BellKind;
+}
+
+/** OSC 8 hyperlink announced. */
+export interface HyperlinkAddedEvent {
+  readonly kind: 'hyperlink_added';
+  readonly id: number;
+  readonly uri: string;
+  readonly params?: string | null;
+}
+
+/** OSC 8 hyperlink retired. */
+export interface HyperlinkRemovedEvent {
+  readonly kind: 'hyperlink_removed';
+  readonly id: number;
+}
+
+/** OSC 52 clipboard request. */
+export interface ClipboardRequestEvent {
+  readonly kind: 'clipboard_request';
+  readonly selection: ClipboardSelection;
+  readonly op: ClipboardOp;
+}
+
+/** DECSET 2026 / DCS BSU/ESU transition. */
+export interface SynchronizedUpdateEvent {
+  readonly kind: 'synchronized_update';
+  readonly phase: SyncPhase;
+}
+
 /**
  * Union of events the Phase-1 host bridge may surface. The real engine adds
  * block/output/diagnostic families; those will be appended here as the
@@ -157,7 +342,17 @@ export type HostEvent =
   | SessionShellIntegrationStatusEvent
   | SessionCwdChangedEvent
   | SessionEndedEvent
-  | InputSubmittedEvent;
+  | InputSubmittedEvent
+  | GridSnapshotEvent
+  | GridDeltaEvent
+  | CursorMovedEvent
+  | ModeChangedEvent
+  | TitleChangedEvent
+  | BellRequestedEvent
+  | HyperlinkAddedEvent
+  | HyperlinkRemovedEvent
+  | ClipboardRequestEvent
+  | SynchronizedUpdateEvent;
 
 export type HostEventKind = HostEvent['kind'];
 

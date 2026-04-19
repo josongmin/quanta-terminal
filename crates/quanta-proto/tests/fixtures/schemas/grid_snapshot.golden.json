@@ -1,0 +1,75 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 0,
+  "session_id": "01J00000000000000000000001",
+  "block_id": null,
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "grid",
+  "schema_version": 1,
+  "causation_id": null,
+  "grid_epoch": 1,
+  "payload": {
+    "kind": "grid_snapshot",
+    "rows": 2,
+    "cols": 4,
+    "buffer_kind": "main",
+    "row_deltas": [
+      {
+        "row": 0,
+        "revision_before": 0,
+        "revision_after": 1,
+        "spans": [
+          {
+            "cols": 4,
+            "sgr": "0x0000000000000000",
+            "graphemes": "blank",
+            "hyperlink_id": 0,
+            "ext": null
+          }
+        ],
+        "continuation": false,
+        "hyperlink_refs": []
+      },
+      {
+        "row": 1,
+        "revision_before": 0,
+        "revision_after": 1,
+        "spans": [
+          {
+            "cols": 4,
+            "sgr": "0x0000000000000000",
+            "graphemes": "blank",
+            "hyperlink_id": 0,
+            "ext": null
+          }
+        ],
+        "continuation": false,
+        "hyperlink_refs": []
+      }
+    ],
+    "cursor": {
+      "row": 0,
+      "col": 0,
+      "visible": true,
+      "shape": "block",
+      "blinking": true,
+      "pending_wrap": false
+    },
+    "mode_state": {
+      "decckm": false,
+      "bracketed_paste": false,
+      "focus_reporting": false,
+      "mouse_tracking": "off",
+      "mouse_encoding": "default",
+      "modify_other_keys": 0,
+      "kitty_keyboard": 0,
+      "alt_screen": false,
+      "synchronized_update": false
+    },
+    "meta": {
+      "title": null,
+      "cwd": null,
+      "hyperlink_digest": null
+    }
+  }
+}

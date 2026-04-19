@@ -195,6 +195,16 @@ fn payload_kind(ev: &Event) -> &'static str {
         Event::SuggestionGenerated(_) => "suggestion_generated",
         Event::SuggestionReviewed(_) => "suggestion_reviewed",
         Event::HistoryIndexed(_) => "history_indexed",
+        Event::GridSnapshot(_) => "grid_snapshot",
+        Event::GridDelta(_) => "grid_delta",
+        Event::CursorMoved(_) => "cursor_moved",
+        Event::ModeChanged(_) => "mode_changed",
+        Event::TitleChanged(_) => "title_changed",
+        Event::BellRequested(_) => "bell_requested",
+        Event::HyperlinkAdded(_) => "hyperlink_added",
+        Event::HyperlinkRemoved(_) => "hyperlink_removed",
+        Event::ClipboardRequest(_) => "clipboard_request",
+        Event::SynchronizedUpdate(_) => "synchronized_update",
         Event::Unknown { .. } => "unknown",
     }
 }

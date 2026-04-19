@@ -1,0 +1,26 @@
+{
+  "id": "cn-pinyin-nihao",
+  "ime": "cn-pinyin",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": "" },
+    { "tMs": 30, "kind": "compositionupdate", "data": "n" },
+    { "tMs": 60, "kind": "compositionupdate", "data": "ni" },
+    { "tMs": 90, "kind": "compositionupdate", "data": "nih" },
+    { "tMs": 120, "kind": "compositionupdate", "data": "niha" },
+    { "tMs": 150, "kind": "compositionupdate", "data": "nihao" },
+    { "tMs": 300, "kind": "compositionend", "data": "你好" }
+  ],
+  "expectedPtyBytesHex": "e4bda0e5a5bd",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": "" },
+    { "afterTMs": 30, "visible": true, "text": "n" },
+    { "afterTMs": 60, "visible": true, "text": "ni" },
+    { "afterTMs": 90, "visible": true, "text": "nih" },
+    { "afterTMs": 120, "visible": true, "text": "niha" },
+    { "afterTMs": 150, "visible": true, "text": "nihao" },
+    { "afterTMs": 300, "visible": false, "text": "" }
+  ],
+  "notes": "CN pinyin 你好. Commit switches pinyin preedit to hanzi."
+}

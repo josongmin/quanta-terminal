@@ -1,0 +1,23 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 55,
+  "session_id": "01J00000000000000000000001",
+  "block_id": null,
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "grid",
+  "schema_version": 1,
+  "causation_id": null,
+  "grid_epoch": 1,
+  "buffer_kind": "alt",
+  "payload": {
+    "kind": "cursor_moved",
+    "cursor": {
+      "row": 0,
+      "col": 0,
+      "visible": true,
+      "shape": "block",
+      "blinking": false,
+      "pending_wrap": false
+    }
+  }
+}

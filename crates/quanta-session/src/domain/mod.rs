@@ -14,6 +14,28 @@ pub struct SessionConfig {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
+    /// EPIC-F — feed PTY bytes through `quanta_vt::Grid` and emit
+    /// `TerminalEvent`-flavored envelopes in addition to the legacy
+    /// `OutputChunk` stream.
+    ///
+    /// Defaults to `true`. Set to `false` for pre-EPIC-F rollback behavior
+    /// (OutputChunk-only emission). Flag is removed in EPIC-I once xterm.js
+    /// is deleted from the UI; until then, consumers may flip it back to
+    /// `false` without data migration.
+    pub use_vt_engine: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            shell: String::new(),
+            args: Vec::new(),
+            cwd: PathBuf::new(),
+            cols: 80,
+            rows: 24,
+            use_vt_engine: true,
+        }
+    }
 }
 
 impl SessionConfig {
@@ -25,6 +47,7 @@ impl SessionConfig {
             cwd,
             cols: 80,
             rows: 24,
+            use_vt_engine: true,
         }
     }
 }
@@ -45,6 +68,12 @@ pub struct SessionSnapshot {
     pub shell_integration_status: ShellIntegrationStatus,
     pub cwd: PathBuf,
     pub cwd_source: CwdSource,
+    /// EPIC-F — current VT engine epoch. Bumps on reconnect / reinit.
+    /// See ADR 0017 §3.
+    pub grid_epoch: u64,
+    /// EPIC-F — current resize generation. Bumps on every resize that
+    /// affects wrap/reflow.
+    pub resize_generation: u64,
 }
 
 #[cfg(test)]
@@ -74,6 +103,8 @@ mod tests {
             shell_integration_status: ShellIntegrationStatus::Missing,
             cwd: PathBuf::from("/tmp"),
             cwd_source: CwdSource::Launch,
+            grid_epoch: 1,
+            resize_generation: 0,
         };
         let b = a.clone();
         assert_eq!(a, b);
@@ -87,6 +118,8 @@ mod tests {
             shell_integration_status: ShellIntegrationStatus::Installed,
             cwd: PathBuf::from("/tmp"),
             cwd_source: CwdSource::Osc7,
+            grid_epoch: 1,
+            resize_generation: 0,
         };
         let mut b = a.clone();
         b.cwd = PathBuf::from("/home/alice");

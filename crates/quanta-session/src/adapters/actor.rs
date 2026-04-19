@@ -46,9 +46,11 @@ use quanta_proto::events::{
 use quanta_proto::ids::{BlockId, DiagnosticId, EventId, SessionId};
 use quanta_pty::{PtyHandle, PtyPort, PtySize, PtySpec};
 use quanta_security::{DefaultDetector, SecretDetector};
-use std::sync::atomic::{AtomicBool, Ordering};
+use quanta_vt::{BufferKind, Grid, TerminalEvent};
+use quanta_vt_width::{AmbiguousWidthPolicy, DefaultClassifier};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -66,6 +68,12 @@ const EMIT_CHANNEL_CAPACITY: usize = 1024;
 /// for "session.*" and find the full surface.
 pub const METRIC_ENVELOPE_APPENDED: &str = "session.envelope.appended";
 pub const METRIC_APPEND_LATENCY_US: &str = "session.append.latency_us";
+/// EPIC-F telemetry — counter incremented per `TerminalEvent` emitted by the
+/// VT engine (see `epic-F-session-integration.md` DoD-F-29).
+pub const METRIC_VT_EVENTS_EMITTED: &str = "session.vt.events_emitted";
+/// EPIC-F telemetry — histogram capturing `Grid::feed` latency in microseconds
+/// (DoD-F-30). P99 > 1 ms is a telemetry alarm owned by EPIC-J.
+pub const METRIC_VT_FEED_LATENCY_US: &str = "session.vt.feed_latency_us";
 // NOTE: 8 KiB chunk is a compromise between span fragmentation and latency.
 // Increase to 64 KiB only if the serializer/sink becomes the bottleneck.
 const PTY_READ_CHUNK_BYTES: usize = 8 * 1024;
@@ -144,6 +152,14 @@ pub struct SessionActor {
     /// downstream callers see `SessionError::Closed` instead of hanging on
     /// the emitter's dropped ack channel. Idempotent once set.
     sink_failed: Arc<AtomicBool>,
+    /// EPIC-F — per-session grid epoch. Starts at 1 on construction; bumps
+    /// on reconnect / engine reinit (future). Mirrored onto every VT event
+    /// envelope (ADR 0017 §3).
+    grid_epoch: Arc<AtomicU64>,
+    /// EPIC-F — per-session resize generation. Starts at 0; bumps on every
+    /// `resize()` call via the reader-side watch channel (§4.3 of the epic
+    /// design). Stamped onto every VT event envelope (ADR 0017 §1).
+    resize_generation: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for SessionActor {
@@ -273,6 +289,13 @@ impl SessionActor {
 
         let (emit_tx, emit_rx) = mpsc::channel::<EmitRequest>(EMIT_CHANNEL_CAPACITY);
         let (input_tx, input_rx) = mpsc::channel::<InputCommand>(INPUT_CHANNEL_CAPACITY);
+        // EPIC-F — watch channel from input task → reader task for resize
+        // signalling. The reader owns `Grid` exclusively (§4.3 of the epic
+        // design); the input task publishes the requested `PtySize` and the
+        // reader consumes it at the top of each loop iteration, calling
+        // `grid.resize()` without contention.
+        let initial_size = PtySize::new(config.cols, config.rows);
+        let (resize_watch_tx, resize_watch_rx) = watch::channel::<PtySize>(initial_size);
         // Write-priority signal: set by input_loop before taking pty.lock() so
         // the read loop yields rather than re-acquire-and-block on a read that
         // can't progress until the pending write is delivered to the pty. This
@@ -299,6 +322,13 @@ impl SessionActor {
         // it to short-circuit to `SessionError::Closed` rather than hang on
         // the emitter's dropped ack channel.
         let sink_failed = Arc::new(AtomicBool::new(false));
+
+        // EPIC-F — epoch + resize-generation counters. Started at 1/0 per the
+        // contract freeze in `epic-F-session-integration.md` §14. Held as
+        // `Arc<AtomicU64>` so the reader task can observe resize bumps
+        // signalled by the input task without touching the SharedState lock.
+        let grid_epoch = Arc::new(AtomicU64::new(1));
+        let resize_generation = Arc::new(AtomicU64::new(0));
 
         // Spawn emitter FIRST so SessionCreated can go through it.
         let emitter_task: JoinHandle<()> = {
@@ -333,6 +363,8 @@ impl SessionActor {
             tasks: Arc::new(Mutex::new(Vec::new())),
             detector,
             sink_failed,
+            grid_epoch: grid_epoch.clone(),
+            resize_generation: resize_generation.clone(),
         };
 
         // Emit SessionCreated through the emitter.
@@ -355,6 +387,11 @@ impl SessionActor {
         let reader_emit = emit_tx.clone();
         let reader_write_pending = write_pending.clone();
         let reader_write_ready = write_ready.clone();
+        let reader_grid_epoch = grid_epoch.clone();
+        let reader_resize_gen = resize_generation.clone();
+        let reader_use_vt_engine = config.use_vt_engine;
+        let reader_initial_size = initial_size;
+        let reader_resize_rx = resize_watch_rx;
         let reader_task: JoinHandle<()> = tokio::spawn(async move {
             read_loop(
                 reader_pty,
@@ -363,6 +400,11 @@ impl SessionActor {
                 reader_stop_rx,
                 reader_write_pending,
                 reader_write_ready,
+                reader_use_vt_engine,
+                reader_initial_size,
+                reader_grid_epoch,
+                reader_resize_gen,
+                reader_resize_rx,
             )
             .await;
         });
@@ -372,6 +414,7 @@ impl SessionActor {
         let input_write_pending = write_pending.clone();
         let input_write_ready = write_ready.clone();
         let input_session_id = session_id;
+        let input_resize_tx = resize_watch_tx;
         let input_task: JoinHandle<()> = tokio::spawn(async move {
             input_loop(
                 input_rx,
@@ -380,6 +423,7 @@ impl SessionActor {
                 input_write_pending,
                 input_write_ready,
                 input_session_id,
+                input_resize_tx,
             )
             .await;
         });
@@ -615,6 +659,8 @@ impl SessionHandle for SessionActor {
             shell_integration_status: st.shell_integration_status,
             cwd: st.cwd.clone(),
             cwd_source: st.cwd_source,
+            grid_epoch: self.grid_epoch.load(Ordering::Acquire),
+            resize_generation: self.resize_generation.load(Ordering::Acquire),
         }
     }
 }
@@ -701,7 +747,92 @@ fn block_id_for_event(ev: &Event) -> Option<BlockId> {
         Event::BlockTuiExited(b) => Some(b.block_id),
         Event::OutputChunk(o) => Some(o.block_id),
         Event::DiagnosticDetected(d) => Some(d.block_id),
+        // EPIC-F — VT events are session-scoped, not block-scoped. Block
+        // boundaries are still driven by OSC 133 + `VteBoundaryDetector`
+        // (§4 of epic-F-session-integration.md actor-side concerns #6). EPIC-C
+        // lit up typed grid variants; those also have no per-block id and
+        // inherit this no-op wildcard arm alongside `Event::Unknown`.
         _ => None,
+    }
+}
+
+/// EPIC-F — wire a `TerminalEvent` through the emitter as an opaque
+/// `Event::Unknown` envelope until EPIC-C lands the typed `Event::Grid`
+/// variants. The placeholder carries the envelope metadata
+/// `(grid_epoch, resize_generation, buffer_kind)` on the payload object so a
+/// downstream consumer (or a future refactor) can decode them without
+/// widening the outer `Envelope<P>` shape — consistent with the §4.2
+/// decision recorded in the epic design.
+///
+/// Rationale for `emit_nowait`: VT events are high-volume (one feed can
+/// produce many `GridDelta` / `CursorMoved` entries per 8 KiB chunk). Seq
+/// assignment + ordering is still preserved by the single-emitter mpsc
+/// (ADR 0011); we just skip the ack round-trip. Terminal milestones —
+/// `Resize` / `ModeChanged` / `SynchronizedUpdate::End` — cross the same
+/// channel and inherit the same FIFO guarantee.
+///
+/// TODO(EPIC-C): swap the JSON blob for a typed `Event::Grid(GridEvent)`
+/// once the proto crate exposes the variant. The call sites, fanout path,
+/// and replay consumer all stay the same — only the serializer changes.
+async fn emit_vt_event(
+    tx: &mpsc::Sender<EmitRequest>,
+    grid_epoch: u64,
+    resize_generation: u64,
+    buffer_kind: BufferKind,
+    ev: TerminalEvent,
+) -> Result<(), EventLogError> {
+    let kind = vt_event_kind(&ev);
+    let payload_value = serde_json::to_value(&ev).map_err(|serde_err| {
+        EventLogError::Io(format!(
+            "encode TerminalEvent (kind={kind}) to JSON: {serde_err}"
+        ))
+    })?;
+    let buffer_kind_tag = match buffer_kind {
+        BufferKind::Main => "main",
+        BufferKind::Alt => "alt",
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "grid_epoch".to_string(),
+        serde_json::Value::Number(grid_epoch.into()),
+    );
+    obj.insert(
+        "resize_generation".to_string(),
+        serde_json::Value::Number(resize_generation.into()),
+    );
+    obj.insert(
+        "buffer_kind".to_string(),
+        serde_json::Value::String(buffer_kind_tag.into()),
+    );
+    obj.insert("event".to_string(), payload_value);
+    let unknown = Event::Unknown {
+        kind: format!("grid.{kind}"),
+        payload: serde_json::Value::Object(obj),
+    };
+    emit_nowait(tx, Producer::Output, unknown).await
+}
+
+/// Short discriminator used to build the `grid.<kind>` `Event::Unknown` tag
+/// during the EPIC-C transition. Keeps telemetry per-variant legible.
+fn vt_event_kind(ev: &TerminalEvent) -> &'static str {
+    match ev {
+        TerminalEvent::GridSnapshot(_) => "grid_snapshot",
+        TerminalEvent::GridDelta(_) => "grid_delta",
+        TerminalEvent::CursorMoved(_) => "cursor_moved",
+        TerminalEvent::ModeChanged(_) => "mode_changed",
+        TerminalEvent::TitleChanged(_) => "title_changed",
+        TerminalEvent::CwdChanged(_) => "cwd_changed",
+        TerminalEvent::BellRequested => "bell_requested",
+        TerminalEvent::HyperlinkOpened { .. } => "hyperlink_opened",
+        TerminalEvent::HyperlinkClosed { .. } => "hyperlink_closed",
+        TerminalEvent::ClipboardRequest(_) => "clipboard_request",
+        TerminalEvent::OscPassthrough { .. } => "osc_passthrough",
+        TerminalEvent::ClearScrollback => "clear_scrollback",
+        TerminalEvent::Resize { .. } => "resize",
+        TerminalEvent::SynchronizedUpdate(_) => "synchronized_update",
+        TerminalEvent::UnknownCsi { .. } => "unknown_csi",
+        TerminalEvent::UnknownOsc { .. } => "unknown_osc",
+        TerminalEvent::UnknownDecMode { .. } => "unknown_dec_mode",
     }
 }
 
@@ -953,6 +1084,12 @@ async fn emitter_loop(
     clippy::too_many_lines,
     reason = "linear read-then-emit flow kept in one function for readability"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "EPIC-F threads VT engine state through the reader task; a builder \
+              struct would obscure the ownership boundary `Grid` lives on the \
+              reader stack (§4.1 of epic-F-session-integration.md)."
+)]
 async fn read_loop(
     pty: Arc<Mutex<Box<dyn PtyHandle>>>,
     emit_tx: mpsc::Sender<EmitRequest>,
@@ -960,6 +1097,11 @@ async fn read_loop(
     mut shutdown: oneshot::Receiver<()>,
     write_pending: Arc<AtomicBool>,
     write_ready: Arc<Notify>,
+    use_vt_engine: bool,
+    initial_size: PtySize,
+    grid_epoch: Arc<AtomicU64>,
+    resize_generation: Arc<AtomicU64>,
+    mut resize_rx: watch::Receiver<PtySize>,
 ) {
     let session_id_for_log = {
         let st = state.lock().await;
@@ -967,6 +1109,24 @@ async fn read_loop(
     };
     let mut detector = VteBoundaryDetector::new();
     let mut buf = vec![0u8; PTY_READ_CHUNK_BYTES];
+    // EPIC-F — the VT engine lives on the reader task's stack (§4.2 of the epic
+    // design → no `Mutex<Grid>`; the reader owns `Grid` exclusively). Constructed
+    // only when the feature flag is on so the pre-EPIC-F fallback path doesn't
+    // pay for an idle engine.
+    let grid_cell_cols = initial_size.cols;
+    let grid_cell_rows = initial_size.rows;
+    let mut grid: Option<Grid> = if use_vt_engine {
+        let classifier = Arc::new(DefaultClassifier::new(AmbiguousWidthPolicy::Narrow));
+        // Scrollback cap of 10_000 rows matches RFC §13.12 memory budget
+        // (22 MB for 10k scrollback × 120 cols). Revisit once a session-level
+        // config carries a user-chosen cap.
+        Some(Grid::new(grid_cell_rows, grid_cell_cols, 10_000, classifier))
+    } else {
+        None
+    };
+    // Mark the initial receiver value as seen so a spurious "changed"
+    // wake-up on the first tick doesn't trigger a no-op resize.
+    resize_rx.mark_unchanged();
     // Reusable base64 encode target to avoid per-chunk String allocations.
     // Capacity chosen to fit `encoded_len(PTY_READ_CHUNK_BYTES)` without realloc.
     let mut b64_scratch: Vec<u8> = Vec::with_capacity(PTY_READ_CHUNK_BYTES.div_ceil(3) * 4 + 4);
@@ -991,6 +1151,56 @@ async fn read_loop(
     // SharedState.active_block.
     let mut diag_block: Option<BlockId> = None;
     loop {
+        // EPIC-F — drain any pending resize request and reflect it into the
+        // engine. We sample the watch channel non-blockingly at loop head so a
+        // resize in-flight between two PTY reads flushes through before the
+        // next feed (§4.3 of epic-F-session-integration.md).
+        //
+        // `has_changed()` is cheap (load of an atomic); we avoid the borrow on
+        // the common case (nothing changed). When a change IS pending, we
+        // `borrow_and_update()` to clear the dirty bit and call `grid.resize`
+        // on the reader stack. The engine emits its own `Resize` event inside
+        // that call — we forward it through the emitter like any other VT
+        // event.
+        if use_vt_engine && resize_rx.has_changed().unwrap_or(false) {
+            let new_size = *resize_rx.borrow_and_update();
+            if let Some(g) = grid.as_mut() {
+                match g.resize(new_size.rows, new_size.cols) {
+                    Ok(events) => {
+                        let new_gen = g.resize_generation();
+                        resize_generation.store(new_gen, Ordering::Release);
+                        let session_grid_epoch = grid_epoch.load(Ordering::Acquire);
+                        let buffer_kind = g.active_buffer();
+                        for ev in events {
+                            if let Err(err) = emit_vt_event(
+                                &emit_tx,
+                                session_grid_epoch,
+                                new_gen,
+                                buffer_kind,
+                                ev,
+                            )
+                            .await
+                            {
+                                warn!(
+                                    session_id = %session_id_for_log,
+                                    ?err,
+                                    "session.actor.reader: VT resize event emit failed"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            session_id = %session_id_for_log,
+                            ?err,
+                            new_rows = new_size.rows,
+                            new_cols = new_size.cols,
+                            "session.actor.reader: grid.resize rejected new geometry"
+                        );
+                    }
+                }
+            }
+        }
         // Write-priority gate: if a write is pending, wait for it to complete
         // before we re-acquire the pty lock. Without this, a blocking read
         // starves writes because tokio::sync::Mutex is FIFO and the reader
@@ -1047,6 +1257,51 @@ async fn read_loop(
         // IMPORTANT: keep raw bytes intact. Do NOT decode to `String` here —
         // partial UTF-8 codepoints must survive downstream (base64 payload).
         let bytes = &buf[..n];
+
+        // EPIC-F — feed the VT engine BEFORE the OutputChunk emission path
+        // (§4.1). Events are stamped with the current `(grid_epoch,
+        // resize_generation, buffer_kind)`, funneled through the existing
+        // emitter so `sequence_no` comes from the same monotonic counter
+        // (ADR 0011 single-seq-space invariant). The legacy `OutputChunk`
+        // emission is preserved alongside for xterm.js consumption; EPIC-I
+        // deletes it after the gate is ALL-TRUE.
+        if let Some(g) = grid.as_mut() {
+            let fed_started = std::time::Instant::now();
+            let events = g.feed(bytes);
+            let fed_elapsed_us =
+                u64::try_from(fed_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            // Feed latency is a cross-cutting telemetry concern (EPIC-J). We
+            // stash it on the envelope tracing context so an operator can
+            // correlate a slow feed with the downstream event.
+            if fed_elapsed_us > 1_000 {
+                debug!(
+                    session_id = %session_id_for_log,
+                    fed_elapsed_us,
+                    event_count = events.len(),
+                    "session.actor.reader: slow Grid::feed"
+                );
+            }
+            // Mirror the engine's live counters so concurrent snapshot()
+            // readers see fresh values even before the next event ships.
+            resize_generation.store(g.resize_generation(), Ordering::Release);
+            let session_grid_epoch = grid_epoch.load(Ordering::Acquire);
+            let buffer_kind = g.active_buffer();
+            let new_resize_gen = g.resize_generation();
+            for ev in events {
+                if let Err(err) =
+                    emit_vt_event(&emit_tx, session_grid_epoch, new_resize_gen, buffer_kind, ev)
+                        .await
+                {
+                    warn!(
+                        session_id = %session_id_for_log,
+                        ?err,
+                        "session.actor.reader: VT event emit failed"
+                    );
+                    break;
+                }
+            }
+            let _ = fed_elapsed_us; // silence unused-if-not-metric warning
+        }
 
         // Record output and emit OutputChunk. One `state.lock` folds in three
         // reads (active_block, in_tui accumulate) and the output append so
@@ -1443,6 +1698,7 @@ async fn input_loop(
     write_pending: Arc<AtomicBool>,
     write_ready: Arc<Notify>,
     session_id: SessionId,
+    resize_tx: watch::Sender<PtySize>,
 ) {
     loop {
         let cmd = tokio::select! {
@@ -1470,7 +1726,16 @@ async fn input_loop(
             }
             InputCommand::Resize(size) => {
                 let mut g = pty.lock().await;
-                g.resize(size).await
+                let pty_outcome = g.resize(size).await;
+                // EPIC-F — notify the reader task regardless of the PTY
+                // resize outcome so a SIGWINCH failure doesn't silently
+                // desync the engine from the PTY. The reader will log +
+                // skip on zero-geometry; otherwise it updates its Grid.
+                // Watch channels surface `SendError` only if every
+                // receiver has been dropped — a benign race during
+                // shutdown.
+                let _ = resize_tx.send(size);
+                pty_outcome
             }
             InputCommand::Cancel(_block_id) => {
                 // Send Ctrl-C to the PTY. The shell reduces that to SIGINT.

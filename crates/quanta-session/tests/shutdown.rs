@@ -54,6 +54,7 @@ async fn close_after_child_exit_still_succeeds() {
         cwd: PathBuf::from("/tmp"),
         cols: 80,
         rows: 24,
+        ..SessionConfig::default()
     };
     let (actor, _sid) = SessionActor::spawn(pty, log, cfg).await.unwrap();
     // Give the child a moment to exit.

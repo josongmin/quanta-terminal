@@ -29,7 +29,8 @@ export type Producer =
   | 'history'
   | 'security'
   | 'protocol'
-  | 'lifecycle';
+  | 'lifecycle'
+  | 'grid';
 
 export interface SchemaVersion {
   readonly major: number;

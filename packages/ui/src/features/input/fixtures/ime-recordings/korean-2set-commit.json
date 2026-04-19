@@ -1,0 +1,22 @@
+{
+  "id": "korean-2set-commit",
+  "ime": "korean-2set",
+  "platform": "macos",
+  "events": [
+    { "tMs": 0, "kind": "compositionstart", "data": "" },
+    { "tMs": 50, "kind": "compositionupdate", "data": "ㅎ" },
+    { "tMs": 120, "kind": "compositionupdate", "data": "하" },
+    { "tMs": 200, "kind": "compositionupdate", "data": "한" },
+    { "tMs": 300, "kind": "compositionend", "data": "한" }
+  ],
+  "expectedPtyBytesHex": "ed959c",
+  "expectedMidCompositionPtyBytes": [],
+  "expectedOverlayStates": [
+    { "afterTMs": 0, "visible": true, "text": "" },
+    { "afterTMs": 50, "visible": true, "text": "ㅎ" },
+    { "afterTMs": 120, "visible": true, "text": "하" },
+    { "afterTMs": 200, "visible": true, "text": "한" },
+    { "afterTMs": 300, "visible": false, "text": "" }
+  ],
+  "notes": "RFC §22 #1 — Korean 2-set double-input bug. MUST emit exactly 'ed 95 9c' ONCE at commit."
+}

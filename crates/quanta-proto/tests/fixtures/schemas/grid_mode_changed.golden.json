@@ -1,0 +1,39 @@
+{
+  "event_id": "01J0000000000000000000000A",
+  "monotonic_seq": 54,
+  "session_id": "01J00000000000000000000001",
+  "block_id": null,
+  "wall_clock_ts": "2026-04-19T00:00:00Z",
+  "producer_id": "grid",
+  "schema_version": 1,
+  "causation_id": null,
+  "grid_epoch": 1,
+  "payload": {
+    "kind": "mode_changed",
+    "changes": [
+      {
+        "mode": "alt_screen",
+        "value": true
+      },
+      {
+        "mode": "mouse_tracking",
+        "value": "button_event"
+      },
+      {
+        "mode": "mouse_encoding",
+        "value": "sgr"
+      }
+    ],
+    "state": {
+      "decckm": false,
+      "bracketed_paste": false,
+      "focus_reporting": false,
+      "mouse_tracking": "button_event",
+      "mouse_encoding": "sgr",
+      "modify_other_keys": 0,
+      "kitty_keyboard": 0,
+      "alt_screen": true,
+      "synchronized_update": false
+    }
+  }
+}

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_raw_string_hashes, clippy::single_char_pattern)]
+
 //! `check-ui-no-ansi` — enforces RFC 0001 invariant **I-2**:
 //! the UI (TypeScript) MUST NOT parse ANSI / CSI / OSC / DCS escape
 //! sequences. All PTY bytes pass through `quanta-vt` in Rust; the
@@ -195,9 +197,7 @@ fn run(root: &Path) -> Result<usize> {
         }
     }
 
-    println!(
-        "check-ui-no-ansi: scanned {scanned} file(s); {violations} violation(s)",
-    );
+    println!("check-ui-no-ansi: scanned {scanned} file(s); {violations} violation(s)",);
     Ok(violations)
 }
 
@@ -279,10 +279,17 @@ fn contains_identifier_token(line: &str, tok: &str) -> bool {
                 !is_ident_byte(bytes[i - 1])
             };
             let right_idx = i + tb.len();
+            // We fire on `CSI` as a standalone identifier AND as a
+            // compound-identifier prefix separated by `_` or `$`
+            // (e.g., `CSI_STATE`, `OSC_HANDLER`). We do NOT fire when
+            // the match is a substring continuing into another
+            // alphanumeric letter (`OSCILLATOR`, `CSInfo`), since those
+            // are not ANSI-parser identifiers.
             let right_ok = if right_idx == bytes.len() {
                 true
             } else {
-                !is_ident_byte(bytes[right_idx])
+                let next = bytes[right_idx];
+                !matches!(next, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9')
             };
             if left_ok && right_ok {
                 return true;
@@ -305,7 +312,7 @@ pub fn has_allow_pragma_above(text: &str, line_no: usize) -> bool {
         return false;
     }
     let target = line_no - 1; // 1-based index of the pragma line.
-    // `lines()` is 0-based; `target - 1` reaches the previous line.
+                              // `lines()` is 0-based; `target - 1` reaches the previous line.
     text.lines()
         .nth(target - 1)
         .map(|l| l.trim_start().starts_with(ALLOW_PRAGMA))

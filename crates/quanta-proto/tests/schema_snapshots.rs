@@ -17,12 +17,20 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use quanta_proto::envelope::{Envelope, Producer, SchemaVersion};
+use quanta_proto::envelope::{BufferKind, Envelope, Producer, SchemaVersion};
 use quanta_proto::events::{
     BlockCanceled, BlockCompleted, BlockCreated, BlockDetached, BlockStarted, BoundaryConfidence,
     BoundarySignal, CwdSource, DetachReason, DiagnosticCategory, DiagnosticDetected,
     DiagnosticSeverity, Event, InputKind, OutputChunk, OutputStream, SessionCreated,
     SessionEndReason, SessionEnded,
+};
+use quanta_proto::events_grid::{
+    BellKindWire, BellRequestedPayload, BlankTag, CellSpanWire, ClipboardOpWire,
+    ClipboardRequestPayload, ClipboardSelectionWire, CursorMovedPayload, CursorShapeWire,
+    CursorStateWire, GraphemeRunWire, GridDeltaPayload, GridMetaWire, GridSnapshotPayload,
+    HyperlinkAddedPayload, HyperlinkRemovedPayload, ModeChangeWire, ModeChangedPayload,
+    MouseEncodingWire, MouseTrackingModeWire, RowDeltaWire, SyncPhaseWire,
+    SynchronizedUpdatePayload, TerminalModeStateWire, TitleChangedPayload, TitleScopeWire, Utf8Run,
 };
 use quanta_proto::ids::{BlockId, DiagnosticId, EventId, SessionId, SpanId, WorkspaceId};
 use time::format_description::well_known::Rfc3339;
@@ -71,6 +79,9 @@ fn env(producer: Producer, ev: Event) -> Envelope<Event> {
         producer_id: producer,
         schema_version: SchemaVersion::ONE,
         causation_id: None,
+        grid_epoch: 0,
+        resize_generation: 0,
+        buffer_kind: BufferKind::Main,
         payload: ev,
     }
 }
@@ -225,6 +236,257 @@ fn session_ended_snapshot() {
         reason: SessionEndReason::ShellExited,
     });
     assert_snapshot("session_ended", &env(Producer::Session, ev));
+}
+
+/// Envelope builder for grid-reducer events. Carries the
+/// `(grid_epoch, resize_generation, buffer_kind)` tuple required by ADR 0017 §1.
+fn grid_env(
+    ev: Event,
+    grid_epoch: u64,
+    sequence_no: u64,
+    resize_generation: u64,
+    buffer_kind: BufferKind,
+) -> Envelope<Event> {
+    Envelope {
+        event_id: fixed_event(),
+        monotonic_seq: sequence_no,
+        session_id: fixed_session(),
+        block_id: None,
+        wall_clock_ts: fixed_ts(),
+        producer_id: Producer::Grid,
+        schema_version: SchemaVersion::ONE,
+        causation_id: None,
+        grid_epoch,
+        resize_generation,
+        buffer_kind,
+        payload: ev,
+    }
+}
+
+/// 2×4 blank grid — the canonical "hello, brand-new terminal" snapshot.
+fn sample_grid_snapshot() -> GridSnapshotPayload {
+    GridSnapshotPayload {
+        rows: 2,
+        cols: 4,
+        buffer_kind: BufferKind::Main,
+        row_deltas: (0..2)
+            .map(|row| RowDeltaWire {
+                row,
+                revision_before: 0,
+                revision_after: 1,
+                spans: vec![CellSpanWire {
+                    cols: 4,
+                    sgr: "0x0000000000000000".into(),
+                    graphemes: GraphemeRunWire::Blank(BlankTag::Blank),
+                    hyperlink_id: 0,
+                    ext: None,
+                }],
+                continuation: false,
+                hyperlink_refs: vec![],
+            })
+            .collect(),
+        cursor: Some(CursorStateWire {
+            row: 0,
+            col: 0,
+            visible: true,
+            shape: CursorShapeWire::Block,
+            blinking: true,
+            pending_wrap: false,
+        }),
+        mode_state: TerminalModeStateWire::default(),
+        meta: GridMetaWire::default(),
+    }
+}
+
+#[test]
+fn grid_snapshot_snapshot() {
+    let ev = Event::GridSnapshot(sample_grid_snapshot());
+    assert_snapshot("grid_snapshot", &grid_env(ev, 1, 0, 0, BufferKind::Main));
+}
+
+#[test]
+fn grid_delta_snapshot() {
+    let ev = Event::GridDelta(GridDeltaPayload {
+        row_deltas: vec![RowDeltaWire {
+            row: 10,
+            revision_before: 17,
+            revision_after: 18,
+            spans: vec![
+                // "한" — 3 UTF-8 bytes, occupies 2 cols.
+                CellSpanWire {
+                    cols: 2,
+                    sgr: "0x018000FF00FF000033".into(),
+                    graphemes: GraphemeRunWire::Inline {
+                        utf8: Utf8Run::Bytes(vec![237, 149, 156]),
+                    },
+                    hyperlink_id: 0,
+                    ext: None,
+                },
+                // Blank tail.
+                CellSpanWire {
+                    cols: 78,
+                    sgr: "0x0000000000000000".into(),
+                    graphemes: GraphemeRunWire::Blank(BlankTag::Blank),
+                    hyperlink_id: 0,
+                    ext: None,
+                },
+            ],
+            continuation: false,
+            hyperlink_refs: vec![],
+        }],
+        scrolls: vec![],
+        scrollback_appended: 0,
+    });
+    assert_snapshot("grid_delta", &grid_env(ev, 1, 42, 0, BufferKind::Main));
+}
+
+#[test]
+fn cursor_moved_snapshot() {
+    let ev = Event::CursorMoved(CursorMovedPayload {
+        cursor: CursorStateWire {
+            row: 0,
+            col: 0,
+            visible: true,
+            shape: CursorShapeWire::Block,
+            blinking: false,
+            pending_wrap: false,
+        },
+    });
+    assert_snapshot(
+        "grid_cursor_moved",
+        &grid_env(ev, 1, 55, 0, BufferKind::Alt),
+    );
+}
+
+#[test]
+fn mode_changed_snapshot() {
+    let state = TerminalModeStateWire {
+        decckm: false,
+        bracketed_paste: false,
+        focus_reporting: false,
+        mouse_tracking: MouseTrackingModeWire::ButtonEvent,
+        mouse_encoding: MouseEncodingWire::Sgr,
+        modify_other_keys: 0,
+        kitty_keyboard: 0,
+        alt_screen: true,
+        synchronized_update: false,
+    };
+    let ev = Event::ModeChanged(ModeChangedPayload {
+        changes: vec![
+            ModeChangeWire::AltScreen { value: true },
+            ModeChangeWire::MouseTracking {
+                value: MouseTrackingModeWire::ButtonEvent,
+            },
+            ModeChangeWire::MouseEncoding {
+                value: MouseEncodingWire::Sgr,
+            },
+        ],
+        state,
+    });
+    assert_snapshot(
+        "grid_mode_changed",
+        &grid_env(ev, 1, 54, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn title_changed_snapshot() {
+    let ev = Event::TitleChanged(TitleChangedPayload {
+        title: "user@host: ~/projects/quanta-terminal".into(),
+        scope: TitleScopeWire::Both,
+    });
+    assert_snapshot(
+        "grid_title_changed",
+        &grid_env(ev, 1, 12, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn bell_requested_snapshot() {
+    let ev = Event::BellRequested(BellRequestedPayload {
+        kind_of_bell: BellKindWire::Audible,
+    });
+    assert_snapshot(
+        "grid_bell_requested",
+        &grid_env(ev, 1, 88, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn hyperlink_added_snapshot() {
+    let ev = Event::HyperlinkAdded(HyperlinkAddedPayload {
+        id: 1,
+        uri: "https://example.com/very/long/path?q=1".into(),
+        params: Some("id=ln1".into()),
+    });
+    assert_snapshot(
+        "grid_hyperlink_added",
+        &grid_env(ev, 1, 120, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn hyperlink_removed_snapshot() {
+    let ev = Event::HyperlinkRemoved(HyperlinkRemovedPayload { id: 1 });
+    assert_snapshot(
+        "grid_hyperlink_removed",
+        &grid_env(ev, 1, 9001, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn clipboard_request_snapshot() {
+    let ev = Event::ClipboardRequest(ClipboardRequestPayload {
+        selection: ClipboardSelectionWire::Clipboard,
+        op: ClipboardOpWire::Set {
+            base64_data: "SGVsbG8sIHdvcmxkIQ==".into(),
+        },
+    });
+    assert_snapshot(
+        "grid_clipboard_request",
+        &grid_env(ev, 1, 33, 0, BufferKind::Main),
+    );
+}
+
+#[test]
+fn synchronized_update_begin_snapshot() {
+    let ev = Event::SynchronizedUpdate(SynchronizedUpdatePayload {
+        phase: SyncPhaseWire::Begin,
+    });
+    assert_snapshot(
+        "grid_synchronized_update_begin",
+        &grid_env(ev, 1, 500, 0, BufferKind::Alt),
+    );
+}
+
+#[test]
+fn synchronized_update_end_snapshot() {
+    let ev = Event::SynchronizedUpdate(SynchronizedUpdatePayload {
+        phase: SyncPhaseWire::End,
+    });
+    assert_snapshot(
+        "grid_synchronized_update_end",
+        &grid_env(ev, 1, 501, 0, BufferKind::Alt),
+    );
+}
+
+/// Every grid-envelope carries the three grid ordering fields on the wire.
+/// Separately verifies the new fields materialize and round-trip.
+#[test]
+fn grid_envelope_ordering_round_trips() {
+    let ev = Event::BellRequested(BellRequestedPayload {
+        kind_of_bell: BellKindWire::Visual,
+    });
+    let e = grid_env(ev, 3, 99, 5, BufferKind::Alt);
+    let j = serde_json::to_string(&e).unwrap();
+    // The three grid fields must appear on wire for non-default tuples.
+    assert!(j.contains("\"grid_epoch\":3"));
+    assert!(j.contains("\"resize_generation\":5"));
+    assert!(j.contains("\"buffer_kind\":\"alt\""));
+    let back: Envelope<Event> = serde_json::from_str(&j).unwrap();
+    assert_eq!(back.grid_epoch, 3);
+    assert_eq!(back.resize_generation, 5);
+    assert_eq!(back.buffer_kind, BufferKind::Alt);
 }
 
 /// Back-compat: a golden JSON emitted by "this build" must parse cleanly into
