@@ -36,6 +36,11 @@ function makeInMemoryBridge(): ProbeBridge {
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {
+      // Reference bridge: cancel is a no-op. The real Tauri bridge routes
+      // through the sidecar; adapters that can't cancel (this one, the
+      // mock bridge) resolve silently to keep the Stop button idempotent.
+    },
     async openInEditor() {},
     async installShellIntegration(options) {
       return {

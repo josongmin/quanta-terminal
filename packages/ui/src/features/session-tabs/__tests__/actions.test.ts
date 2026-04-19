@@ -24,12 +24,7 @@ import type {
   Subscription,
 } from '@quanta/host-common';
 import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
-import {
-  createSession,
-  closeSession,
-  switchSession,
-  getConnection,
-} from '../index.js';
+import { createSession, closeSession, switchSession, getConnection } from '../index.js';
 import { __resetConnectionMapForTests } from '../connection-map.js';
 import { useSessionsStore } from '../../../entities/session/index.js';
 
@@ -60,6 +55,7 @@ function makeBridge(sessionIds: readonly SessionId[]): ScriptedBridge {
     async write() {},
     async resize() {},
     close: closeMock,
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {

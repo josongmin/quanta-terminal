@@ -95,9 +95,9 @@ vi.mock('../../../features/session-tabs/index.js', () => ({
 // test here is the view-state graph, not the persistence wiring (that has its
 // own test suite under entities/block/__tests__).
 vi.mock('../../../entities/block/index.js', async () => {
-  const actual = await vi.importActual<
-    typeof import('../../../entities/block/index.js')
-  >('../../../entities/block/index.js');
+  const actual = await vi.importActual<typeof import('../../../entities/block/index.js')>(
+    '../../../entities/block/index.js',
+  );
   return {
     ...actual,
     createIdbBlockAdapter: () => ({
@@ -114,27 +114,27 @@ vi.mock('../../../entities/block/index.js', async () => {
 // Banner/TUI detectors install global subscriptions. In tests we just need
 // no-ops with an `unsubscribe` shape so the cleanup code runs.
 vi.mock('../../../features/banner/index.js', async () => {
-  const actual = await vi.importActual<
-    typeof import('../../../features/banner/index.js')
-  >('../../../features/banner/index.js');
+  const actual = await vi.importActual<typeof import('../../../features/banner/index.js')>(
+    '../../../features/banner/index.js',
+  );
   return {
     ...actual,
     installBannerDetectors: () => ({ unsubscribe: () => {} }),
   };
 });
 vi.mock('../../../features/tui/index.js', async () => {
-  const actual = await vi.importActual<
-    typeof import('../../../features/tui/index.js')
-  >('../../../features/tui/index.js');
+  const actual = await vi.importActual<typeof import('../../../features/tui/index.js')>(
+    '../../../features/tui/index.js',
+  );
   return {
     ...actual,
     installTuiDetector: () => ({ unsubscribe: () => {} }),
   };
 });
 vi.mock('../../../features/command/index.js', async () => {
-  const actual = await vi.importActual<
-    typeof import('../../../features/command/index.js')
-  >('../../../features/command/index.js');
+  const actual = await vi.importActual<typeof import('../../../features/command/index.js')>(
+    '../../../features/command/index.js',
+  );
   return {
     ...actual,
     bindBlockEntity: () => () => {},
@@ -143,9 +143,9 @@ vi.mock('../../../features/command/index.js', async () => {
 // Phase-4 auto-spawn reads the host bridge on mount. Route `getHostBridge`
 // through to a dummy so the accessor never throws.
 vi.mock('../../../shared/api/host-bridge.js', async () => {
-  const actual = await vi.importActual<
-    typeof import('../../../shared/api/host-bridge.js')
-  >('../../../shared/api/host-bridge.js');
+  const actual = await vi.importActual<typeof import('../../../shared/api/host-bridge.js')>(
+    '../../../shared/api/host-bridge.js',
+  );
   const dummy = {
     capabilities: {
       nativeWindowChrome: false,
@@ -161,6 +161,7 @@ vi.mock('../../../shared/api/host-bridge.js', async () => {
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {

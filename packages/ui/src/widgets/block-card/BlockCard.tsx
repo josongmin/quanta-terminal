@@ -62,6 +62,7 @@ import {
 import { openInEditor } from '../../features/navigation/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { createLogger } from '../../shared/lib/logger.js';
+import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import styles from './block-card.module.css';
 
 const log = createLogger('widgets/block-card');
@@ -198,8 +199,31 @@ function BlockCardImpl(props: BlockCardProps) {
     [canCompare, header.id, onCompare, stop],
   );
 
-  const exitAttr =
-    header.exitCode === null ? undefined : header.exitCode === 0 ? '0' : 'nonzero';
+  // Stop button (ADR 0004 CancelBlock RPC): dispatches a fire-and-forget
+  // cancel through the host bridge. The UI does not await the host's reply
+  // beyond logging — the canceled state arrives back via the normal event
+  // stream (sidecar emits BlockCompleted with reason=canceled → pty_exit →
+  // command router finalizes the block). Double-clicks are idempotent at
+  // the bridge layer so we don't gate the button on a sending-spinner.
+  const onStopClick = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      const bridge = tryGetHostBridge();
+      if (!bridge) {
+        log.debug('stop clicked but no bridge installed');
+        return;
+      }
+      // Fire-and-forget: the button returns immediately so the click never
+      // blocks the UI. Errors are logged; the sidecar command swallows the
+      // idempotent "already-terminated" case so a stale click is a no-op.
+      void bridge.cancelBlock(header.sessionId, header.id).catch((err: unknown) => {
+        log.warn('cancelBlock rejected', err);
+      });
+    },
+    [header.id, header.sessionId, stop],
+  );
+
+  const exitAttr = header.exitCode === null ? undefined : header.exitCode === 0 ? '0' : 'nonzero';
 
   return (
     <article
@@ -252,6 +276,19 @@ function BlockCardImpl(props: BlockCardProps) {
           )}
         </span>
         <span className={styles.actions}>
+          {header.status === 'running' && (
+            <Tooltip content={<>Stop</>}>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={onStopClick}
+                aria-label="Stop running block"
+                data-testid={`block-card-stop-${header.id}`}
+              >
+                <StopIcon />
+              </button>
+            </Tooltip>
+          )}
           <Tooltip
             content={
               <>
@@ -302,21 +339,13 @@ function BlockCardImpl(props: BlockCardProps) {
             </button>
           </Tooltip>
           <Tooltip
-            content={
-              canCompare ? (
-                <>Compare against previous run</>
-              ) : (
-                <>No prior run to compare</>
-              )
-            }
+            content={canCompare ? <>Compare against previous run</> : <>No prior run to compare</>}
           >
             <button
               type="button"
               className={styles.iconButton}
               onClick={onCompareClick}
-              aria-label={
-                canCompare ? 'Compare against previous run' : 'Compare (no prior run)'
-              }
+              aria-label={canCompare ? 'Compare against previous run' : 'Compare (no prior run)'}
               disabled={!canCompare}
               data-testid={`block-card-compare-${header.id}`}
               aria-disabled={!canCompare}
@@ -473,9 +502,7 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
   if (collapsed) {
     return (
       <div className={styles.peek}>
-        <span className={styles.peekText}>
-          {lastLine(decodedForPeek) || <em>no output</em>}
-        </span>
+        <span className={styles.peekText}>{lastLine(decodedForPeek) || <em>no output</em>}</span>
         <span className={styles.peekBytes}>{bytes}B</span>
       </div>
     );
@@ -508,6 +535,17 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
 
 /* --- Inline SVG icons (no new dep; 14x14 glyphs match the icon button). --- */
 
+function StopIcon() {
+  // Solid square — the conventional "stop" / "halt" glyph. Using a filled
+  // rect (not a ring) so the red accent is legible at 14px against the
+  // icon-button background.
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 function PinIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
@@ -525,7 +563,11 @@ function CopyIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
       <rect x="3.5" y="3.5" width="7" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M5.5 3V2.2A.8.8 0 0 1 6.3 1.5h4.4a.8.8 0 0 1 .8.8v5.6" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M5.5 3V2.2A.8.8 0 0 1 6.3 1.5h4.4a.8.8 0 0 1 .8.8v5.6"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
     </svg>
   );
 }
@@ -540,7 +582,13 @@ function RerunIcon() {
         strokeLinecap="round"
         fill="none"
       />
-      <path d="M12.5 2.5V5.5H9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M12.5 2.5V5.5H9.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -564,12 +612,7 @@ function CompareIcon() {
   // reads as "diff / compare" without needing a second row of labels.
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-      <path
-        d="M3 4h5M3 10h5"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-      />
+      <path d="M3 4h5M3 10h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       <path
         d="M10 2.5l2.5 2L10 6.5M10 7.5l2.5 2L10 11.5"
         stroke="currentColor"

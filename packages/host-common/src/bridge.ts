@@ -15,7 +15,7 @@
  */
 
 import type { HostCapabilities } from './capabilities.js';
-import type { HostEvent, SessionId } from './events.js';
+import type { BlockId, HostEvent, SessionId } from './events.js';
 
 export interface SpawnSessionOptions {
   /** Path to the shell binary (e.g. "/bin/zsh"). Host default if omitted. */
@@ -128,6 +128,21 @@ export interface HostBridge {
 
   /** Close the session and kill its child process. */
   close(sessionId: SessionId): Promise<void>;
+
+  /**
+   * Cancel a running block in a session. The sidecar is the source of truth:
+   * it sends a SIGINT (or equivalent) to the block's child and emits the
+   * matching `pty_exit` / `BlockCompleted` events so the UI's block store
+   * transitions to `canceled` via the existing event fan-out.
+   *
+   * Idempotency: calling `cancelBlock` on a block that has already reached a
+   * terminal state MUST resolve silently rather than reject. The UI's Stop
+   * button may double-fire during a status race and we don't want a toast
+   * for a no-op. Hosts that cannot cancel (mock bridge, embedded-shell dev
+   * mode) resolve silently as well — the method exists on every adapter so
+   * the UI never has to type-narrow before calling it.
+   */
+  cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void>;
 
   /** Subscribe to host events. Returns a subscription handle. */
   subscribe(listener: HostEventListener): Subscription;

@@ -44,3 +44,9 @@ build:
 fmt:
     cargo fmt --all
     pnpm run format
+
+# Package the `quanta-core` binary into the Tauri bundle layout. Required
+# before a production `pnpm tauri build` on a host that hasn't baked the
+# binary into PATH. Detects the host triple via `rustc -vV` (ADR 0004).
+package-sidecar:
+    ./scripts/package-sidecar.sh

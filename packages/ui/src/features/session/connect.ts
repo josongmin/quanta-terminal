@@ -78,6 +78,14 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   const preBuffer: HostEvent[] = [];
   let sessionId: SessionId | undefined;
   let closed = false;
+  // Audit P1 (fix 2): `ended` tracks "the PTY side has emitted its terminal
+  // event" (pty_exit / session_ended) as distinct from `closed` (which means
+  // the UI explicitly called `close()` and we're tearing down the subscription).
+  // After `ended`, we must ignore late-arriving pty_data so it doesn't leak
+  // into the next block via `appendToActiveBlock` — the active pointer was
+  // cleared in finalize so the bytes currently drop silently, but re-entering
+  // dispatch wastes work and future block-of-new-session races could mis-route.
+  let ended = false;
   let routerDispose: (() => void) | undefined;
 
   const subscription = bridge.subscribe((event) => {
@@ -159,6 +167,12 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // ----- helpers -----
 
   function dispatchEvent(event: HostEvent): void {
+    // Audit P1 (fix 2): early-return once the PTY has signaled its terminal
+    // event. Any `pty_data` that arrives after `pty_exit` / `session_ended`
+    // is a late-flush tail from the host and would wastefully re-enter the
+    // append path; worse, if a new block is started immediately after, it
+    // could land the tail on the wrong block.
+    if (ended) return;
     if (isEventOfKind(event, 'pty_data')) {
       if (sessionId !== undefined) {
         // Dual-fanout: the xterm fallback path (onData callback) must see
@@ -172,6 +186,10 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       return;
     }
     if (isEventOfKind(event, 'pty_exit')) {
+      // Audit P1 (fix 2): flip the `ended` flag BEFORE any further work so
+      // that a re-entrant dispatch (host-side synchronous event emission)
+      // from inside finalize/patch can't slip past the early-return above.
+      ended = true;
       // Finalize the active block AND cancel stragglers via the router
       // before we touch the session store. The router is idempotent when
       // no router is installed (dead-letter safety).
@@ -224,6 +242,9 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       return;
     }
     if (isEventOfKind(event, 'session_ended')) {
+      // Audit P1 (fix 2): same rationale as pty_exit — session_ended is a
+      // terminal signal, flag it so any trailing pty_data is ignored.
+      ended = true;
       if (sessionId !== undefined) {
         useSessionsStore.getState().markExited(sessionId, null);
       }

@@ -9,10 +9,13 @@
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HostBridge } from '@quanta/host-common';
+import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
 import { useBlockStore } from '../../../entities/block/index.js';
 import { BlockCard } from '../BlockCard.js';
 import type { Block } from '../../../entities/block/index.js';
+import { setHostBridge } from '../../../shared/api/host-bridge.js';
 
 function currentBlock(id: string): Block {
   const b = useBlockStore.getState().entities[id];
@@ -23,6 +26,51 @@ function currentBlock(id: string): Block {
 beforeEach(() => {
   useBlockStore.getState().resetAll();
 });
+
+afterEach(() => {
+  if (typeof window !== 'undefined') {
+    delete (window as unknown as { __QUANTA_HOST__?: HostBridge }).__QUANTA_HOST__;
+  }
+});
+
+/** Minimal HostBridge stub used by Stop-button tests. Every method is a
+ *  no-op so a spy on `cancelBlock` is the only observed behavior. */
+function makeStubBridge(overrides: Partial<HostBridge> = {}): HostBridge {
+  return {
+    capabilities: DEFAULT_CAPABILITIES,
+    async ready() {},
+    async spawn() {
+      return { sessionId: 'sess-stub', shell: '/bin/sh', cwd: '/' };
+    },
+    async write() {},
+    async resize() {},
+    async close() {},
+    async cancelBlock() {},
+    async openInEditor() {},
+    async installShellIntegration() {
+      return {
+        targetPath: '/tmp/stub',
+        snippet: '',
+        alreadyInstalled: false,
+        mutated: false,
+        lineCount: 0,
+      };
+    },
+    async aiSuggest() {
+      return {
+        id: 'stub',
+        command: 'ls',
+        tier: 'safe',
+        modifiers: [],
+        rulesetVersion: 1,
+      };
+    },
+    subscribe() {
+      return { unsubscribe: () => {} };
+    },
+    ...overrides,
+  } as HostBridge;
+}
 
 describe('<BlockCard />', () => {
   it('renders the command, duration, and cwd badge', () => {
@@ -152,6 +200,58 @@ describe('<BlockCard />', () => {
     useBlockStore.getState().createBlock('ls', '/', { rerunOf: a });
     render(<BlockCard block={currentBlock(a)} onCompare={vi.fn()} />);
     expect(screen.getByLabelText(/Compare against previous run/u)).not.toBeDisabled();
+  });
+
+  describe('Stop button', () => {
+    it('renders only when the block is running', () => {
+      const id = useBlockStore.getState().createBlock('sleep 9', '/');
+      render(<BlockCard block={currentBlock(id)} />);
+      expect(screen.getByLabelText('Stop running block')).toBeInTheDocument();
+    });
+
+    it('is absent once the block has completed', () => {
+      const id = useBlockStore.getState().createBlock('ls', '/');
+      useBlockStore.getState().completeBlock(id, 0);
+      render(<BlockCard block={currentBlock(id)} />);
+      expect(screen.queryByLabelText('Stop running block')).toBeNull();
+    });
+
+    it('dispatches cancelBlock with (sessionId, blockId) and stops propagation', async () => {
+      const cancelSpy = vi.fn().mockResolvedValue(undefined);
+      setHostBridge(makeStubBridge({ cancelBlock: cancelSpy }));
+      const id = useBlockStore.getState().createBlock('sleep 9', '/tmp/project');
+      const sessionId = currentBlock(id).sessionId;
+      render(<BlockCard block={currentBlock(id)} />);
+      const btn = screen.getByLabelText('Stop running block');
+      await userEvent.click(btn);
+      expect(cancelSpy).toHaveBeenCalledWith(sessionId, id);
+      // Click must not bubble into the header toggle.
+      expect(useBlockStore.getState().entities[id]?.collapsed).toBe(false);
+    });
+
+    it('tolerates a bridge rejection without throwing (idempotency contract)', async () => {
+      const cancelSpy = vi.fn().mockRejectedValue(new Error('already canceled'));
+      setHostBridge(makeStubBridge({ cancelBlock: cancelSpy }));
+      const id = useBlockStore.getState().createBlock('sleep 9', '/');
+      render(<BlockCard block={currentBlock(id)} />);
+      const btn = screen.getByLabelText('Stop running block');
+      // The click must resolve without an unhandled rejection bubbling up.
+      await userEvent.click(btn);
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('is a no-op when no bridge is installed (dev/mock fallback)', async () => {
+      // No setHostBridge + afterEach cleared the global. The click must not
+      // throw — an uninstalled bridge is a legitimate dev mode (browser dev
+      // before the mock factory runs). The button quietly does nothing.
+      const id = useBlockStore.getState().createBlock('sleep 9', '/');
+      render(<BlockCard block={currentBlock(id)} />);
+      const btn = screen.getByLabelText('Stop running block');
+      await userEvent.click(btn);
+      // If we get here, the click path didn't throw. Assert the block is
+      // still running — nothing mutated state.
+      expect(useBlockStore.getState().entities[id]?.status).toBe('running');
+    });
   });
 
   it('flushes parser tail spans on completion', () => {

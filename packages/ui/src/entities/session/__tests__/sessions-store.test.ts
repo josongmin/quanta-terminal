@@ -12,9 +12,9 @@
  *     fields, and switches value when the active session swaps.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSessionStore } from '../model.js';
-import { useSessionsStore } from '../sessions-store.js';
+import { bindSessionRemovalHook, useSessionsStore } from '../sessions-store.js';
 import type { SessionId } from '../../../shared/types/generated/index.js';
 
 const A = 'sess-a' as SessionId;
@@ -156,5 +156,37 @@ describe('useSessionStore mirror', () => {
     useSessionStore.getState().markExited(42);
     expect(useSessionsStore.getState().entities[A]?.health).toBe('exited');
     expect(useSessionsStore.getState().entities[A]?.exitCode).toBe(42);
+  });
+});
+
+describe('audit P1 (fix 3): bindSessionRemovalHook', () => {
+  let unbind: (() => void) | undefined;
+  afterEach(() => {
+    if (unbind) unbind();
+    unbind = undefined;
+  });
+
+  it('invokes the hook with the removed id AFTER the state commit', () => {
+    const seenWhenCalled: Array<{ id: SessionId; stillPresent: boolean }> = [];
+    unbind = bindSessionRemovalHook((id) => {
+      const stillPresent = Boolean(useSessionsStore.getState().entities[id]);
+      seenWhenCalled.push({ id, stillPresent });
+    });
+    useSessionsStore.getState().addSession({ id: A });
+    useSessionsStore.getState().removeSession(A);
+    expect(seenWhenCalled).toEqual([{ id: A, stillPresent: false }]);
+  });
+
+  it('does NOT invoke the hook when removeSession is a no-op (unknown id)', () => {
+    const spy = vi.fn();
+    unbind = bindSessionRemovalHook(spy);
+    useSessionsStore.getState().removeSession(A); // never added
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (no crash) when no hook is bound', () => {
+    // Deliberately do NOT bind — this is the pre-wiring state some tests hit.
+    useSessionsStore.getState().addSession({ id: A });
+    expect(() => useSessionsStore.getState().removeSession(A)).not.toThrow();
   });
 });

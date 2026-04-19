@@ -122,6 +122,21 @@ export function runHostBridgeConformance(name: string, factory: BridgeFactory): 
       await p.catch(() => {});
     });
 
+    it('cancelBlock is a function and returns a Promise', async () => {
+      // Phase-5 cancel contract: every HostBridge exposes `cancelBlock`.
+      // The Stop button on BlockCard calls the bridge directly, so any
+      // adapter that omits the method or returns a non-thenable breaks
+      // the Stop affordance. Idempotency is pinned per-bridge (the mock
+      // bridge resolves silently; the Tauri bridge swallows terminal-state
+      // errors from the sidecar) — here we only pin the Promise-returning
+      // surface and that the documented argument shape is accepted.
+      const bridge = await factory();
+      expect(typeof bridge.cancelBlock).toBe('function');
+      const p = bridge.cancelBlock('sess-conformance', 'blk-conformance');
+      expect(typeof (p as { then?: unknown }).then).toBe('function');
+      await p.catch(() => {});
+    });
+
     it('aiSuggest is implemented and returns a Promise', async () => {
       // Phase-5 AI-suggestion contract (ADR 0012): every HostBridge exposes
       // `aiSuggest`. The UI's `useSuggest` hook depends on the call returning

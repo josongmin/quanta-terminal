@@ -198,7 +198,31 @@ async fn handle_connection(
                 );
                 continue;
             };
-            let replayed = handler.replay_since(session_id, *since_seq).await;
+            let replayed = match handler.replay_since(session_id, *since_seq).await {
+                Ok(v) => v,
+                Err(err) => {
+                    // FIX 2: a broken event log used to look identical to
+                    // "cursor at head" (both an empty Vec). Now the handler
+                    // distinguishes, and we must propagate that to the host
+                    // so the UI can prompt "resume failed; please reconnect
+                    // fresh" rather than silently showing an empty session.
+                    tracing::warn!(
+                        %session_id,
+                        ?err,
+                        "resume cursor: replay_since failed; notifying host"
+                    );
+                    let notice = ControlMessage::ReplayFailed {
+                        session_id: session_id.to_string(),
+                        reason: err.to_string(),
+                    };
+                    // Best-effort send: if this itself fails, the connection
+                    // is already dead and we bail.
+                    if write_control(&writer, &notice).await.is_err() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
             tracing::info!(
                 session_id = %session_id,
                 since_seq = *since_seq,

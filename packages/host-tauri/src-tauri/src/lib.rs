@@ -31,7 +31,10 @@ mod sidecar_setup {
     ) {
         let app_handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
-            match crate::sidecar::SidecarLaunchConfig::from_env() {
+            // Pass the live AppHandle so the resolver can consult Tauri's
+            // bundled-resource path when neither `QUANTA_CORE_BIN` nor
+            // `PATH` carry the binary. Env override still wins.
+            match crate::sidecar::SidecarLaunchConfig::from_env(Some(&app_handle)) {
                 Ok(cfg) => match crate::sidecar::launch(cfg).await {
                     Ok(bridge) => {
                         let _ = bridge.start_event_pump(app_handle.clone());
@@ -42,7 +45,7 @@ mod sidecar_setup {
                 },
                 Err(err) => tracing::error!(
                     ?err,
-                    "sidecar: config error; set QUANTA_CORE_BIN to the built quanta-core path",
+                    "sidecar: config error; set QUANTA_CORE_BIN, run `pnpm package-sidecar`, or install quanta-core on PATH",
                 ),
             }
         });
@@ -85,6 +88,7 @@ pub fn run() {
             ipc::quanta_write,
             ipc::quanta_resize,
             ipc::quanta_close,
+            ipc::quanta_cancel_block,
             ipc::quanta_open_in_editor,
             ipc::quanta_ai_suggest,
             shell_integration::quanta_install_shell_integration,

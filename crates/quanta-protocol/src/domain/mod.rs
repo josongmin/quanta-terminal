@@ -29,6 +29,14 @@ pub enum ControlMessage {
     Goodbye {
         reason: String,
     },
+    /// Resume-cursor replay failed for `session_id`. Emitted by the server
+    /// when `ControlHandler::replay_since` returns `LogUnavailable`. The
+    /// host should surface "resume failed; please reconnect fresh" to the
+    /// UI rather than silently showing an empty session (FIX 2).
+    ReplayFailed {
+        session_id: String,
+        reason: String,
+    },
 }
 
 /// Encode a control-plane message as a newline-terminated JSON line.

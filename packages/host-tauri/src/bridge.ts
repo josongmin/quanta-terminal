@@ -14,6 +14,7 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AiSuggestion,
   AiSuggestOptions,
+  BlockId,
   HostBridge,
   HostEvent,
   HostEventListener,
@@ -187,6 +188,21 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       await invoke('quanta_close', { sessionId });
     },
 
+    async cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void> {
+      // Fire-and-await the Rust-side cancel. The sidecar-backed command
+      // already swallows idempotent errors (unknown session, already-
+      // terminal block) and resolves `Ok(())`, so this promise can only
+      // reject for genuine transport failures — which we re-throw as an
+      // Error so the UI can toast the Rust-side string verbatim.
+      try {
+        await invoke('quanta_cancel_block', { sessionId, blockId });
+      } catch (err) {
+        const msg =
+          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        throw new Error(msg);
+      }
+    },
+
     async openInEditor(options: OpenInEditorOptions): Promise<void> {
       // The command returns `Result<(), String>` on the Rust side; Tauri maps
       // `Err(String)` to a rejected invoke promise. Surface the Rust string
@@ -199,7 +215,8 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       try {
         await invoke('quanta_open_in_editor', { args });
       } catch (err) {
-        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        const msg =
+          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
         throw new Error(msg);
       }
     },
@@ -225,7 +242,8 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
           lineCount: reply.line_count,
         };
       } catch (err) {
-        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        const msg =
+          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
         throw new Error(msg);
       }
     },
@@ -247,7 +265,8 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         };
         return result;
       } catch (err) {
-        const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        const msg =
+          typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
         throw new Error(msg);
       }
     },

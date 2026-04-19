@@ -30,12 +30,35 @@ __quanta_osc() {
   printf '\033]%s\033\\' "$1"
 }
 
+# Percent-encode a string so it is safe to embed inside an OSC payload.
+# Hostile $PWD or $HOSTNAME values (containing ESC, BEL, newline, or the
+# ST terminator `\033\\`) would otherwise be able to break out of the OSC
+# sequence and inject arbitrary terminal state or spoof OSC 133 prompt
+# markers. We allow the URL-safe subset (RFC 3986 unreserved + `/`) so the
+# result is still a parseable file:// URL on the host side.
+__quanta_urlencode() {
+  local str="$1" out="" i c
+  for ((i=0; i<${#str}; i++)); do
+    c="${str:i:1}"
+    case "$c" in
+      [a-zA-Z0-9._~/-]) out+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 __quanta_emit_cwd() {
   # OSC 7: file URL of cwd. Also OSC 1337 CurrentDir for iTerm2 parity.
-  local cwd
+  # Both $PWD and $HOSTNAME are percent-encoded — see __quanta_urlencode for
+  # the threat model (OSC injection via ESC/BEL/newline in the value).
+  local cwd host encoded_cwd encoded_host
   cwd="${PWD:-$(pwd)}"
-  __quanta_osc "7;file://${HOSTNAME:-}${cwd}"
-  __quanta_osc "1337;CurrentDir=${cwd}"
+  host="${HOSTNAME:-}"
+  encoded_cwd="$(__quanta_urlencode "$cwd")"
+  encoded_host="$(__quanta_urlencode "$host")"
+  __quanta_osc "7;file://${encoded_host}${encoded_cwd}"
+  __quanta_osc "1337;CurrentDir=${encoded_cwd}"
 }
 
 # ---- Trap hooks -------------------------------------------------------------
@@ -68,6 +91,8 @@ __quanta_preexec() {
 
 # Hook PS1 so the end of the prompt carries 133;B. We wrap PS1 with the
 # marker inside \[...\] so bash does not count the bytes toward line width.
+# The OSC 133 A/B markers here carry no user-controlled data — they are the
+# literal `133;A` / `133;B` strings — so no encoding is required.
 __quanta_wrap_ps1() {
   case "$PS1" in
     *"\[\033]133;B\033\\\\\]"*) ;; # already wrapped

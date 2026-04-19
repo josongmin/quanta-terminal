@@ -14,6 +14,7 @@
  */
 
 import { useBlockStore } from '../../entities/block/index.js';
+import { bindSessionRemovalHook } from '../../entities/session/index.js';
 import { bindBlockStore, type BlockStoreActions } from './block-store-port.js';
 import { setRouterBlockSessionLookup } from './route-output.js';
 import type { BlockId, SessionId } from '../../shared/types/generated/index.js';
@@ -70,7 +71,26 @@ export function bindBlockEntity(): () => void {
     const b = useBlockStore.getState().entities[blockId];
     return b?.sessionId as SessionId | undefined;
   });
+  // Audit P1 (fix 3): when a session is removed from the sessions store,
+  // clear the block store's `activeBlockId` if and only if the live pointer
+  // targets a block owned by that session. Without this hook, a closed
+  // session leaves a dangling active pointer; the next pty_data (after a
+  // different session becomes active) would route onto the stale id.
+  //
+  // Registering here (rather than in the session entity) preserves the FSD
+  // boundary: the session entity knows nothing about blocks; the command
+  // feature, which is already the seam between the two, owns the wiring.
+  const unbindRemoval = bindSessionRemovalHook((removedId: SessionId) => {
+    const state = useBlockStore.getState();
+    const active = state.activeBlockId;
+    if (active === null) return;
+    const block = state.entities[active];
+    if (block?.sessionId === removedId) {
+      state.setActiveBlockId(null);
+    }
+  });
   return () => {
+    unbindRemoval();
     setRouterBlockSessionLookup(null);
     unbind();
   };

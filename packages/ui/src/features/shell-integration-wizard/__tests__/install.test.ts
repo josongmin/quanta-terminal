@@ -24,6 +24,7 @@ function makeBridge(spy: BridgeSpy): HostBridge {
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration(options) {
       spy.calls.push(options);
@@ -126,7 +127,9 @@ describe('install', () => {
 describe('countSnippetLines', () => {
   it('counts body lines excluding guard markers and leading newline', () => {
     const snippet =
-      '\n# >>> quanta shell integration >>>\n' + 'a\nb\nc\n' + '# <<< quanta shell integration <<<\n';
+      '\n# >>> quanta shell integration >>>\n' +
+      'a\nb\nc\n' +
+      '# <<< quanta shell integration <<<\n';
     // 3 body lines
     expect(countSnippetLines(snippet)).toBeGreaterThanOrEqual(3);
   });

@@ -12,7 +12,7 @@ use quanta_proto::rpc::{
     CreateSessionResult, InputMode, ListSessionsResult, RpcError, RpcMethod, RpcResponse,
     RpcResult, SessionSummary, SubmitInputResult,
 };
-use quanta_protocol::ControlHandler;
+use quanta_protocol::{ControlHandler, ReplayError};
 use quanta_session::{InputSubmission, SessionHandle as _};
 use tokio::sync::{broadcast, Mutex};
 use tracing::warn;
@@ -173,22 +173,38 @@ impl ControlHandler for ControlRegistry {
 
     /// Replay events for `session_id` whose `monotonic_seq > since_seq` by
     /// reading the durable event log. Per ADR 0011, this is the read path
-    /// for the resume cursor. Errors surface empty to the caller — missing
-    /// history is not fatal at the protocol boundary.
+    /// for the resume cursor.
+    ///
+    /// On healthy replay, returns `Ok(Vec)` — possibly empty if the cursor
+    /// is at or beyond the log head. Callers cannot distinguish "cursor
+    /// ahead of log" from "genuine no-new-events" through the return value
+    /// alone (both are `Ok(empty)`); this is deliberate per the trait doc,
+    /// because a cursor-ahead situation is benign.
+    ///
+    /// On log failure (I/O, corruption, decode), returns
+    /// [`ReplayError::LogUnavailable`]. Prior to FIX 2 this returned an
+    /// empty vec, silently misleading the host into thinking there was
+    /// nothing to replay when the log had actually gone sideways.
     async fn replay_since(
         &self,
         session_id: quanta_proto::ids::SessionId,
         since_seq: u64,
-    ) -> Vec<Envelope<Event>> {
+    ) -> Result<Vec<Envelope<Event>>, ReplayError> {
         match self.engine.replay_session(session_id).await {
-            Ok(records) => records
+            Ok(records) => Ok(records
                 .into_iter()
                 .map(|r| r.envelope)
                 .filter(|env| env.monotonic_seq > since_seq)
-                .collect(),
+                .collect()),
             Err(err) => {
-                warn!(%session_id, ?err, "replay_since: event log read failed; returning empty");
-                Vec::new()
+                warn!(
+                    %session_id,
+                    ?err,
+                    "replay_since: event log read failed; surfacing LogUnavailable"
+                );
+                Err(ReplayError::LogUnavailable {
+                    reason: err.to_string(),
+                })
             }
         }
     }

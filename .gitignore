@@ -55,6 +55,9 @@ vitest.config.*.timestamp-*
 /packages/host-tauri/src-tauri/target/
 /packages/host-tauri/src-tauri/gen/
 /packages/host-tauri/src-tauri/WixTools/
+# Triple-suffixed sidecar binaries produced by scripts/package-sidecar.sh.
+# We ship the script, not the compiled artifact.
+/packages/host-tauri/src-tauri/binaries/
 
 # -----------------------------------------------------------------------------
 # Secrets & local env (never commit)

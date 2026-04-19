@@ -17,7 +17,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
     "check:layering": "node tools/check-fsd-layers.mjs",
-    "check:layering:selftest": "node tools/__tests__/check-fsd-layers.test.mjs"
+    "check:layering:selftest": "node tools/__tests__/check-fsd-layers.test.mjs",
+    "package-sidecar": "./scripts/package-sidecar.sh"
   },
   "devDependencies": {
     "@types/node": "^20.14.11",

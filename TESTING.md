@@ -167,3 +167,31 @@ node tools/check-fsd-layers.mjs
 ```
 
 Expect the whole local run to finish in under a minute on a warm machine. If it takes longer, a test has drifted from the "hermetic + bounded" bar — open a bug.
+
+## Building a production Tauri bundle (with the `quanta-core` sidecar)
+
+End users of the shipped `.app` / `.msi` / `.deb` must NOT be required to have `quanta-core` on their `PATH`. The Tauri bundler ships the binary inside the app package via its `externalBin` mechanism (ADR 0004), and the sidecar resolver in `packages/host-tauri/src-tauri/src/sidecar.rs` picks it up from `BaseDirectory::Resource` at runtime.
+
+One-liner release build on the current host:
+
+```sh
+pnpm package-sidecar && pnpm --filter @quanta/host-tauri tauri build
+```
+
+What each step does:
+
+1. **`pnpm package-sidecar`** (alias: `just package-sidecar`, direct: `./scripts/package-sidecar.sh`).
+   - Detects the host triple from `rustc -vV` (e.g. `aarch64-apple-darwin`).
+   - Runs `cargo build --release --bin quanta-core` (scoped — no full-workspace release build).
+   - Copies `target/release/quanta-core` into `packages/host-tauri/src-tauri/binaries/quanta-core-<triple>` (with `.exe` on Windows). Tauri 2 requires the triple suffix on disk; the app calls the binary by its short name, and the bundler maps the two.
+2. **`pnpm --filter @quanta/host-tauri tauri build`** invokes `cargo tauri build`, which reads `"bundle.externalBin": ["binaries/quanta-core"]` from `tauri.conf.json` and embeds the triple-suffixed binary into the final bundle.
+
+The `binaries/` directory is gitignored — we ship the packaging script, never the compiled artifact. Each target you want to distribute needs a matching run on a builder for that target triple (macOS arm64, macOS x86_64, Linux x86_64, Windows x86_64, etc.). CI matrix jobs are the expected mechanism.
+
+Resolver priority at runtime (same source of truth in `sidecar.rs::resolve_core_binary`):
+
+1. `QUANTA_CORE_BIN` env var — developer override, highest priority; a missing path errors loudly rather than silently falling back.
+2. `AppHandle::path().resolve("quanta-core", BaseDirectory::Resource)` — the bundled-sidecar path used by shipped app packages.
+3. `which quanta-core` — historic PATH lookup, kept so `cargo install quanta-core` still works for contributors.
+
+The resolver arms are unit-tested in `packages/host-tauri/src-tauri/src/sidecar.rs` under `mod tests` (env-var priority, missing-env-path loud failure, `None` AppHandle safety, bundled-resource fall-through). The full bundled-path behavior is validated by building an actual Tauri bundle — that is the only honest end-to-end check, because Tauri's resource resolver requires a real packaged app context.

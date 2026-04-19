@@ -42,11 +42,24 @@ export interface RerunOptions {
 
 export type RerunResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: 'not-found' | 'submit-failed'; readonly error?: Error };
+  | {
+      readonly ok: false;
+      readonly reason: 'not-found' | 'submit-failed' | 'source-running';
+      readonly error?: Error;
+    };
 
 export async function rerunBlock(options: RerunOptions): Promise<RerunResult> {
   const block = useBlockStore.getState().entities[options.blockId];
   if (!block) return { ok: false, reason: 'not-found' };
+  // Audit P1 (fix 4): reject when the source block is still running. Without
+  // this guard, clicking Rerun on a live block spawns a duplicate task in the
+  // core — the previous run is still owning the PTY, and the new submit races
+  // it. Safer default: make the user cancel explicitly first. The caller is
+  // expected to surface a toast ("Wait for the previous run to finish") when
+  // this reason is returned.
+  if (block.status === 'running') {
+    return { ok: false, reason: 'source-running' };
+  }
   try {
     // `.length` is the declared arity. A single-arg submit (length <= 1)
     // is the legacy shape — call it unadorned. Anything else gets the

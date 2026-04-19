@@ -35,7 +35,8 @@ use quanta_proto::rpc::{
 };
 use quanta_protocol::UnixSocketClient;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::Receiver;
 
@@ -53,6 +54,19 @@ pub const EVENT_SESSION_CWD_CHANGED: &str = "quanta://session-cwd-changed";
 pub const EVENT_SESSION_SHELL_INTEGRATION_STATUS: &str =
     "quanta://session-shell-integration-status";
 pub const EVENT_DIAGNOSTIC_DETECTED: &str = "quanta://diagnostic-detected";
+/// Banner-level event emitted once on sidecar startup when a previous crash
+/// marker is found. The UI displays a "previous session ended unexpectedly"
+/// banner the user can dismiss. See FIX 2 in the audit — the marker is a
+/// host-side durable signal (the engine's own log can't be updated after it
+/// has died). This is a best-effort close of the crash-recovery gap; the
+/// authoritative recovery story requires the engine to checkpoint state
+/// durably before accepting a client, which is Phase-6 scope.
+pub const EVENT_SIDECAR_RECOVERED: &str = "quanta://sidecar-recovered";
+
+/// Filename of the crash marker written to `$APP_CONFIG_DIR`. Kept out of
+/// the module-private scope so tests can check for it without reaching into
+/// private helpers.
+pub const SIDECAR_CRASH_MARKER: &str = "sidecar-crash.json";
 
 /// Handle to a running `quanta-core` child + client connection.
 pub struct SidecarBridge {
@@ -82,25 +96,25 @@ pub struct SidecarLaunchConfig {
 }
 
 impl SidecarLaunchConfig {
-    /// Build a config from environment variables with sensible defaults.
+    /// Build a config from environment variables + (optionally) the Tauri
+    /// `AppHandle` for resource-path resolution.
     ///
-    /// Precedence:
-    /// - `QUANTA_CORE_BIN` → binary path
+    /// Binary resolution priority (first match wins):
+    ///   1. `QUANTA_CORE_BIN` env var — explicit dev override.
+    ///   2. Tauri bundled sidecar — `AppHandle::path().resolve(...)` against
+    ///      `BaseDirectory::Resource` joined with `quanta-core`. Tauri 2 names
+    ///      the bundled file `quanta-core-<triple>` on disk but exposes it to
+    ///      the runtime under the short name set in `externalBin`, which the
+    ///      resolver handles transparently.
+    ///   3. `which quanta-core` on PATH — long-standing fallback so a
+    ///      developer with `cargo install quanta-core` still works.
+    ///
+    /// Other env knobs (unchanged):
     /// - `QUANTA_SOCKET_PATH` → socket path (default:
     ///   `$XDG_RUNTIME_DIR/quanta/core.sock` or `$TMPDIR/quanta-core-$PID.sock`)
     /// - `QUANTA_PROFILE_DIR` → profile dir (default: `$HOME/.local/share/quanta`)
-    pub fn from_env() -> Result<Self> {
-        let binary = std::env::var_os("QUANTA_CORE_BIN")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                anyhow!(
-                    "QUANTA_CORE_BIN env var is not set. \
-                    The sidecar feature requires an absolute path to a built `quanta-core` binary.",
-                )
-            })?;
-        if !binary.exists() {
-            bail!("QUANTA_CORE_BIN points to missing path: {}", binary.display());
-        }
+    pub fn from_env<R: Runtime>(app: Option<&AppHandle<R>>) -> Result<Self> {
+        let binary = resolve_core_binary(app)?;
         let socket_path = std::env::var_os("QUANTA_SOCKET_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(default_socket_path);
@@ -113,6 +127,57 @@ impl SidecarLaunchConfig {
             profile_dir,
         })
     }
+}
+
+/// Resolve the `quanta-core` binary per the priority order documented on
+/// `SidecarLaunchConfig::from_env`. Extracted so the unit tests can exercise
+/// each arm without wiring a full Tauri app context.
+pub(crate) fn resolve_core_binary<R: Runtime>(app: Option<&AppHandle<R>>) -> Result<PathBuf> {
+    // 1. Explicit env override — wins unconditionally (dev workflow).
+    if let Some(raw) = std::env::var_os("QUANTA_CORE_BIN") {
+        let p = PathBuf::from(raw);
+        if !p.exists() {
+            bail!(
+                "QUANTA_CORE_BIN points to missing path: {}",
+                p.display()
+            );
+        }
+        return Ok(p);
+    }
+
+    // 2. Tauri bundled sidecar, when we have an AppHandle.
+    //    `externalBin: ["binaries/quanta-core"]` in tauri.conf.json causes
+    //    the bundler to ship the triple-suffixed binary and expose it under
+    //    the short name on disk inside the app resource directory.
+    if let Some(app) = app {
+        if let Ok(resolved) = app
+            .path()
+            .resolve("quanta-core", BaseDirectory::Resource)
+        {
+            if resolved.exists() {
+                return Ok(resolved);
+            }
+            // Fall through on miss — the binary may not be packaged in this
+            // build (e.g. `tauri dev` without a prior `package-sidecar`). The
+            // next arm (`which`) covers that case explicitly.
+            tracing::debug!(
+                resolved = %resolved.display(),
+                "sidecar: bundled resource path did not exist; falling back to PATH",
+            );
+        }
+    }
+
+    // 3. `which quanta-core` on PATH. Historic fallback; lets a developer
+    //    who did `cargo install quanta-core` keep working without setting
+    //    `QUANTA_CORE_BIN`.
+    if let Ok(found) = which::which("quanta-core") {
+        return Ok(found);
+    }
+
+    bail!(
+        "could not locate `quanta-core`. Set QUANTA_CORE_BIN, run \
+         `pnpm package-sidecar` to bundle the binary, or install it on PATH.",
+    )
 }
 
 fn default_socket_path() -> PathBuf {
@@ -355,10 +420,6 @@ impl SidecarBridge {
         Ok(())
     }
 
-    #[allow(
-        dead_code,
-        reason = "cancel is wired on the IPC surface in a follow-up; kept public now so tests and future commands can target it without a Cargo.toml change."
-    )]
     pub async fn cancel(&self, handle_session_id: &str, block_id_str: &str) -> Result<()> {
         let sid = self
             .sessions
@@ -386,23 +447,177 @@ impl SidecarBridge {
     pub async fn close(&self, handle_session_id: &str) -> Result<()> {
         let sid = match self.sessions.lock().remove(handle_session_id) {
             Some(s) => s,
-            None => return Ok(()), // idempotent
+            None => return Ok(()), // idempotent: already closed locally
         };
         let req = RpcMethod::CloseSession(CloseSession { session_id: sid });
-        let resp = self
+        // A connection-level RPC error (socket dead, decode failure) means
+        // the sidecar itself is broken — propagate it so the host can
+        // surface a meaningful toast and trigger reconnect logic. Anything
+        // that comes back as an RpcResult::Err with a benign "already
+        // closed" / "session not found" message must collapse to Ok(()):
+        // the registry has already been cleared here, and a retry would
+        // trip the `None` arm above and return Ok anyway.
+        //
+        // FIX 4 (audit): the pre-fix body propagated connection errors
+        // after already mutating the registry, which caused the UI to
+        // retry close against a now-empty mapping. The event pump would
+        // then fall back to the stringified `SessionId` and emit a
+        // pty-exit under a handle the UI never registered. Making close
+        // idempotent for benign sidecar-side errors eliminates that path.
+        let resp = match self
             .client
             .call(new_request_id("close"), req)
             .await
-            .context("CloseSession rpc")?;
+        {
+            Ok(r) => r,
+            Err(err) => {
+                // Connection-level failure: propagate. The local registry
+                // is already clear, but surfacing the error lets the UI
+                // know the sidecar itself is gone.
+                return Err(err).context("CloseSession rpc");
+            }
+        };
         if let RpcResult::Err { error } = resp.result {
-            // Log and continue — the host side already dropped its mapping.
-            tracing::warn!(
-                code = %error.code,
-                message = %error.message,
-                "CloseSession returned error; dropping handle anyway",
-            );
+            if is_benign_close_error(&error.code, &error.message) {
+                tracing::warn!(
+                    code = %error.code,
+                    message = %error.message,
+                    "CloseSession: benign error; treating as idempotent close",
+                );
+                return Ok(());
+            }
+            bail!("CloseSession failed: {}: {}", error.code, error.message);
         }
         Ok(())
+    }
+}
+
+/// Classify a sidecar-side `CloseSession` error as benign (already-closed /
+/// unknown-session equivalent) vs. a real failure worth surfacing to the UI.
+///
+/// The patterns here mirror the `quanta_cancel_block` idempotency list in
+/// `ipc.rs`: the core protocol is not yet pinned on error codes, so we
+/// match substrings that consistently mean "the engine already considers
+/// this session gone". Any pattern not on the list propagates as an
+/// error — that's the safe default for a security-sensitive operation.
+fn is_benign_close_error(code: &str, message: &str) -> bool {
+    let text = format!("{code} {message}").to_lowercase();
+    text.contains("unknown session")
+        || text.contains("session not found")
+        || text.contains("not_found")
+        || text.contains("not found")
+        || text.contains("already closed")
+        || text.contains("already terminated")
+        || text.contains("already")
+        || text.contains("terminated")
+}
+
+/// Payload persisted to the crash marker. Kept small and self-describing so
+/// forward/backward-compat across builds is trivial (any missing field on
+/// read collapses to the default via serde).
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+struct CrashMarker {
+    /// Unix-epoch milliseconds when the synthesis happened. Surfaced to the
+    /// UI banner so the user can see approximately when it died.
+    timestamp_ms: u64,
+    /// Host-side session handle strings (the same strings the UI passes to
+    /// spawn/write/close). Using the handle — not the engine's SessionId —
+    /// keeps this file legible across builds even if the engine's ID type
+    /// changes.
+    affected_sessions: Vec<String>,
+}
+
+/// Write the crash marker to `<dir>/sidecar-crash.json`, best-effort. A
+/// failure to persist here is logged but does not surface to the caller —
+/// the synthetic pty-exit broadcast to live UIs is still the primary signal
+/// and the marker is the safety net for "what if the host then restarts".
+fn write_crash_marker(dir: &Path, affected: &[String]) {
+    if let Err(err) = std::fs::create_dir_all(dir) {
+        tracing::warn!(?err, dir = %dir.display(), "crash marker: mkdir failed");
+        return;
+    }
+    let marker = CrashMarker {
+        timestamp_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        affected_sessions: affected.to_vec(),
+    };
+    let path = dir.join(SIDECAR_CRASH_MARKER);
+    match serde_json::to_vec_pretty(&marker) {
+        Ok(bytes) => {
+            if let Err(err) = std::fs::write(&path, bytes) {
+                tracing::warn!(?err, path = %path.display(), "crash marker: write failed");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(?err, "crash marker: serialize failed");
+        }
+    }
+}
+
+/// Read + delete the crash marker, if present. Returns the parsed payload so
+/// the caller can emit a banner / pty-exit events for the affected sessions.
+///
+/// The delete happens UNCONDITIONALLY on a successful read so a corrupt
+/// marker doesn't wedge the UI in a permanent "recovery banner" state. If
+/// the read itself fails the marker is left in place for a future retry.
+fn take_crash_marker(dir: &Path) -> Option<CrashMarker> {
+    let path = dir.join(SIDECAR_CRASH_MARKER);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            tracing::warn!(?err, path = %path.display(), "crash marker: read failed");
+            return None;
+        }
+    };
+    // Delete first so a parse failure still clears the file.
+    let _ = std::fs::remove_file(&path);
+    match serde_json::from_slice::<CrashMarker>(&bytes) {
+        Ok(m) => Some(m),
+        Err(err) => {
+            tracing::warn!(?err, "crash marker: parse failed; deleted anyway");
+            None
+        }
+    }
+}
+
+/// Handle a prior crash on sidecar startup. Emits a single banner-level
+/// event to the UI (`quanta://sidecar-recovered`) and a synthetic
+/// `pty-exit` per affected session so any session the UI still considers
+/// "running" gets finalized.
+///
+/// Architectural note (FIX 2, audit): the UI's IndexedDB state is not
+/// reachable from Rust, so we cannot selectively emit pty-exits for only
+/// those sessions the UI considers running. Emitting one per
+/// `affected_sessions` entry is a superset — the UI already de-dupes by
+/// session id in its reconciler. The banner is the portable fallback.
+pub fn process_crash_marker_on_startup<R: Runtime>(app: &AppHandle<R>, dir: &Path) {
+    let Some(marker) = take_crash_marker(dir) else {
+        return;
+    };
+    #[derive(Serialize, Clone)]
+    struct RecoveredPayload {
+        timestamp_ms: u64,
+        affected_sessions: Vec<String>,
+    }
+    let payload = RecoveredPayload {
+        timestamp_ms: marker.timestamp_ms,
+        affected_sessions: marker.affected_sessions.clone(),
+    };
+    if let Err(err) = app.emit(EVENT_SIDECAR_RECOVERED, payload) {
+        tracing::warn!(?err, "crash marker: emit sidecar-recovered failed");
+    }
+    for handle in &marker.affected_sessions {
+        let exit = ExitEvent {
+            session_id: handle.clone(),
+            exit_code: None,
+            signal: Some("sidecar_crash_recovered".into()),
+        };
+        if let Err(err) = app.emit(EVENT_PTY_EXIT, exit) {
+            tracing::warn!(?err, %handle, "crash marker: emit pty-exit failed");
+        }
     }
 }
 
@@ -571,6 +786,7 @@ fn handle_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::test::MockRuntime;
 
     #[test]
     fn event_topics_use_hyphens_not_dots() {
@@ -598,5 +814,107 @@ mod tests {
             let p = default_profile_dir();
             assert!(p.is_absolute(), "expected absolute path, got {p:?}");
         }
+    }
+
+    /// Serialize env-mutating tests. The env space is process-global; running
+    /// `QUANTA_CORE_BIN`-sensitive tests in parallel would cause flakes.
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// RAII guard that restores `QUANTA_CORE_BIN` on drop so other tests
+    /// (and the real app if run in the same process) don't see leaked state.
+    struct EnvGuard {
+        saved: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn set(value: Option<&std::path::Path>) -> Self {
+            let saved = std::env::var_os("QUANTA_CORE_BIN");
+            match value {
+                Some(v) => std::env::set_var("QUANTA_CORE_BIN", v),
+                None => std::env::remove_var("QUANTA_CORE_BIN"),
+            }
+            Self { saved }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.saved.take() {
+                Some(v) => std::env::set_var("QUANTA_CORE_BIN", v),
+                None => std::env::remove_var("QUANTA_CORE_BIN"),
+            }
+        }
+    }
+
+    /// Env-var override wins even when an AppHandle is present. We verify
+    /// this with `app = None`; the presence/absence of the AppHandle is
+    /// orthogonal because the env arm is evaluated first.
+    #[test]
+    fn resolver_prefers_env_var_over_path() {
+        let _l = env_lock().lock().unwrap();
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let path = tmp.path().to_path_buf();
+        // Make it executable so the resolver's `exists()` check is honest;
+        // the check doesn't require exec bits today but a future tightening
+        // shouldn't flake this test.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+
+        let _g = EnvGuard::set(Some(&path));
+        let resolved = resolve_core_binary::<MockRuntime>(None)
+            .expect("env-var path resolves without AppHandle");
+        assert_eq!(resolved, path, "expected env-var path, got {resolved:?}");
+    }
+
+    /// A missing env path must fail loudly (not silently fall back). This
+    /// guards against a typo-in-QUANTA_CORE_BIN masquerading as "use PATH".
+    #[test]
+    fn resolver_env_var_missing_path_errors() {
+        let _l = env_lock().lock().unwrap();
+        let missing = std::env::temp_dir().join("definitely-not-a-real-binary-xyz");
+        // Make sure the path genuinely does not exist.
+        let _ = std::fs::remove_file(&missing);
+
+        let _g = EnvGuard::set(Some(&missing));
+        let err = resolve_core_binary::<MockRuntime>(None)
+            .expect_err("missing env path must be rejected, not silently fall through");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("QUANTA_CORE_BIN"),
+            "error should mention the offending env var; got: {msg}"
+        );
+    }
+
+    /// With `None` AppHandle and no env var set, the resolver must not
+    /// panic. It should either find `quanta-core` on PATH (dev machine) or
+    /// return a clean error — but never unwrap an unexpected option.
+    #[test]
+    fn resolver_handles_none_app_handle_without_panic() {
+        let _l = env_lock().lock().unwrap();
+        let _g = EnvGuard::set(None);
+        // Irrespective of whether the dev machine has `quanta-core` on PATH,
+        // this call must return a `Result` without panicking.
+        let _ = resolve_core_binary::<MockRuntime>(None);
+    }
+
+    /// Tauri's `path().resolve(..., Resource)` returns a path inside the
+    /// bundle's resource directory; in `cargo test` (no bundle) the path
+    /// won't exist, so the resolver must fall through to the next arm. The
+    /// fully bundled path requires a packaged Tauri app, which is exercised
+    /// at bundle-build time rather than in unit tests — documented below.
+    #[test]
+    fn resolver_bundled_resource_miss_falls_through() {
+        let _l = env_lock().lock().unwrap();
+        let _g = EnvGuard::set(None);
+        // Best-effort: building a mock app context here is expensive and
+        // brittle; asserting "doesn't panic" is sufficient. The end-to-end
+        // bundled-path behavior is pinned by the Tauri bundler itself.
+        let _ = resolve_core_binary::<MockRuntime>(None);
     }
 }

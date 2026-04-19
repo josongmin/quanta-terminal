@@ -39,6 +39,7 @@
       "../resources/shell-integration/bash.sh",
       "../resources/shell-integration/zsh.zsh",
       "../resources/shell-integration/fish.fish"
-    ]
+    ],
+    "externalBin": ["binaries/quanta-core"]
   }
 }

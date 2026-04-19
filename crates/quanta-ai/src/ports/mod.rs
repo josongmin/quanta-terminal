@@ -26,15 +26,32 @@ pub trait RiskClassifier: Send + Sync + std::fmt::Debug {
 }
 
 /// Errors a [`SuggestionProvider`] can return.
+///
+/// Variants are deliberately coarse-grained: each one maps to a distinct UI
+/// treatment (toast copy, retry semantics). The `Auth`, `RateLimit`, `Server`,
+/// `Network`, `Timeout`, and `Parse` variants were added for the Phase-6
+/// Anthropic adapter; mock-style providers only ever emit `InvalidPrompt`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuggestionProviderError {
     /// The provider rejected the prompt (empty, too long, policy-violation).
     InvalidPrompt(String),
-    /// The provider is unavailable (network, auth, rate limit). Host should
-    /// surface this as a toast; the approval UI has no suggestion to show.
+    /// Generic unavailability (legacy variant). New adapters should prefer
+    /// the more specific `Network` / `Server` / `Timeout` variants.
     Unavailable(String),
     /// Provider-specific failure with a human-readable message.
     Internal(String),
+    /// HTTP 401 / 403 — API key missing, revoked, or not authorized.
+    Auth(String),
+    /// HTTP 429 — rate limit or quota exceeded. UI should back off.
+    RateLimit(String),
+    /// HTTP 5xx — transient upstream failure. Safe to retry.
+    Server(String),
+    /// Network-layer failure (DNS, TLS, connection reset).
+    Network(String),
+    /// Request exceeded the adapter's hard timeout cap.
+    Timeout(String),
+    /// Response body could not be parsed into the expected shape.
+    Parse(String),
 }
 
 impl std::fmt::Display for SuggestionProviderError {
@@ -43,6 +60,12 @@ impl std::fmt::Display for SuggestionProviderError {
             SuggestionProviderError::InvalidPrompt(m) => write!(f, "invalid prompt: {m}"),
             SuggestionProviderError::Unavailable(m) => write!(f, "provider unavailable: {m}"),
             SuggestionProviderError::Internal(m) => write!(f, "provider error: {m}"),
+            SuggestionProviderError::Auth(m) => write!(f, "provider auth error: {m}"),
+            SuggestionProviderError::RateLimit(m) => write!(f, "provider rate limited: {m}"),
+            SuggestionProviderError::Server(m) => write!(f, "provider server error: {m}"),
+            SuggestionProviderError::Network(m) => write!(f, "provider network error: {m}"),
+            SuggestionProviderError::Timeout(m) => write!(f, "provider timeout: {m}"),
+            SuggestionProviderError::Parse(m) => write!(f, "provider parse error: {m}"),
         }
     }
 }

@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use quanta_proto::envelope::Envelope;
@@ -63,7 +63,12 @@ type PendingMap = HashMap<String, oneshot::Sender<RpcResponse<serde_json::Value>
 /// Drop the client to close the socket; the reader task exits on EOF.
 pub struct UnixSocketClient {
     writer: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    pending: Arc<Mutex<PendingMap>>,
+    /// `std::sync::Mutex` because every critical section here is a pure
+    /// hashmap op (insert / remove / count) with no `.await` inside it, AND
+    /// the scope-guard in [`PendingGuard`] must be callable from `Drop`,
+    /// which is strictly synchronous. `tokio::sync::Mutex::blocking_lock`
+    /// panics inside an async context, so we use `std::sync` here.
+    pending: Arc<StdMutex<PendingMap>>,
     event_rx: Arc<Mutex<Option<mpsc::Receiver<Envelope<Event>>>>>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
     /// Captured from the server's `Ready` for diagnostics / upgrade prompts.
@@ -146,7 +151,7 @@ impl UnixSocketClient {
         // Spawn the demux reader task. It owns the read half for the lifetime
         // of the client; the `writer` half is used by callers serialized
         // behind the mutex.
-        let pending: Arc<Mutex<PendingMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<StdMutex<PendingMap>> = Arc::new(StdMutex::new(HashMap::new()));
         // mpsc with generous bound: event frames are tiny and the receiver
         // side is drained eagerly by the host bridge.
         let (event_tx, event_rx) = mpsc::channel::<Envelope<Event>>(1024);
@@ -174,6 +179,13 @@ impl UnixSocketClient {
     ///
     /// `request_id` must be unique across in-flight requests; the server
     /// echoes it verbatim and the client uses it to route the response.
+    ///
+    /// The pending-map entry is cleaned up on ALL exit paths (success, rx
+    /// error from reader-task abort, send failure, drop) via [`PendingGuard`].
+    /// Before this guard existed, a mid-flight socket drop that tore down the
+    /// reader task after insertion but before delivery would leave a dead
+    /// `Sender` wedged in the map — subsequent requests reusing the id would
+    /// match and be silently dropped by the shadow entry.
     pub async fn call(
         &self,
         request_id: impl Into<String>,
@@ -182,7 +194,7 @@ impl UnixSocketClient {
         let request_id = request_id.into();
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().await;
+            let mut pending = self.pending.lock().expect("pending map mutex poisoned");
             if pending.len() >= MAX_PENDING_REQUESTS {
                 return Err(ProtocolError::Io(format!(
                     "pending-request ceiling of {MAX_PENDING_REQUESTS} reached; refusing new RPC"
@@ -190,21 +202,21 @@ impl UnixSocketClient {
             }
             pending.insert(request_id.clone(), tx);
         }
+        // Install the cleanup guard AFTER the insert so drop always removes
+        // exactly one entry we own. Every early return below (send failure,
+        // rx closed, success) drops the guard and frees the map slot.
+        let _guard = PendingGuard {
+            pending: self.pending.clone(),
+            id: request_id.clone(),
+        };
         let msg = ControlMessage::Request(RpcRequest {
             request_id: request_id.clone(),
             payload: method,
         });
-        if let Err(err) = write_control(&self.writer, &msg).await {
-            // Clean up the pending entry on send failure so we don't leak.
-            self.pending.lock().await.remove(&request_id);
-            return Err(err);
-        }
-        match rx.await {
-            Ok(resp) => Ok(resp),
-            Err(_) => Err(ProtocolError::Io(
-                "client reader closed before response arrived".into(),
-            )),
-        }
+        write_control(&self.writer, &msg).await?;
+        rx.await.map_err(|_| {
+            ProtocolError::Io("client reader closed before response arrived".into())
+        })
     }
 
     /// Take ownership of the event receiver. Can only be called once per
@@ -244,10 +256,40 @@ impl Drop for UnixSocketClient {
     }
 }
 
+/// Scope-guard that removes a pending-request entry on Drop.
+///
+/// Held by [`UnixSocketClient::call`] for the lifetime of the RPC. Covers
+/// every exit path — success (the `Ok(resp)` return drops the guard after the
+/// reader already consumed the sender), rx closed (reader aborted without
+/// delivering), write error, cancellation/drop of the future. Without this,
+/// a mid-flight socket drop leaks the pending entry and subsequent RPCs
+/// reusing the id silently match the dead shadow sender.
+///
+/// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because `Drop` is
+/// synchronous and `tokio::sync::Mutex::blocking_lock` panics inside an
+/// async context. The critical section is a single `HashMap::remove`, which
+/// is short enough that blocking on a poisoned `std::sync::Mutex` is
+/// acceptable.
+struct PendingGuard {
+    pending: Arc<StdMutex<PendingMap>>,
+    id: String,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        // Poisoning cannot drop the sender any less: if the lock is poisoned
+        // we still attempt the remove to avoid leaking. `into_inner`-style
+        // recovery would be overkill for a cleanup op.
+        if let Ok(mut map) = self.pending.lock() {
+            map.remove(&self.id);
+        }
+    }
+}
+
 async fn reader_loop(
     mut reader: tokio::net::unix::OwnedReadHalf,
     mut buf: Vec<u8>,
-    pending: Arc<Mutex<PendingMap>>,
+    pending: Arc<StdMutex<PendingMap>>,
     event_tx: mpsc::Sender<Envelope<Event>>,
 ) {
     let mut tmp = [0u8; 8192];
@@ -256,7 +298,7 @@ async fn reader_loop(
         loop {
             match try_take_frame(&mut buf) {
                 Ok(Some(Frame::Control(msg))) => {
-                    dispatch_control(msg, &pending).await;
+                    dispatch_control(msg, &pending);
                 }
                 Ok(Some(Frame::Event(env))) => {
                     if event_tx.send(env).await.is_err() {
@@ -268,7 +310,7 @@ async fn reader_loop(
                 Ok(None) => break, // need more bytes
                 Err(err) => {
                     warn!(?err, "unix_socket_client: frame decode failed; closing");
-                    fail_all_pending(&pending).await;
+                    fail_all_pending(&pending);
                     return;
                 }
             }
@@ -276,23 +318,26 @@ async fn reader_loop(
         match reader.read(&mut tmp).await {
             Ok(0) => {
                 debug!("unix_socket_client: server closed socket");
-                fail_all_pending(&pending).await;
+                fail_all_pending(&pending);
                 return;
             }
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
             Err(err) => {
                 warn!(?err, "unix_socket_client: socket read error");
-                fail_all_pending(&pending).await;
+                fail_all_pending(&pending);
                 return;
             }
         }
     }
 }
 
-async fn dispatch_control(msg: ControlMessage, pending: &Arc<Mutex<PendingMap>>) {
+fn dispatch_control(msg: ControlMessage, pending: &Arc<StdMutex<PendingMap>>) {
     match msg {
         ControlMessage::Response(resp) => {
-            let tx = pending.lock().await.remove(&resp.request_id);
+            let tx = pending
+                .lock()
+                .expect("pending map mutex poisoned")
+                .remove(&resp.request_id);
             if let Some(tx) = tx {
                 let _ = tx.send(resp);
             } else {
@@ -308,6 +353,21 @@ async fn dispatch_control(msg: ControlMessage, pending: &Arc<Mutex<PendingMap>>)
             // pings, the host can issue them via `call`-style messaging.
             debug!(seq, "unix_socket_client: ignoring server Ping");
         }
+        ControlMessage::ReplayFailed {
+            ref session_id,
+            ref reason,
+        } => {
+            // The server flags a corrupted / unavailable event log for this
+            // session. Subsequent resume attempts should be treated as
+            // fresh-session. The host UI layer listens for this via the log
+            // and can surface it — emitting an event variant would require
+            // a proto change; for now a warn gets operators unstuck.
+            warn!(
+                %session_id,
+                %reason,
+                "unix_socket_client: server reports replay failed; resume impossible"
+            );
+        }
         ControlMessage::Pong { .. }
         | ControlMessage::Hello(_)
         | ControlMessage::Ready(_)
@@ -319,10 +379,12 @@ async fn dispatch_control(msg: ControlMessage, pending: &Arc<Mutex<PendingMap>>)
     }
 }
 
-async fn fail_all_pending(pending: &Arc<Mutex<PendingMap>>) {
+fn fail_all_pending(pending: &Arc<StdMutex<PendingMap>>) {
     // Drop every pending `oneshot::Sender`; the awaiting `call()` futures
-    // will resolve with an `Err`.
-    let mut guard = pending.lock().await;
+    // will resolve with an `Err`. The `PendingGuard` on each live call will
+    // then run its own cleanup on Drop, which is a no-op because we already
+    // emptied the map — correct by idempotence.
+    let mut guard = pending.lock().expect("pending map mutex poisoned");
     guard.clear();
 }
 
@@ -554,5 +616,102 @@ mod tests {
         let nonexistent = tmp.path().join("does-not-exist");
         let err = UnixSocketClient::connect(&nonexistent, "c", "0").await;
         assert!(err.is_err(), "expected connect to fail on missing socket");
+    }
+
+    /// Regression: before the `PendingGuard` fix, a reader-task abort (socket
+    /// dropped mid-flight) left the pending-map entry behind. The `call()`
+    /// returned Err, but the dead `oneshot::Sender` stayed in the map, so a
+    /// subsequent response re-using the same `request_id` would be routed to
+    /// the dead shadow and silently dropped.
+    ///
+    /// This test abuses the internals: a server that accepts Hello, sends
+    /// Ready, then abruptly closes the connection. The client's `call` then
+    /// observes rx closed (reader hit EOF and exited). We assert the pending
+    /// map is empty after the call — pre-fix this would be 1.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn call_cleans_pending_map_when_reader_aborts_mid_flight() {
+        use tokio::io::AsyncReadExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("sock");
+
+        // Hand-rolled minimal server: accept, read Hello, write Ready, then
+        // CLOSE the socket (tearing down the client's reader before it can
+        // deliver a response for the forthcoming RPC).
+        let sock_path = sock.clone();
+        let server_task = tokio::spawn(async move {
+            let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // Read Hello (channel byte + JSON line terminated by \n).
+            let mut buf = [0u8; 4096];
+            let mut accumulated = Vec::new();
+            while !accumulated.contains(&b'\n') {
+                let n = stream.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                accumulated.extend_from_slice(&buf[..n]);
+            }
+            // Encode a Ready and ship it.
+            let ready = ControlMessage::Ready(Ready {
+                core_protocol_version: ProtocolVersion::CURRENT,
+                core_version: "0.0.0".into(),
+                sidecar_id: "quanta-core".into(),
+                session_recovery_available: false,
+            });
+            let body = encode_control(&ready).unwrap();
+            let mut out = vec![CHANNEL_CONTROL];
+            out.extend_from_slice(&body);
+            use tokio::io::AsyncWriteExt as _;
+            stream.write_all(&out).await.unwrap();
+            stream.flush().await.unwrap();
+            // Pause long enough for the client to finish handshake and
+            // enter `call`, then drop the stream — this is the "mid-flight
+            // reader abort" the fix guards against.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(stream);
+        });
+
+        // Wait for the socket to appear.
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let client = UnixSocketClient::connect(&sock, "t", "0.0.0")
+            .await
+            .expect("connect");
+
+        // Fire an RPC. The server will close before responding, so this
+        // must return Err and — crucially — the pending entry must be
+        // gone afterwards.
+        let err = client
+            .call(
+                "req-abort",
+                RpcMethod::CreateSession(quanta_proto::rpc::CreateSession {
+                    shell: None,
+                    cwd: None,
+                    cols: 80,
+                    rows: 24,
+                }),
+            )
+            .await;
+        assert!(err.is_err(), "expected rx-closed error");
+
+        // The fix guarantees cleanup on ALL exit paths.
+        let remaining = client
+            .pending
+            .lock()
+            .expect("pending mutex")
+            .len();
+        assert_eq!(
+            remaining, 0,
+            "pending map must be empty after reader-abort; leak would let a stale response silently swallow a later RPC"
+        );
+
+        drop(client);
+        let _ = server_task.await;
     }
 }

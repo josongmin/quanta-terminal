@@ -45,6 +45,7 @@ function makeBridge(spawnResult: Partial<SpawnSessionResult> = {}): ScriptedBrid
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {

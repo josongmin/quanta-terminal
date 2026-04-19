@@ -118,12 +118,143 @@ fn home_dir_from_env() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-fn resolve_target(args: &InstallArgs) -> Result<PathBuf, String> {
-    if let Some(p) = &args.target_path {
-        return Ok(PathBuf::from(p));
+/// Shared "refuse to modify file outside home" error string. Copy/paste drift
+/// across handlers would weaken the security contract — one canonical value
+/// lets tests pin the exact text and makes grep'ability trivial.
+const ERR_OUTSIDE_HOME: &str = "refusing to modify file outside your home directory";
+
+/// Canonicalize a path, even if it does not yet exist. `std::fs::canonicalize`
+/// requires the path to exist, but the install command legitimately writes to
+/// missing files (e.g. `~/.config/fish/config.fish` on a fresh fish install).
+///
+/// Strategy: lexically normalize the path first (resolving `.` / `..`
+/// segments against earlier components), then walk up from the normalized
+/// path until we find an existing ancestor and canonicalize THAT. Re-join
+/// the remaining non-existent trailing components.
+///
+/// The lexical pre-pass is critical for the home-scope check: without it,
+/// a path like `/tmp/foo/../../../etc/passwd` (where `/tmp/foo/../../..`
+/// has no physical ancestor) would fail `canonicalize` and the home-scope
+/// check wouldn't even get to run. With the pre-pass the input collapses
+/// to `/etc/passwd` before we go to the filesystem.
+fn canonicalize_best_effort(p: &Path) -> Result<PathBuf, String> {
+    // --- Lexical normalization pass ---
+    //
+    // Walk the input's components and build a normalized stack. `..`
+    // pops the previous normal component (unless the stack is at the
+    // root or empty). `.` is dropped. This mirrors shell `cd`.
+    use std::path::Component;
+    let mut stack: Vec<Component<'_>> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            Component::ParentDir => {
+                // Pop the last normal component if any; otherwise keep
+                // the `..` (for relative paths whose root we don't know).
+                match stack.last() {
+                    Some(Component::Normal(_)) => {
+                        stack.pop();
+                    }
+                    Some(Component::RootDir) | Some(Component::Prefix(_)) => {
+                        // At root — `..` is a no-op.
+                    }
+                    _ => {
+                        // Relative path with leading `..` — preserve it so
+                        // the next stage can still canonicalize against cwd.
+                        stack.push(comp);
+                    }
+                }
+            }
+            Component::CurDir => { /* drop */ }
+            other => stack.push(other),
+        }
     }
-    let home = home_dir_from_env().ok_or_else(|| "shell-integration: $HOME is not set".to_string())?;
-    Ok(home.join(args.shell.dotfile_relative()))
+    let normalized: PathBuf = stack.iter().collect();
+
+    // --- Existing-ancestor pass ---
+    //
+    // Walk up from the normalized path until we hit an existing ancestor,
+    // canonicalize it, then re-apply the trailing components.
+    let mut existing = normalized.clone();
+    let mut trailing: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match existing.file_name() {
+            Some(name) => trailing.push(name.to_os_string()),
+            None => break,
+        }
+        if !existing.pop() {
+            break;
+        }
+    }
+    let canonical_base = if existing.as_os_str().is_empty() {
+        std::env::current_dir()
+            .map_err(|e| format!("shell-integration: cwd unavailable: {e}"))?
+    } else {
+        fs::canonicalize(&existing).map_err(|e| {
+            format!(
+                "shell-integration: canonicalize {:?} failed: {e}",
+                existing
+            )
+        })?
+    };
+    let mut out = canonical_base;
+    // trailing was populated by popping from the end, so re-apply in reverse.
+    while let Some(segment) = trailing.pop() {
+        out.push(segment);
+    }
+    Ok(out)
+}
+
+/// Return an error if `target` is not a descendant of `home` after
+/// canonicalization. This is the server-side enforcement of "the install
+/// wizard only ever touches files under $HOME"; the UI has no independent
+/// authority over this — a rogue/bypassed frontend passing
+/// `/etc/bash.bashrc` or `/tmp/foo/../../etc/passwd` must be rejected here.
+fn ensure_within_home(target: &Path, home: &Path) -> Result<(), String> {
+    let canonical_target = canonicalize_best_effort(target)?;
+    let canonical_home = fs::canonicalize(home).map_err(|e| {
+        format!("shell-integration: canonicalize $HOME {:?} failed: {e}", home)
+    })?;
+    if !canonical_target.starts_with(&canonical_home) {
+        return Err(ERR_OUTSIDE_HOME.to_string());
+    }
+    // If the raw path (or any ancestor along the way) is a symlink, follow
+    // the symlink one level and re-check. `fs::canonicalize` above already
+    // resolves symlinks for the existing portion; this branch is defensive
+    // against a symlinked trailing component that `canonicalize` couldn't
+    // follow because the parent didn't exist. `symlink_metadata` returns
+    // Ok only if the path itself exists as a link; we read its target and
+    // re-canonicalize.
+    if let Ok(meta) = fs::symlink_metadata(target) {
+        if meta.file_type().is_symlink() {
+            let link_target = fs::read_link(target).map_err(|e| {
+                format!("shell-integration: read_link {:?} failed: {e}", target)
+            })?;
+            // A relative symlink resolves against the link's parent.
+            let resolved = if link_target.is_absolute() {
+                link_target
+            } else if let Some(parent) = target.parent() {
+                parent.join(link_target)
+            } else {
+                link_target
+            };
+            let canonical_link = canonicalize_best_effort(&resolved)?;
+            if !canonical_link.starts_with(&canonical_home) {
+                return Err(ERR_OUTSIDE_HOME.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_target(args: &InstallArgs) -> Result<PathBuf, String> {
+    let home = home_dir_from_env()
+        .ok_or_else(|| "shell-integration: $HOME is not set".to_string())?;
+    let raw = match &args.target_path {
+        Some(p) => PathBuf::from(p),
+        None => home.join(args.shell.dotfile_relative()),
+    };
+    ensure_within_home(&raw, &home)?;
+    Ok(raw)
 }
 
 /// Build the full guard block (header, script, footer) for a given shell.
@@ -253,11 +384,61 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn tmp_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+    /// Serialize env-mutating tests. $HOME is process-global; running the
+    /// home-scope tests in parallel under the default `cargo test` thread
+    /// pool would otherwise flake (one test's HOME leaks into another's
+    /// `resolve_target`).
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// RAII guard that swaps in a fake `$HOME` for the duration of the test
+    /// and restores the previous value on drop. The fake home is a
+    /// `TempDir` so the test's install writes stay in an isolated tree.
+    struct HomeGuard {
+        saved: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+        home: PathBuf,
+    }
+
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            // Canonicalize so `target_path.starts_with(home)` works under
+            // systems where /tmp is itself a symlink (darwin → /private/tmp).
+            let home = fs::canonicalize(dir.path()).expect("canonicalize tmp");
+            let saved = std::env::var_os("HOME");
+            std::env::set_var("HOME", &home);
+            Self {
+                saved,
+                _dir: dir,
+                home,
+            }
+        }
+
+        fn home(&self) -> &Path {
+            &self.home
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.saved.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    /// Build a target path *inside* the fake home. Guarantees the home-scope
+    /// check passes for legitimate installs while keeping each test's files
+    /// isolated under a per-test subdirectory.
+    fn tmp_home_path(guard: &HomeGuard, name: &str) -> PathBuf {
+        let dir = guard.home().join(format!(
             "quanta-shell-integration-test-{}-{}",
             std::process::id(),
-            // add a nanosecond component so parallel tests get distinct dirs
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
@@ -279,7 +460,9 @@ mod tests {
 
     #[test]
     fn preview_does_not_mutate_missing_file() {
-        let target = tmp_path(".zshrc-preview");
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-preview");
         assert!(!target.exists());
         let reply = install(InstallArgs {
             shell: Shell::Zsh,
@@ -295,7 +478,9 @@ mod tests {
 
     #[test]
     fn confirm_writes_snippet_to_file() {
-        let target = tmp_path(".bashrc-write");
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".bashrc-write");
         let reply = install(InstallArgs {
             shell: Shell::Bash,
             confirm: true,
@@ -312,7 +497,9 @@ mod tests {
 
     #[test]
     fn install_is_idempotent_on_second_run() {
-        let target = tmp_path(".zshrc-idem");
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-idem");
         let first = install(InstallArgs {
             shell: Shell::Zsh,
             confirm: true,
@@ -340,7 +527,9 @@ mod tests {
 
     #[test]
     fn preserves_existing_file_content_and_appends_after() {
-        let target = tmp_path(".bashrc-preexisting");
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".bashrc-preexisting");
         let pre = "# user's own bashrc\nexport FOO=bar\n";
         {
             let mut f = fs::File::create(&target).unwrap();
@@ -365,7 +554,9 @@ mod tests {
 
     #[test]
     fn preview_reports_already_installed_when_block_present() {
-        let target = tmp_path(".zshrc-already");
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = tmp_home_path(&home, ".zshrc-already");
         // First install.
         install(InstallArgs {
             shell: Shell::Zsh,
@@ -388,7 +579,9 @@ mod tests {
     fn fish_creates_parent_config_directory() {
         // Point the target at a nested path that doesn't exist; install must
         // create ~/.config/fish/ equivalent.
-        let root = tmp_path("fish-root").parent().unwrap().to_path_buf();
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let root = tmp_home_path(&home, "fish-root").parent().unwrap().to_path_buf();
         let nested = root.join("deep/fish/config.fish");
         assert!(!nested.exists());
         let reply = install(InstallArgs {
@@ -443,5 +636,204 @@ mod tests {
                 "script missing idempotency guard"
             );
         }
+    }
+
+    /* ---------- FIX 1: OSC 7/133 cwd injection encoding ---------- */
+
+    /// Every bundled script must define the `__quanta_urlencode` helper so
+    /// hostile $PWD / $HOSTNAME values cannot break out of the OSC 7 payload
+    /// (ESC, BEL, newline, ST terminator). The shell scripts are shipped as
+    /// static resources via `include_str!`; this test pins the helper into
+    /// every script so renaming / removing it shows up red.
+    #[test]
+    fn scripts_define_urlencode_helper() {
+        for script in [BASH_SCRIPT, ZSH_SCRIPT, FISH_SCRIPT] {
+            assert!(
+                script.contains("__quanta_urlencode"),
+                "script missing __quanta_urlencode helper; OSC payload \
+                 would embed raw $PWD and be vulnerable to control-char \
+                 injection",
+            );
+        }
+    }
+
+    /// OSC 7 emission must route through `__quanta_urlencode` — embedding
+    /// raw `$PWD` / `$HOSTNAME` is the injection bug FIX 1 closes.
+    #[test]
+    fn scripts_osc7_payload_uses_urlencoded_values() {
+        // Bash: `__quanta_osc "7;file://${encoded_host}${encoded_cwd}"`
+        assert!(
+            BASH_SCRIPT.contains("encoded_cwd") && BASH_SCRIPT.contains("encoded_host"),
+            "bash OSC 7 must use encoded_cwd / encoded_host, not raw $PWD / $HOSTNAME",
+        );
+        assert!(
+            !BASH_SCRIPT.contains("7;file://${HOSTNAME:-}${cwd}"),
+            "bash OSC 7 still embeds raw $HOSTNAME / $cwd (old pattern)",
+        );
+        // Zsh.
+        assert!(
+            ZSH_SCRIPT.contains("encoded_cwd") && ZSH_SCRIPT.contains("encoded_host"),
+            "zsh OSC 7 must use encoded_cwd / encoded_host",
+        );
+        assert!(
+            !ZSH_SCRIPT.contains("7;file://${HOST:-}${cwd}"),
+            "zsh OSC 7 still embeds raw $HOST / $cwd (old pattern)",
+        );
+        // Fish.
+        assert!(
+            FISH_SCRIPT.contains("encoded_cwd") && FISH_SCRIPT.contains("encoded_host"),
+            "fish OSC 7 must use encoded_cwd / encoded_host",
+        );
+        assert!(
+            !FISH_SCRIPT.contains("7;file://$hostname$cwd"),
+            "fish OSC 7 still embeds raw $hostname / $cwd (old pattern)",
+        );
+    }
+
+    /// OSC 133 markers are literal (A/B/C/D + exit code) and must NOT
+    /// interpolate user-controlled strings. This guards against a future
+    /// edit accidentally pulling `$PWD` into a 133 payload.
+    #[test]
+    fn scripts_osc_133_markers_carry_no_user_data() {
+        for script in [BASH_SCRIPT, ZSH_SCRIPT, FISH_SCRIPT] {
+            // The D marker carries `$exit_code` which is numeric — enforced
+            // because the shell's `$?` is always an integer. No other
+            // 133 payload should contain a `$` interpolation.
+            for marker in ["133;A", "133;B", "133;C"] {
+                // Concatenate marker + next char; if next char is `;` the
+                // marker is followed by a parameter which must be literal.
+                // We assert the marker is followed by the OSC terminator
+                // (`\033\\`) or end-of-string, never by `$` / `${`.
+                let mut idx = 0;
+                while let Some(found) = script[idx..].find(marker) {
+                    let abs = idx + found + marker.len();
+                    let tail = &script[abs..abs.min(script.len()).min(abs + 4)];
+                    assert!(
+                        !tail.starts_with(';'),
+                        "OSC 133 marker {marker} followed by parameter in script: {tail:?}",
+                    );
+                    idx = abs;
+                }
+            }
+        }
+    }
+
+    /* ---------- FIX 3: canonicalize + home-scope target_path ---------- */
+
+    /// Relative path with `..` escape must be rejected.
+    #[test]
+    fn install_rejects_relative_dotdot_escape() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        // Classic traversal: a leading temp path that escapes to /etc.
+        let bad = PathBuf::from("/tmp/foo/../../../etc/passwd-quanta-test");
+        let err = install(InstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some(bad.to_string_lossy().into_owned()),
+        })
+        .expect_err("..-escape must be rejected");
+        assert!(
+            err.contains(ERR_OUTSIDE_HOME),
+            "error should mention the home-scope rule; got: {err}"
+        );
+    }
+
+    /// An absolute path outside $HOME must be rejected even without `..`.
+    #[test]
+    fn install_rejects_absolute_path_outside_home() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _home = HomeGuard::new();
+        let err = install(InstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some("/etc/bashrc-quanta-should-refuse".into()),
+        })
+        .expect_err("absolute path outside $HOME must be rejected");
+        assert!(err.contains(ERR_OUTSIDE_HOME));
+    }
+
+    /// A symlink whose target is outside $HOME must be rejected even when
+    /// the link itself lives in $HOME. We create `$HOME/escape` → `/tmp`
+    /// and try to install into it.
+    #[cfg(unix)]
+    #[test]
+    fn install_rejects_symlink_escaping_home() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        // Escape target has to be outside the fake home. `/tmp` is a stable
+        // public directory on every unix; the host `/tmp` is not inside our
+        // per-test fake home.
+        let escape_target = PathBuf::from("/tmp");
+        let link_path = home.home().join("escape-link");
+        std::os::unix::fs::symlink(&escape_target, &link_path).unwrap();
+        let err = install(InstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some(link_path.to_string_lossy().into_owned()),
+        })
+        .expect_err("symlink pointing outside $HOME must be rejected");
+        assert!(err.contains(ERR_OUTSIDE_HOME));
+    }
+
+    /// Normal `$HOME/.bashrc` must be accepted. This is the baseline
+    /// happy-path for the install wizard and regressing it would break
+    /// every shell-integration user.
+    #[test]
+    fn install_accepts_normal_home_bashrc() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = home.home().join(".bashrc");
+        let reply = install(InstallArgs {
+            shell: Shell::Bash,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .expect("normal ~/.bashrc must be accepted");
+        assert!(reply.mutated);
+        assert!(target.exists());
+    }
+
+    /// Fish config at `~/.config/fish/config.fish` with neither the
+    /// file nor the parent directory present must be accepted — the fish
+    /// wizard relies on `create_dir_all` to build the tree. Regression
+    /// guard: the canonicalize-best-effort helper must NOT require the
+    /// trailing components to exist.
+    #[test]
+    fn install_accepts_missing_fish_config_under_home() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let target = home.home().join(".config/fish/config.fish");
+        assert!(!target.exists());
+        assert!(!target.parent().unwrap().exists());
+        let reply = install(InstallArgs {
+            shell: Shell::Fish,
+            confirm: true,
+            target_path: Some(target.to_string_lossy().into_owned()),
+        })
+        .expect("fish config under $HOME must be accepted even when missing");
+        assert!(reply.mutated);
+        assert!(target.exists());
+    }
+
+    /// Default target (no explicit target_path) still lands under the
+    /// fake $HOME; this test exercises the `home.join(dotfile_relative)`
+    /// arm of `resolve_target`.
+    #[test]
+    fn install_default_target_derives_from_home() {
+        let _l = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = HomeGuard::new();
+        let reply = install(InstallArgs {
+            shell: Shell::Zsh,
+            confirm: false,
+            target_path: None,
+        })
+        .unwrap();
+        let expected = home.home().join(".zshrc");
+        assert_eq!(
+            PathBuf::from(&reply.target_path),
+            expected,
+            "default target should be $HOME/.zshrc",
+        );
     }
 }

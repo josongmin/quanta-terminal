@@ -90,10 +90,17 @@ export function __resetRawObserversForTests(): void {
  * should not happen in practice).
  *
  * Multi-session safety: the disposer clears the active block pointer ONLY
- * when the pointer currently targets a block owned by this session. Before
- * Phase 4 this was a blanket clear, which meant closing session A would
- * wipe session B's routing focus. We consult the block store to resolve the
- * active block's `sessionId` and only clear when it matches.
+ * when we can POSITIVELY confirm the pointer currently targets a block owned
+ * by this session. Before Phase 4 this was a blanket clear, which meant
+ * closing session A would wipe session B's routing focus. We consult the
+ * block store to resolve the active block's `sessionId` and only clear when
+ * it matches.
+ *
+ * Audit P0 (fix 1): when the `blockSessionLookup` port has not been
+ * registered yet (early-boot timing) or returns undefined for any reason,
+ * we MUST NOT clear. Previously the default was "clear on unknown" which
+ * meant a sibling session's in-flight block could get nuked during a race
+ * between session close and adapter registration.
  */
 export function installCommandRouter(sessionId: SessionId): { dispose: () => void } {
   if (routers.has(sessionId)) {
@@ -119,11 +126,15 @@ export function installCommandRouter(sessionId: SessionId): { dispose: () => voi
       if (!store) return;
       const activeId = store.getActiveBlockId();
       if (activeId === null) return;
-      const blockSessionId = blockSessionLookup?.(activeId);
-      // Default posture when we can't resolve the block's session: clear.
-      // This preserves the pre-Phase-4 invariant for callers (tests) that
-      // don't install the optional lookup hook.
-      if (blockSessionId === undefined || blockSessionId === sessionId) {
+      // Audit P0 (fix 1): positive-confirmation posture. We require the
+      // lookup to be registered AND resolve to this session id before we
+      // touch the active pointer. If the lookup is null (bootstrap ordering
+      // race where `bindBlockEntity` has not registered yet) or returns
+      // undefined (block entity gone, unknown id), we leave the pointer
+      // alone — the owning session's router is responsible for clearing it.
+      if (blockSessionLookup === null) return;
+      const blockSessionId = blockSessionLookup(activeId);
+      if (blockSessionId === sessionId) {
         store.setActiveBlockId(null);
       }
     },

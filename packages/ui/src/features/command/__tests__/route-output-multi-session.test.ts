@@ -107,18 +107,56 @@ describe('installCommandRouter — multi-session dispose hygiene', () => {
     expect(rec.store.getActiveBlockId()).toBeNull();
   });
 
-  it('falls back to clearing when no block-session lookup is installed (pre-Phase-4 invariant)', () => {
+  it('audit P0: does NOT clear the active pointer when the lookup port is null (early-boot timing)', () => {
     const rec = makeMultiSessionRecorder();
     unbindStore = bindBlockStore(rec.store);
-    // Deliberately DO NOT register the lookup.
+    // Deliberately DO NOT register the lookup — simulates the dispose path
+    // firing before `bindBlockEntity()` has registered the adapter.
 
     const A = 'sess-a' as SessionId;
     const routerA = installCommandRouter(A);
     rec.setActive('blk-anywhere' as BlockId);
 
     routerA.dispose();
-    // No lookup → fallback clears, preserving the pre-lookup semantics.
-    expect(rec.store.getActiveBlockId()).toBeNull();
+    // No lookup → positive-confirmation posture leaves the pointer alone.
+    // The previous "clear on unknown" default could nuke a sibling session's
+    // active block during adapter-registration races.
+    expect(rec.store.getActiveBlockId()).toBe('blk-anywhere');
+  });
+
+  it('audit P0: does NOT clear when the lookup returns undefined (unknown block id)', () => {
+    const rec = makeMultiSessionRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const routerA = installCommandRouter(A);
+    // Set an active block id but DO NOT bind it to any session — the lookup
+    // will return undefined for it.
+    rec.setActive('blk-orphan' as BlockId);
+
+    routerA.dispose();
+    expect(rec.store.getActiveBlockId()).toBe('blk-orphan');
+  });
+
+  it('audit P0: swap active-block ownership between two sessions, dispose A, B\'s pointer survives', () => {
+    const rec = makeMultiSessionRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const B = 'sess-b' as SessionId;
+    const routerA = installCommandRouter(A);
+    installCommandRouter(B);
+
+    // Start with A's block as active, then hand off to B.
+    rec.bind('blk-a' as BlockId, A);
+    rec.bind('blk-b' as BlockId, B);
+    rec.setActive('blk-a' as BlockId);
+    rec.setActive('blk-b' as BlockId); // ownership now B
+
+    routerA.dispose();
+    expect(rec.store.getActiveBlockId()).toBe('blk-b');
   });
 });
 

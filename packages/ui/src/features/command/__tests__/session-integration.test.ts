@@ -53,6 +53,7 @@ function makeBridge(sessionId: SessionId = 'sess-int' as SessionId): ScriptedBri
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {
@@ -188,6 +189,42 @@ describe('session.connect → command.router wiring', () => {
 
     expect(rec.completed).toEqual([{ id: 'blk-int', exitCode: 0 }]);
     expect(rec.canceled).toEqual(['blk-ghost']);
+    await conn.close();
+  });
+
+  it('audit P1 (fix 2): pty_data after pty_exit does NOT dispatch to the active block', async () => {
+    const rec = makeRecorder();
+    unbind = bindBlockStore(rec.store);
+
+    const bridge = makeBridge();
+    const conn = await connectSession({ bridge, cols: 80, rows: 24, onData: () => {} });
+    // Simulate a block still being the active one at the instant pty_exit
+    // races a trailing pty_data. After fix 2, the late data must be dropped
+    // BEFORE `appendToActiveBlock` even sees it.
+    rec.setActive('blk-int' as BlockId);
+    rec.setRunning(['blk-int' as BlockId]);
+
+    bridge.emit({
+      kind: 'pty_exit',
+      sessionId: conn.sessionId,
+      exitCode: 0,
+      signal: null,
+    });
+
+    const appendsAfterExit = rec.appends.length;
+    // Restore a plausibly-active block (mirroring the failure mode where a
+    // new block was about to be started) so we'd otherwise see a stray
+    // append land on it. The `ended` flag in connect must prevent this.
+    rec.setActive('blk-next' as BlockId);
+
+    bridge.emit({
+      kind: 'pty_data',
+      sessionId: conn.sessionId,
+      seq: 99,
+      bytesB64: 'dGFpbA==', // 'tail'
+    });
+
+    expect(rec.appends.length).toBe(appendsAfterExit);
     await conn.close();
   });
 

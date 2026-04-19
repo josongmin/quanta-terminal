@@ -3,6 +3,7 @@ export type { SessionHealth, SessionState, SessionActions } from './model.js';
 export {
   useSessionsStore,
   getActiveSessionEntity,
+  bindSessionRemovalHook,
 } from './sessions-store.js';
 export type {
   SessionEntity,

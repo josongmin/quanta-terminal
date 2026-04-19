@@ -15,7 +15,15 @@ workspace = true
 # `ports/`. Domain stays sync and dep-free.
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+# Phase-6 Anthropic adapter (ADR 0012). `rustls-tls` avoids the OpenSSL
+# link so the Tauri host builds on fresh macOS without extra brew deps.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 tokio = { workspace = true }
+# Local HTTP mock for the Anthropic adapter integration tests. Dev-only: the
+# production adapter never pulls in wiremock.
+wiremock = "0.6"

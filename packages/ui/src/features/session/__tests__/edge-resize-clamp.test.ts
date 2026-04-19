@@ -38,6 +38,7 @@ function makeBridge(): HostBridge & { resize: ReturnType<typeof vi.fn> } {
     async write() {},
     resize: vi.fn(() => Promise.resolve()),
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {

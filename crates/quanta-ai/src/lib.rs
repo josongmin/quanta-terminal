@@ -40,7 +40,10 @@ pub mod adapters;
 pub mod domain;
 pub mod ports;
 
-pub use adapters::{HeuristicClassifier, MockProvider};
+pub use adapters::{
+    AnthropicProvider, AnthropicProviderBuilder, ApiKey, HeuristicClassifier, MockProvider,
+    DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL,
+};
 pub use domain::{
     ClassifiedCommand, RiskFlags, RiskModifier, RiskTier, SuggestionId, SuggestionRequest,
     SuggestionResponse, RULESET_VERSION,

@@ -99,6 +99,36 @@ const INITIAL: SessionsState = {
   activeId: null,
 };
 
+/**
+ * Audit P1 (fix 3): port for "session was just removed" so cross-slice cleanup
+ * can run without this entity module importing other slices. The block entity
+ * adapter registers a callback that clears `activeBlockId` when it belongs to
+ * the removed session.
+ *
+ * Keeping this as a nullable port mirrors the pattern used by
+ * `setRouterBlockSessionLookup` in `features/command/route-output.ts`: the
+ * session store is entities-layer and must not depend on feature or other
+ * entity modules; the concrete wiring lives in the adapter.
+ *
+ * Unbound → no-op. An unhandled orphan pointer is still better than a crash
+ * during early boot / tests that don't install the hook.
+ */
+type SessionRemovalHook = (id: SessionId) => void;
+let onRemoveSessionCallback: SessionRemovalHook | null = null;
+
+export function bindSessionRemovalHook(cb: SessionRemovalHook): () => void {
+  const prev = onRemoveSessionCallback;
+  onRemoveSessionCallback = cb;
+  return () => {
+    onRemoveSessionCallback = prev;
+  };
+}
+
+/** Test-only: peek at whether the hook is bound. */
+export function __getSessionRemovalHookForTests(): SessionRemovalHook | null {
+  return onRemoveSessionCallback;
+}
+
 export const useSessionsStore = create<SessionsState & SessionsActions>()(
   subscribeWithSelector((set) => ({
     ...INITIAL,
@@ -118,9 +148,11 @@ export const useSessionsStore = create<SessionsState & SessionsActions>()(
         };
       }),
 
-    removeSession: (id) =>
+    removeSession: (id) => {
+      let removed = false;
       set((prev) => {
         if (!prev.entities[id]) return prev;
+        removed = true;
         const idx = prev.order.indexOf(id);
         const nextOrder = idx < 0 ? prev.order : prev.order.filter((x) => x !== id);
         const nextEntities = { ...prev.entities };
@@ -139,7 +171,14 @@ export const useSessionsStore = create<SessionsState & SessionsActions>()(
           }
         }
         return { order: nextOrder, entities: nextEntities, activeId: nextActive };
-      }),
+      });
+      // Audit P1 (fix 3): notify the block-side cleanup AFTER the session
+      // state transition commits, so any listener that re-reads the sessions
+      // store sees it already gone. Unbound → no-op; tests exercise both.
+      if (removed && onRemoveSessionCallback) {
+        onRemoveSessionCallback(id);
+      }
+    },
 
     setActive: (id) =>
       set((prev) => {

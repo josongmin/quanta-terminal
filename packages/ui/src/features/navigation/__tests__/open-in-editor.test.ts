@@ -28,6 +28,7 @@ function stubBridge(overrides: Partial<HostBridge> = {}): HostBridge {
     async write() {},
     async resize() {},
     async close() {},
+    async cancelBlock() {},
     async openInEditor() {},
     async installShellIntegration() {
       return {

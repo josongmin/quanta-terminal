@@ -10,6 +10,7 @@
 import type {
   AiSuggestOptions,
   AiSuggestion,
+  BlockId,
   HostBridge,
   HostEvent,
   HostEventListener,
@@ -73,7 +74,8 @@ export function createMockHostBridge(): HostBridge {
     },
 
     spawn(_options: SpawnSessionOptions): Promise<SpawnSessionResult> {
-      const sessionId = `mock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` as SessionId;
+      const sessionId =
+        `mock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` as SessionId;
       currentSession = sessionId;
       // Queue a friendly greeting + prompt. setTimeout ensures consumers have
       // time to wire their onData handler after spawn() resolves.
@@ -138,18 +140,23 @@ export function createMockHostBridge(): HostBridge {
       return Promise.resolve();
     },
 
+    cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void> {
+      // Browser-dev mode has no sidecar and no real blocks to interrupt.
+      // Logging the attempt keeps the wiring observable during UI dev
+      // without surfacing a rejection — the Stop button must stay
+      // idempotent for adapters that can't physically cancel anything.
+      // eslint-disable-next-line no-console
+      console.debug('[mock] cancelBlock', sessionId, blockId);
+      return Promise.resolve();
+    },
+
     openInEditor(options: OpenInEditorOptions): Promise<void> {
       // The mock bridge cannot actually open editors (no Tauri IPC, no shell
       // access). It logs the attempt so browser-dev sessions see that the
       // click would have been dispatched, and resolves so the UI still
       // surfaces its "Opened X" toast / visual feedback.
       // eslint-disable-next-line no-console
-      console.info(
-        '[mock] would open',
-        options.path,
-        options.line ?? null,
-        options.column ?? null,
-      );
+      console.info('[mock] would open', options.path, options.line ?? null, options.column ?? null);
       return Promise.resolve();
     },
 

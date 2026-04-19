@@ -48,3 +48,13 @@ See [`TESTING.md`](./TESTING.md). Quick reference:
 - `cargo run -p check-adr-compliance` — mechanical one-line-per-ADR audit.
 - `cargo run -q -p check-hex-imports -- --root .` — hexagonal import rules.
 - `node tools/check-fsd-layers.mjs` — FSD layer rules.
+
+## Packaging a production Tauri bundle
+
+End users of the shipped desktop app do not need `quanta-core` on `PATH`; the binary is bundled via Tauri 2's `externalBin` (see `tauri.conf.json`).
+
+```sh
+pnpm package-sidecar && pnpm --filter @quanta/host-tauri tauri build
+```
+
+Details and the runtime resolver priority (env var → bundled resource → PATH) live in [`TESTING.md`](./TESTING.md#building-a-production-tauri-bundle-with-the-quanta-core-sidecar).
