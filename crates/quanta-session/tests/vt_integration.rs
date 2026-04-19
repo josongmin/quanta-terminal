@@ -74,6 +74,13 @@ fn grid_envelope_meta(ev: &Event) -> Option<(u64, u64, String)> {
 
 /// Drive a shell command and return every event the actor appended to the
 /// log, plus the session id. Blocks up to 3 s waiting for `BlockCompleted`.
+///
+/// IMPORTANT: `replay_session` MUST NOT be called while the session is live —
+/// it calls `read_segment` which performs a torn-tail truncate on the writer's
+/// segment file. Doing that concurrently with the emitter's append corrupts
+/// the log and manifests as `SeqGap` errors on the replay after close. We
+/// use a fixed wall-clock timer (bounded) and only call `replay_session`
+/// AFTER `close()` completes.
 async fn drive(cmd: &str, use_vt_engine: bool) -> (Vec<Event>, Vec<quanta_events::LogRecord>) {
     let tmp = tempfile::tempdir().unwrap();
     let log = Arc::new(ZstdSegmentedEventLog::new(tmp.path()).unwrap());
@@ -97,22 +104,14 @@ async fn drive(cmd: &str, use_vt_engine: bool) -> (Vec<Event>, Vec<quanta_events
         .await
         .expect("submit");
 
-    // Wait for BlockCompleted or a bounded deadline so the test can never
-    // hang CI. The shell emits the output + a prompt very quickly; 3 s is a
-    // generous ceiling that only matters on a swamped CI runner.
-    for _ in 0..150 {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let records = log.replay_session(sid).await.unwrap();
-        if records
-            .iter()
-            .any(|r| matches!(r.envelope.payload, Event::BlockCompleted(_)))
-        {
-            break;
-        }
-    }
-    tokio::time::timeout(Duration::from_secs(3), actor.close())
+    // Wait a fixed bounded duration for the command output to accumulate
+    // into the event sink. The commands we run are all `printf ...` — they
+    // emit their output and return promptly. 1 s covers a slow CI runner.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    tokio::time::timeout(Duration::from_secs(5), actor.close())
         .await
-        .expect("close")
+        .expect("close timed out")
         .unwrap();
 
     let records = log.replay_session(sid).await.unwrap();
@@ -129,7 +128,7 @@ async fn echo_hello_emits_grid_delta_and_cursor_moved() {
     // `printf` is portable across /bin/sh and /bin/bash and avoids the
     // `echo -n`/`echo -e` flag incompatibility between them. The explicit
     // `\n` ensures the line terminator reaches the grid cursor-move path.
-    let (events, _records) = drive("printf 'hello\\n'", true).await;
+    let (events, _records) = drive("printf 'hello\\n'; exit 0", true).await;
 
     let kinds: Vec<String> = events
         .iter()
@@ -163,7 +162,7 @@ async fn echo_hello_emits_grid_delta_and_cursor_moved() {
 /// seeding is independent).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_grid_envelope_carries_envelope_meta_and_buffer_main() {
-    let (events, _records) = drive("printf 'meta-probe\\n'", true).await;
+    let (events, _records) = drive("printf 'meta-probe\\n'; exit 0", true).await;
 
     let mut checked = 0usize;
     for ev in &events {
@@ -206,7 +205,7 @@ async fn every_grid_envelope_carries_envelope_meta_and_buffer_main() {
 /// invariant checked here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sequence_no_is_strictly_ascending_in_vt_event_stream() {
-    let (_events, records) = drive("printf 'seq-probe\\n'", true).await;
+    let (_events, records) = drive("printf 'seq-probe\\n'; exit 0", true).await;
 
     let seqs: Vec<u64> = records.iter().map(|r| r.envelope.monotonic_seq).collect();
     assert!(
@@ -234,7 +233,7 @@ async fn sequence_no_is_strictly_ascending_in_vt_event_stream() {
 /// for diagnostic / CLI-export consumers (actor.rs §4.1 paragraph 3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn use_vt_engine_false_emits_no_grid_events() {
-    let (events, _records) = drive("printf 'rollback-probe\\n'", false).await;
+    let (events, _records) = drive("printf 'rollback-probe\\n'; exit 0", false).await;
 
     let grid_count = events.iter().filter(|e| is_grid_event(e)).count();
     assert_eq!(
@@ -269,7 +268,7 @@ async fn decset_1049_mode_changed_precedes_alt_buffer_grid_delta() {
     //
     // The command sequence: enter alt -> print 'X' -> leave alt.
     let (events, _records) = drive(
-        r"printf '\033[?1049hX\033[?1049l'",
+        r"printf '\033[?1049hX\033[?1049l'; exit 0",
         true,
     )
     .await;

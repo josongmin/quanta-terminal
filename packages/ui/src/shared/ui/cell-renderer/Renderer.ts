@@ -19,6 +19,7 @@ import type { CellBuffer } from './CellBuffer.js';
 import { DamageSet } from './DamageSet.js';
 import type { MirrorSource } from './MirrorSource.js';
 import type { CursorState, Row, TerminalModeState } from '../../lib/grid-mirror/types.js';
+// TerminalModeState exported for consumers via `applyMode`.
 
 type FrameClock = (cb: FrameRequestCallback) => number;
 type CancelFrame = (handle: number) => void;
@@ -53,7 +54,6 @@ export class Renderer {
 
   /** Latest cursor snapshot from the mirror; backend consumes on cursor flush. */
   private latestCursor: CursorState | null = null;
-  private latestMode: TerminalModeState = {};
 
   /** Data pulled from the mirror every paint. Callers wire this up via
    *  `setRowFetcher`. The Renderer never imports the mirror directly so
@@ -63,7 +63,7 @@ export class Renderer {
   constructor(
     private readonly backend: BackendContract,
     private readonly cellBuffer: CellBuffer,
-    private readonly source: MirrorSource,
+    source: MirrorSource,
     opts: RendererOptions = {},
   ) {
     this.rAF = opts.rAF ?? defaultRAF;
@@ -123,7 +123,6 @@ export class Renderer {
 
   /** Apply a fresh mode snapshot. Forwarded to the backend. */
   applyMode(mode: TerminalModeState): void {
-    this.latestMode = mode;
     this.backend.applyMode(mode);
   }
 

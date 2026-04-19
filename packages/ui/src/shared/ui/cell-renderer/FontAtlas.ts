@@ -134,7 +134,7 @@ export class FontAtlas {
   private readonly rasterizer: AtlasRasterizer;
   private readonly entries = new Map<string, AtlasEntry>();
   private tick = 0;
-  private readonly onInvalidate?: (reason: InvalidationReason) => void;
+  private readonly onInvalidate: ((reason: InvalidationReason) => void) | undefined;
   private metrics: CellMetrics;
 
   constructor(metrics: CellMetrics, opts: FontAtlasOptions = {}) {

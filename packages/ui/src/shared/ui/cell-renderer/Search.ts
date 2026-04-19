@@ -28,9 +28,11 @@ import type {
 } from './types.js';
 
 export class SearchError extends Error {
-  constructor(message: string, readonly cause?: unknown) {
+  readonly originalError: unknown;
+  constructor(message: string, cause?: unknown) {
     super(message);
     this.name = 'SearchError';
+    this.originalError = cause;
   }
 }
 

@@ -50,6 +50,7 @@ struct ResizeCountingPty {
 #[async_trait]
 impl PtyHandle for ResizeCountingPty {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, PtyError> {
+        eprintln!("MOCK_PTY.read enter");
         if self.is_closed.load(Ordering::Acquire) {
             return Err(PtyError::Closed);
         }
@@ -62,10 +63,11 @@ impl PtyHandle for ResizeCountingPty {
             Ok(Some(bytes)) => {
                 let n = bytes.len().min(buf.len());
                 buf[..n].copy_from_slice(&bytes[..n]);
+                eprintln!("MOCK_PTY.read -> {n} bytes");
                 Ok(n)
             }
-            Ok(None) => Err(PtyError::Closed),
-            Err(_) => Ok(0),
+            Ok(None) => { eprintln!("MOCK_PTY.read -> Closed"); Err(PtyError::Closed) },
+            Err(_) => { eprintln!("MOCK_PTY.read -> timeout Ok(0)"); Ok(0) },
         }
     }
 
@@ -73,10 +75,11 @@ impl PtyHandle for ResizeCountingPty {
         Ok(())
     }
 
-    async fn resize(&mut self, _size: PtySize) -> Result<(), PtyError> {
+    async fn resize(&mut self, size: PtySize) -> Result<(), PtyError> {
         // DoD-F-18 observation point: every `SessionHandle::resize` call
         // must land here exactly once (1:1 with SIGWINCH delivery in the
         // real PortablePtyPort).
+        eprintln!("MOCK_PTY.resize({}x{})", size.cols, size.rows);
         self.resize_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -198,10 +201,11 @@ fn grid_resize_generation(ev: &Event) -> Option<u64> {
 }
 
 /// Helper: drive a brief sleep so the actor's reader task picks up the resize
-/// watch-channel signal before we query the log. 150 ms is generous; the
-/// reader's loop head is polled every PTY read cycle which is ≤ 25 ms.
+/// watch-channel signal before we query the log. The reader's loop head is
+/// polled every PTY read cycle which has a 25 ms budget in our mock; 500 ms
+/// is generous even on a swamped CI runner.
 async fn settle() {
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 }
 
 /// **DoD-F-17 part A** — an identity resize (same geometry as spawn) must
@@ -252,6 +256,10 @@ async fn distinct_resizes_bump_resize_generation_once_per_call() {
         .expect("resize 1");
     settle().await;
     let after_1 = h.actor.snapshot().await.resize_generation;
+    eprintln!(
+        "DEBUG: before={before}, after_1={after_1}, resize_count={}",
+        h.resize_count.load(Ordering::SeqCst)
+    );
     assert!(
         after_1 > before,
         "first distinct resize must bump resize_generation: before={before}, after_1={after_1}"

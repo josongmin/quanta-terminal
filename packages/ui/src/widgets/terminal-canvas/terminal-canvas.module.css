@@ -1,0 +1,55 @@
+/*
+ * TerminalCanvas — layered paint surface.
+ *
+ * Three stacked layers composited via absolute positioning:
+ *   1. cells (grid paint; lowest).
+ *   2. cursor (blink without full-row reblit).
+ *   3. overlay (IME preedit + selection highlight; highest).
+ *
+ * The container itself is `position: relative` so the absolute-positioned
+ * children can size themselves edge-to-edge.
+ */
+
+.container {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--q-term-bg, var(--q-bg, #000));
+  color: var(--q-fg, #e0e0e0);
+  font-family: var(--q-font-mono, 'JetBrains Mono', monospace);
+  font-size: var(--q-font-size-term, 14px);
+  line-height: var(--q-line-height-term, 1.2);
+  letter-spacing: var(--q-letter-spacing-term, 0);
+  cursor: text;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.selection {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(93, 132, 213, 0.35);
+  z-index: 4;
+}
+
+.searchHighlight {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255, 204, 0, 0.35);
+  border: 1px solid rgba(255, 204, 0, 0.8);
+  z-index: 4;
+}
+
+.searchHighlightActive {
+  background: rgba(255, 153, 0, 0.55);
+  border: 1px solid rgba(255, 153, 0, 1);
+}
+
+.imeSlot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}

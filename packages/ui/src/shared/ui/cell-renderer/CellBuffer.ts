@@ -34,7 +34,7 @@
  * hyperlink id + underline color live in `extMap`.
  */
 
-import type { Cell, Row } from '../../lib/grid-mirror/types.js';
+import type { Row } from '../../lib/grid-mirror/types.js';
 import { DamageSet } from './DamageSet.js';
 import type { MirrorSource } from './MirrorSource.js';
 
@@ -339,11 +339,14 @@ export class CellBuffer {
       const needsExt =
         hyperlinkId !== undefined || underlineColor !== undefined || cell.cols !== 1;
       if (needsExt) {
-        this.extMap.set(idx, {
-          hyperlinkId,
-          underlineColor: underlineColor === null ? undefined : underlineColor,
+        const extEntry: { hyperlinkId?: number; underlineColor?: number; cols?: number } = {
           cols: cell.cols,
-        });
+        };
+        if (hyperlinkId !== undefined) extEntry.hyperlinkId = hyperlinkId;
+        if (underlineColor !== undefined && underlineColor !== null) {
+          extEntry.underlineColor = underlineColor;
+        }
+        this.extMap.set(idx, extEntry);
       } else if (this.extMap.has(idx)) {
         this.extMap.delete(idx);
       }
