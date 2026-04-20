@@ -28,16 +28,13 @@ body,
   border-radius: var(--q-radius-sm);
 }
 
-/* Draggable region surface (Tauri). Elements inside can opt out with
-   [data-tauri-drag-region="false"]. */
-[data-tauri-drag-region='true'] {
-  -webkit-app-region: drag;
-  app-region: drag;
-}
-[data-tauri-drag-region='false'] {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
+/* Window chrome is provided by the OS (native decorations via Tauri). The
+   host window's own title bar (traffic lights on macOS, min/max/close on
+   Windows/Linux) handles drag, double-click-to-maximize, and the OS context
+   menu — the app's TitleBar widget is a secondary bar below it and does not
+   need `data-tauri-drag-region` markers anymore. The historical CSS hooks
+   were removed with the switch to `decorations: true` / `titleBarStyle:
+   Visible` in packages/host-tauri/src-tauri/tauri.conf.json. */
 
 /* historical-xterm-reference: xterm.js layout rules lived here in Phase
    1–3. Removed in EPIC-I (RFC 0001 §19); the custom canvas renderer

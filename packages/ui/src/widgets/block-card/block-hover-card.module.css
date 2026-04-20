@@ -1,0 +1,301 @@
+/*
+ * BlockHoverCard — rich tooltip / hover card for a Block header.
+ *
+ * Inspired by an "Experience / Strategy" class-info tooltip: a compact
+ * information-dense card that sits above the block header and surfaces
+ * the metrics, lifecycle, and quick actions relevant to that block.
+ *
+ * Layering
+ * --------
+ * The card is rendered into `document.body` via a React portal by
+ * `BlockHoverCard.tsx`, so the element is positioned in screen space
+ * (left / top props forwarded to the `--x`/`--y` custom properties).
+ * This avoids clipping by overflowing ancestors (BlockList scroller,
+ * terminal viewport) without inheriting their z-index / clip-path.
+ *
+ * Tokens
+ * ------
+ * Every color, spacing, radius, and shadow resolves to a `--q-*` token
+ * so both dark and light themes light up automatically via the existing
+ * `[data-theme=...]` variables in `shared/config/tokens.css`. No new
+ * tokens introduced.
+ */
+
+.card {
+  position: fixed;
+  left: var(--x, 0);
+  top: var(--y, 0);
+  transform: translate(-50%, calc(-100% - 10px));
+  z-index: 200;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+  width: 340px;
+  padding: var(--q-space-3);
+
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-overlay);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  line-height: 1.4;
+
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--q-dur-fast) var(--q-ease-out),
+    transform var(--q-dur-fast) var(--q-ease-out);
+}
+
+.card[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, calc(-100% - 14px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+}
+
+/* --- Header row ----------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  min-width: 0;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--q-fg-faint);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.dot[data-status='running'] {
+  background: var(--q-accent);
+}
+.dot[data-status='completed'][data-exit='0'] { background: var(--q-success); }
+.dot[data-status='completed'][data-exit='nonzero'] { background: var(--q-danger); }
+.dot[data-status='error'] { background: var(--q-danger); }
+.dot[data-status='canceled'] { background: var(--q-warning); }
+
+.command {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  color: var(--q-fg);
+}
+
+.statusBadge {
+  flex: 0 0 auto;
+  padding: 1px var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  border: 1px solid var(--q-border-strong);
+  font-family: var(--q-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--q-fg-muted);
+  background: var(--q-bg-elev-1);
+}
+.statusBadge[data-tone='running'] {
+  color: var(--q-accent);
+  border-color: var(--q-accent);
+}
+.statusBadge[data-tone='success'] {
+  color: var(--q-success);
+  border-color: var(--q-success);
+}
+.statusBadge[data-tone='danger'] {
+  color: var(--q-danger);
+  border-color: var(--q-danger);
+}
+.statusBadge[data-tone='warning'] {
+  color: var(--q-warning);
+  border-color: var(--q-warning);
+}
+
+.blockIndex {
+  flex: 0 0 auto;
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- "Why" row (rerun-of link) -------------------------------------- */
+
+.why {
+  display: flex;
+  align-items: baseline;
+  gap: var(--q-space-1);
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-sm);
+}
+.whyArrow {
+  color: var(--q-fg-faint);
+}
+.whyLabel {
+  color: var(--q-fg-muted);
+}
+.whyTarget {
+  font-family: var(--q-font-mono);
+  color: var(--q-accent);
+  padding: 0 2px;
+  border-radius: var(--q-radius-sm);
+  background: rgba(94, 160, 255, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+/* --- Metric bars ---------------------------------------------------- */
+
+.metrics {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  column-gap: var(--q-space-2);
+  row-gap: var(--q-space-1);
+  align-items: center;
+}
+
+.metricLabel {
+  font-family: var(--q-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--q-fg-faint);
+}
+.metricBar {
+  position: relative;
+  height: 4px;
+  background: var(--q-bg-elev-1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.metricFill {
+  display: block;
+  height: 100%;
+  width: var(--w, 0%);
+  background: var(--q-accent);
+  border-radius: 2px;
+  transition: width var(--q-dur-med) var(--q-ease-out);
+}
+.metricFill[data-tone='danger'] {
+  background: var(--q-danger);
+}
+.metricFill[data-tone='warning'] {
+  background: var(--q-warning);
+}
+.metricFill[data-tone='success'] {
+  background: var(--q-success);
+}
+.metricValue {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Stats / tag / lifecycle rows ----------------------------------- */
+
+.stats {
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+}
+.tag {
+  padding: 1px 6px;
+  border-radius: var(--q-radius-sm);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.similar {
+  padding: var(--q-space-1) var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  background: rgba(94, 160, 255, 0.08);
+  border: 1px solid rgba(94, 160, 255, 0.25);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+}
+.similarValue {
+  color: var(--q-accent);
+  font-weight: 600;
+}
+
+.lifecycle {
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+}
+.lifecycle strong {
+  color: var(--q-fg-muted);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: var(--q-space-1);
+}
+
+/* --- Divider + actions --------------------------------------------- */
+
+.divider {
+  height: 1px;
+  background: var(--q-border-subtle);
+  margin: var(--q-space-1) calc(var(--q-space-3) * -1);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--q-space-1) var(--q-space-3);
+  margin-top: 2px;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  padding: 2px 0;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+}
+.action[data-disabled='true'] {
+  opacity: 0.5;
+}
+.actionLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

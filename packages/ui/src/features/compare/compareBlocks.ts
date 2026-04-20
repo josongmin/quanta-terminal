@@ -66,22 +66,11 @@ export interface CompareView {
   readonly deltas: CompareDeltas;
 }
 
-// Strip CSI / OSC / ESC sequences so ANSI-colored lines equal their
-// uncolored counterparts. We intentionally allow the empty-bytes unicode
-// regex dialect — all ANSI escapes live in the 7-bit range. The three
-// patterns cover: CSI (ESC `[` params final), OSC (ESC `]` …BEL/ESC\\),
-// and bare single-byte ESC sequences we don't care about.
-const ANSI_STRIP_RE = new RegExp(
-  [
-    // CSI: ESC [ ... final (@ .. ~)
-    '\\x1B\\[[0-?]*[ -/]*[@-~]',
-    // OSC: ESC ] ... (BEL | ESC \\)
-    '\\x1B\\][^\\x07\\x1B]*(?:\\x07|\\x1B\\\\)',
-    // Two-byte ESC sequences like RIS, charset selection.
-    '\\x1B[@-Z\\\\-_]',
-  ].join('|'),
-  'gu',
-);
+// Strip ANSI escapes so ANSI-colored lines equal their uncolored counterparts
+// for diffing purposes. Delegates to the shared implementation so the diff,
+// render-peek, copy and export paths don't drift.
+import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+export { stripAnsi };
 
 const TEXT_DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
 
@@ -94,13 +83,7 @@ export function decodeRawOutput(block: Block): string {
 
 /** Decode + strip a block's output. Exposed for tests + reuse by the panel. */
 export function decodeStrippedOutput(block: Block): string {
-  return decodeRawOutput(block).replace(ANSI_STRIP_RE, '');
-}
-
-/** Strip ANSI escapes from an arbitrary string — exposed so callers can
- *  normalize a single raw line (e.g. for tooltip text) without re-decoding. */
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI_STRIP_RE, '');
+  return stripAnsi(decodeRawOutput(block));
 }
 
 function splitRawLines(text: string): string[] {
@@ -132,8 +115,8 @@ export function compareBlocks(
 ): CompareView {
   const leftRaw = decodeRawOutput(left);
   const rightRaw = decodeRawOutput(right);
-  const leftText = leftRaw.replace(ANSI_STRIP_RE, '');
-  const rightText = rightRaw.replace(ANSI_STRIP_RE, '');
+  const leftText = stripAnsi(leftRaw);
+  const rightText = stripAnsi(rightRaw);
   const leftRawLines = splitRawLines(leftRaw);
   const rightRawLines = splitRawLines(rightRaw);
   const diff = diffLines(leftText, rightText);

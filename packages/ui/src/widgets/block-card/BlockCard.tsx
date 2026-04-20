@@ -49,7 +49,7 @@ import {
   type AnsiSpan,
   type PathClickPayload,
 } from '../../shared/ui/ansi-output/index.js';
-import { AnsiParser } from '../../shared/lib/ansi-parser/index.js';
+import { AnsiParser, stripAnsi } from '../../shared/lib/ansi-parser/index.js';
 import {
   concatChunks,
   useBlockHeader,
@@ -72,6 +72,7 @@ import { createLogger } from '../../shared/lib/logger.js';
 import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import { showToast } from '../../shared/ui/toast/index.js';
 import { t } from '../../shared/i18n/index.js';
+import { BlockHoverCard } from './BlockHoverCard.js';
 import styles from './block-card.module.css';
 
 const log = createLogger('widgets/block-card');
@@ -91,8 +92,12 @@ export interface BlockCardProps {
   readonly onCompare?: (blockId: string) => void;
 }
 
-// Collapsed peek wants raw text regardless of ANSI state; TextDecoder is the
-// right tool there. Module-scoped to avoid allocating per card.
+// Collapsed peek shows a single line of output as plain text. We decode the
+// bytes with TextDecoder AND pass the result through `stripAnsi` so raw ESC
+// sequences (e.g. zsh's PROMPT_EOL_MARK `\e[1m\e[7m%\e[0m`) don't render as
+// literal tofu glyphs in the peek row. Module-scoped to avoid allocating per
+// card. Full ANSI rendering in the expanded body still goes through
+// `AnsiParser`; this path is only for the one-liner summary.
 const TEXT_DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
 
 // Shared empty chunks sentinel — lets the body render safely when the store
@@ -236,6 +241,72 @@ function BlockCardImpl(props: BlockCardProps) {
   // on selection / outside click / Escape.
   const [exportOpen, setExportOpen] = useState(false);
   const exportWrapRef = useRef<HTMLSpanElement | null>(null);
+
+  // Rich hover card state. The card is shown after a short dwell (500 ms)
+  // to match the ambient tooltip cadence — any shorter flickers across a
+  // scroll gesture. `hoverPos` is the anchor we pass to the portaled card
+  // (centered above the header); measured on show and on each mouse move
+  // so the card tracks trailing hovers during slow drags. The card is
+  // positioned relative to the *header* (not the whole card) because the
+  // expanded body can be tall and we don't want the tooltip above a 40-row
+  // output pre.
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const measureHoverAnchor = useCallback(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
+  }, []);
+
+  const handleHeaderEnter = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+    }
+    // 500 ms dwell matches the base Tooltip's "show after pause" feel and
+    // keeps the card from popping mid-mouse-travel. Cleared on leave below.
+    hoverTimerRef.current = window.setTimeout(() => {
+      measureHoverAnchor();
+      setHoverOpen(true);
+    }, 500);
+  }, [measureHoverAnchor]);
+
+  const handleHeaderLeave = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoverOpen(false);
+  }, []);
+
+  // Close the hover card on unmount so a stale timer can't fire into an
+  // unmounted tree.
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // While the card is open, re-measure on scroll / resize so it tracks the
+  // block through virtualized scroll. Mirrors the base Tooltip's anchor
+  // strategy.
+  useEffect(() => {
+    if (!hoverOpen) return;
+    const onScroll = () => measureHoverAnchor();
+    const onResize = () => measureHoverAnchor();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [hoverOpen, measureHoverAnchor]);
   useEffect(() => {
     if (!exportOpen) return;
     const onDocClick = (ev: globalThis.MouseEvent) => {
@@ -375,6 +446,7 @@ function BlockCardImpl(props: BlockCardProps) {
     >
       <span className={styles.stripe} aria-hidden />
       <div
+        ref={headerRef}
         className={styles.header}
         role="button"
         tabIndex={0}
@@ -382,6 +454,10 @@ function BlockCardImpl(props: BlockCardProps) {
         aria-label={`Block: ${header.command}`}
         onClick={handleHeaderClick}
         onKeyDown={handleHeaderKey}
+        onMouseEnter={handleHeaderEnter}
+        onMouseLeave={handleHeaderLeave}
+        onFocus={handleHeaderEnter}
+        onBlur={handleHeaderLeave}
       >
         {header.status === 'running' ? (
           <Spinner size="sm" label="Running" />
@@ -573,6 +649,10 @@ function BlockCardImpl(props: BlockCardProps) {
         exitCode={header.exitCode}
         status={header.status}
       />
+
+      {hoverOpen && (
+        <BlockHoverCard block={block} x={hoverPos.x} y={hoverPos.y} open={hoverOpen} />
+      )}
     </article>
   );
 }
@@ -633,6 +713,24 @@ interface BlockBodyProps {
 }
 
 /**
+ * Identify a zsh/bash/tcsh `PROMPT_EOL_MARK` span — the reverse-video
+ * single-char sigil (`%`, `#`, `$`, `>`) the shell emits when the last
+ * command's stdout did not end in a newline. Removed from the expanded
+ * body's span list because the UI already shows the command boundary
+ * via a distinct block card; the sigil is noise there.
+ *
+ * The test is strict — single printable sigil char AND marked as
+ * reverse-video (inverse SGR) — so a styled real `%` elsewhere (e.g. a
+ * reverse-video highlight in a TUI) isn't caught by accident.
+ */
+function isPromptEolMarkSpan(span: AnsiSpan): boolean {
+  const t = span.text ?? '';
+  if (t.length !== 1) return false;
+  if (t !== '%' && t !== '#' && t !== '$' && t !== '>') return false;
+  return span.inverse === true;
+}
+
+/**
  * Body subscribes to the *streaming* view only, so header-only mutations
  * (collapse, pin) do not roll back through this subtree. On each mutation
  * of `outputChunks` we incrementally feed NEW chunks to the parser and
@@ -656,6 +754,16 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
   // feeds what's new; the "drained" flag guards `flush()` so we don't
   // re-flush on subsequent renders after completion. These guards also make
   // the effect safe under React StrictMode's double-invoke.
+  //
+  // Shell-echo note: cooked-mode shells USED to echo our writes back to us,
+  // which produced a duplicate-command line at the head of every block.
+  // That is now cut off at the root in the PTY adapter
+  // (`crates/quanta-pty/src/adapters/portable.rs::disable_echo_on_master`),
+  // which clears `LocalFlags::ECHO*` on the master fd before spawn. No
+  // echo ever reaches this component, so there's no need for an in-UI
+  // `stripEchoPrefix` pass. The PROMPT_EOL_MARK filter below is a
+  // different concern — zsh's "%" sigil for stdout-missing-newline —
+  // and stays.
   const parserRef = useRef<AnsiParser | null>(null);
   const feedCursorRef = useRef(0);
   const spansRef = useRef<AnsiSpan[]>([]);
@@ -685,6 +793,11 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
       if (!next) continue;
       const out = parserRef.current.feed(next);
       for (const s of out) {
+        // Drop zsh's PROMPT_EOL_MARK sigil spans (reverse-video `%`/`#`/
+        // `$`/`>`). The parser surfaces them as styled spans; we do not
+        // want them in the block body because the block boundary itself
+        // is the UX signal the sigil was meant to provide.
+        if (isPromptEolMarkSpan(s)) continue;
         spansRef.current.push(s);
         appended += 1;
       }
@@ -694,6 +807,7 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
     if (status !== 'running' && drainedRef.current === false) {
       const tail = parserRef.current.flush();
       for (const s of tail) {
+        if (isPromptEolMarkSpan(s)) continue;
         spansRef.current.push(s);
         appended += 1;
       }
@@ -713,7 +827,30 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
   const decodedForPeek = useMemo(() => {
     if (!collapsed) return '';
     if (chunks.length === 0) return '';
-    return TEXT_DECODER.decode(concatChunks(chunks));
+    // Strip ANSI escapes so the peek line renders as readable plain text —
+    // otherwise zsh's `PROMPT_EOL_MARK` bytes (`\e[1m\e[7m%\e[0m`) would
+    // render as literal ESC glyphs in the one-line summary.
+    //
+    // CR rewrite: zsh ZLE emits `\r`-prefixed redraws on every keystroke
+    // while the user is composing, so the naive byte stream is
+    // `l\rls\r<output>` for `ls`. Collapsing `\r` to the start of the
+    // current line the way a real terminal does turns that into just
+    // `<output>` in the peek — same logic as the expanded body's
+    // `carriageReturnRewrites` flag on `AnsiOutput`.
+    const raw = stripAnsi(TEXT_DECODER.decode(concatChunks(chunks)));
+    let out = '';
+    let lineStart = 0;
+    for (const ch of raw) {
+      if (ch === '\n') {
+        out += ch;
+        lineStart = out.length;
+      } else if (ch === '\r') {
+        out = out.slice(0, lineStart);
+      } else {
+        out += ch;
+      }
+    }
+    return out;
   }, [collapsed, chunks]);
 
   // Phase 3: click on a detected `path:line:col` in the output. We dispatch
@@ -776,6 +913,19 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
             version={version}
             className={styles.output ?? ''}
             onPathClick={onPathClick}
+            /*
+             * Interactive shells (zsh ZLE) emit a `\r` + redrawn line on
+             * EVERY keystroke, so the raw byte stream for "ls\n" is
+             * roughly "prompt l\r prompt ls\r\n<output>". Without
+             * carriage-return rewriting we render each incremental redraw
+             * literally and the user sees `lls` / `vvi` / `ccd` prepended
+             * to the real output. Enabling `carriageReturnRewrites` makes
+             * `\r` truncate back to the start of the current line the way
+             * a real terminal would, collapsing those redraws into the
+             * final command only. Progress-bar workloads (npm, wget) also
+             * benefit for the same reason.
+             */
+            carriageReturnRewrites
           />
         </div>
       )}

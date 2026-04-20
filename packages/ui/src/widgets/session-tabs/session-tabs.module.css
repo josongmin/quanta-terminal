@@ -1,10 +1,12 @@
 /* SessionTabs — horizontal scroll row of per-session chips.
  *
- * Each .tab is a native button so Tab/Enter/Space behavior is free. The `×`
- * close control is a nested span with role=button — it lives INSIDE the
- * button semantically, and we stopPropagation on its click so the outer tab
- * activation doesn't fire first. On hover or focus of the parent tab, the
- * × fades in; otherwise it's near-invisible to keep the chrome quiet.
+ * Each .tab is a `<div role="tab">` (not a native button) because it nests
+ * interactive controls — the kebab `<button>` and the `role=button` close
+ * span — which a `<button>` element may not legally contain. Enter/Space
+ * activation is wired explicitly in the component. On hover or focus of the
+ * parent tab, the × fades in; otherwise it's near-invisible to keep the
+ * chrome quiet. We stopPropagation on close click/mousedown so the outer
+ * tab's activation doesn't fire first.
  *
  * Active tab gets a 1px accent underline drawn via ::after so border-box
  * layout stays stable when toggling.
@@ -47,11 +49,13 @@
     color var(--q-dur-fast) var(--q-ease-out),
     border-color var(--q-dur-fast) var(--q-ease-out);
 }
-.tab:hover:not(:disabled) {
+.tab:hover:not(:disabled):not(.disabled) {
   color: var(--q-fg);
   border-color: var(--q-border-strong);
 }
-.tab:disabled {
+.tab:disabled,
+.tab.disabled,
+.tab[aria-disabled='true'] {
   cursor: default;
   color: var(--q-fg-faint);
 }

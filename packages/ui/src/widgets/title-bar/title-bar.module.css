@@ -1,10 +1,10 @@
-/* TitleBar — frameless macOS chrome.
-   The 72px cutout matches the three-button row + system margin so Tauri's
-   native buttons align flush. The rest of the row is a drag handle. */
+/* TitleBar — app toolbar directly below the OS-native window chrome. No
+   drag-region / traffic-light cutout: the OS title bar sits above this
+   widget and owns all window-management gestures. */
 
 .bar {
   display: grid;
-  grid-template-columns: 72px auto 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   height: var(--q-titlebar-height);
   background: var(--q-bg-titlebar);
@@ -14,13 +14,8 @@
   z-index: 2;
 }
 
-.trafficCutout {
-  grid-column: 1;
-  height: 100%;
-}
-
 .left {
-  grid-column: 2;
+  grid-column: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -53,12 +48,12 @@
 }
 
 .center {
-  grid-column: 3;
+  grid-column: 2;
   height: 100%;
 }
 
 .right {
-  grid-column: 4;
+  grid-column: 3;
   display: flex;
   align-items: center;
   gap: var(--q-space-2);

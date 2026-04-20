@@ -17,7 +17,10 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useBlockStore } from '../../../entities/block/index.js';
-import type { Rect } from '../../../shared/ui/cell-renderer/index.js';
+// `Rect` no longer referenced after the virtualization refactor — the
+// flex-column layout ignores `cellToScreen`, so the test no longer needs
+// to construct a typed rect. Keeping the import would trip the
+// unused-import lint. (Hint: grep for "flex column" in BlockList.tsx.)
 import { BlockList, findRangeForRow, type RowRange } from '../BlockList.js';
 
 const origOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
@@ -91,34 +94,41 @@ describe('<BlockList /> — row-range virtualization', () => {
     expect(wrappers.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('anchors each card via translateY = cellToScreen(startRow, 0).y', () => {
+  it('renders cards in insertion order as a natural flex column (no absolute positioning)', () => {
+    // UPDATED: virtualization by row-range was producing visually
+    // overlapping cards because `rowsForBlock * 16px` under-estimated
+    // the chrome-padded BlockCard height. The list is now a plain flex
+    // column; we assert the cards come through in id order and no
+    // wrapper carries a `transform` inline style (no translateY).
     act(() => {
       useBlockStore.getState().createBlock('alpha', '/');
       useBlockStore.getState().createBlock('beta', '/');
     });
-    const cellToScreen = (row: number, col: number): Rect => ({
-      x: col * 10,
-      y: row * 20,
-      width: 10,
-      height: 20,
-    });
-    render(<BlockList cellToScreen={cellToScreen} />);
-    const wrappers = screen.getByTestId('block-list-inner').querySelectorAll<HTMLElement>(
-      '[data-block-id]',
-    );
-    // First card starts at row 0 → translateY(0); second starts at row 3
-    // → translateY(60).
-    expect(wrappers[0]?.style.transform).toBe('translateY(0px)');
-    expect(wrappers[1]?.style.transform).toBe('translateY(60px)');
+    render(<BlockList />);
+    const wrappers = screen
+      .getByTestId('block-list-inner')
+      .querySelectorAll<HTMLElement>('[data-block-id]');
+    expect(wrappers.length).toBe(2);
+    expect(wrappers[0]?.style.transform).toBe('');
+    expect(wrappers[1]?.style.transform).toBe('');
+    // The DOM order matches the store's insertion order.
+    const ids = Array.from(wrappers).map((w) => w.getAttribute('data-block-id'));
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBeTruthy();
+    expect(ids[0]).not.toBe(ids[1]);
   });
 
-  it('passes a custom cellToScreen through to the row offset math', () => {
+  it('does not anchor via `cellToScreen` anymore (prop kept for backwards compat but unused for layout)', () => {
+    // UPDATED: custom `cellToScreen` is still accepted (other tests / the
+    // terminal-canvas wiring pass it through), but the flex-column layout
+    // ignores it for block chrome positioning. Regression guard against
+    // accidentally re-introducing a 1px-per-grid-row offset.
     act(() => {
       useBlockStore.getState().createBlock('only', '/');
     });
     const cellToScreen = (row: number) => ({
       x: 0,
-      y: row * 100,
+      y: row * 100, // deliberately absurd — must have no visible effect.
       width: 8,
       height: 16,
     });
@@ -126,7 +136,7 @@ describe('<BlockList /> — row-range virtualization', () => {
     const w = screen
       .getByTestId('block-list-inner')
       .querySelector<HTMLElement>('[data-block-id]');
-    expect(w?.style.transform).toBe('translateY(0px)');
+    expect(w?.style.transform).toBe('');
   });
 
   it('adding a new block extends the total row count', () => {

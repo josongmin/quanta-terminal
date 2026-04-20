@@ -254,6 +254,53 @@ describe('<BlockCard />', () => {
     });
   });
 
+  describe('hover info card', () => {
+    it('mounts the rich hover card after a mouse-enter dwell', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = useBlockStore.getState().createBlock('ls', '/tmp/proj');
+        useBlockStore.getState().completeBlock(id, 0);
+        render(<BlockCard block={currentBlock(id)} />);
+        const header = screen.getByRole('button', { name: /Block: ls/u });
+        // No hover card rendered yet.
+        expect(screen.queryByTestId(`block-hover-card-${id}`)).toBeNull();
+        // Fire enter and let the 500 ms dwell elapse.
+        act(() => {
+          fireEvent.mouseEnter(header);
+        });
+        act(() => {
+          vi.advanceTimersByTime(600);
+        });
+        expect(screen.getByTestId(`block-hover-card-${id}`)).toBeInTheDocument();
+        // Mouse-leave hides the card immediately.
+        act(() => {
+          fireEvent.mouseLeave(header);
+        });
+        expect(screen.queryByTestId(`block-hover-card-${id}`)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does NOT show the hover card if the mouse leaves before the dwell', () => {
+      vi.useFakeTimers();
+      try {
+        const id = useBlockStore.getState().createBlock('ls', '/');
+        render(<BlockCard block={currentBlock(id)} />);
+        const header = screen.getByRole('button', { name: /Block: ls/u });
+        act(() => {
+          fireEvent.mouseEnter(header);
+          vi.advanceTimersByTime(200);
+          fireEvent.mouseLeave(header);
+          vi.advanceTimersByTime(800);
+        });
+        expect(screen.queryByTestId(`block-hover-card-${id}`)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('flushes parser tail spans on completion', () => {
     const id = useBlockStore.getState().createBlock('done', '/');
     // Feed a partial escape sequence — the parser holds onto it until flush.
@@ -263,5 +310,126 @@ describe('<BlockCard />', () => {
     useBlockStore.getState().completeBlock(id, 0);
     render(<BlockCard block={currentBlock(id)} />);
     expect(screen.getByTestId('block-output')).toHaveTextContent('hi');
+  });
+
+  /**
+   * Regression for the "literal ESC bytes in block output" bug. `ls` under
+   * zsh emits the `PROMPT_EOL_MARK` sequence `\e[1m\e[7m%\e[27m\e[1m\e[0m`
+   * at the tail of every command. Before the fix those bytes rendered as
+   * literal tofu glyphs because the peek path decoded raw bytes without
+   * passing them through `AnsiParser` / `stripAnsi`, and the expanded body
+   * correctly routed through the parser but downstream copy / export paths
+   * had parallel regex implementations that could drift.
+   *
+   * These tests pin the contract: in every rendered surface (expanded body,
+   * collapsed peek, streamed-then-completed, chunk-boundary splits, and
+   * multi-line real output), no raw ESC (`\x1b`) character reaches the DOM.
+   */
+  describe('raw ANSI escape bytes never render as literal glyphs', () => {
+    const PROMPT_EOL_MARK = new Uint8Array([
+      0x1b, 0x5b, 0x31, 0x6d, // ESC[1m  bold
+      0x1b, 0x5b, 0x37, 0x6d, // ESC[7m  reverse
+      0x25, //                  %
+      0x1b, 0x5b, 0x32, 0x37, 0x6d, // ESC[27m
+      0x1b, 0x5b, 0x31, 0x6d, // ESC[1m
+      0x1b, 0x5b, 0x30, 0x6d, // ESC[0m
+    ]);
+
+    it('expanded body strips ESC AND drops the reverse-video sigil span (PROMPT_EOL_MARK)', () => {
+      // Updated contract: the wrapped `%` IS the `PROMPT_EOL_MARK` sigil
+      // zsh uses to indicate "stdout missing trailing newline". In our UI
+      // the block boundary is already represented by the card itself, so
+      // the sigil is noise — we drop the span outright instead of letting
+      // a bare `%` dangle under every `ls`-like command.
+      const id = useBlockStore.getState().createBlock('ls', '/');
+      useBlockStore.getState().appendBlockOutput(id, PROMPT_EOL_MARK);
+      useBlockStore.getState().completeBlock(id, 0);
+      render(<BlockCard block={currentBlock(id)} />);
+      // The span list is completely empty — the only span the parser
+      // emitted WAS the reverse-video `%`, and we filter that out.
+      const empty = screen.getByTestId('block-empty');
+      expect(empty).toBeInTheDocument();
+      expect(empty.textContent ?? '').not.toContain('\x1b');
+      expect(empty.textContent ?? '').not.toContain('%');
+    });
+
+    it('expanded body survives byte-at-a-time streaming with SGR splits (sigil dropped)', () => {
+      const id = useBlockStore.getState().createBlock('ls', '/');
+      const { rerender } = render(<BlockCard block={currentBlock(id)} />);
+      act(() => {
+        for (let i = 0; i < PROMPT_EOL_MARK.length; i += 1) {
+          useBlockStore
+            .getState()
+            .appendBlockOutput(id, new Uint8Array([PROMPT_EOL_MARK[i]!]));
+        }
+      });
+      rerender(<BlockCard block={currentBlock(id)} />);
+      // No raw ESC, no stray `%` — streaming vs pre-populated produces the
+      // same result because the sigil span filter runs after the parser.
+      const body = screen.getByTestId('block-empty') ?? screen.queryByTestId('block-output');
+      const text = body?.textContent ?? '';
+      expect(text).not.toContain('\x1b');
+      expect(text).not.toContain('%');
+    });
+
+    it('collapsed peek strips ESC (regression: used to leak literal bytes)', () => {
+      const id = useBlockStore.getState().createBlock('ls', '/');
+      useBlockStore.getState().appendBlockOutput(id, PROMPT_EOL_MARK);
+      useBlockStore.getState().completeBlock(id, 0);
+      useBlockStore.getState().toggleCollapse(id);
+      render(<BlockCard block={currentBlock(id)} />);
+      const peek = screen.getByTestId(`block-peek-${id}`);
+      const text = peek.textContent ?? '';
+      expect(text).not.toContain('\x1b');
+      // byte count must reflect the RAW bytes (not the stripped text) so
+      // users can see how much PTY data a block produced.
+      expect(text).toContain(`${PROMPT_EOL_MARK.byteLength}B`);
+    });
+
+    it('realistic ls-like output: printable text + PROMPT_EOL_MARK tail', () => {
+      const id = useBlockStore.getState().createBlock('ls', '/');
+      const enc = new TextEncoder();
+      useBlockStore.getState().appendBlockOutput(id, enc.encode('file.txt\nfile2.txt\n'));
+      useBlockStore.getState().appendBlockOutput(id, PROMPT_EOL_MARK);
+      useBlockStore.getState().completeBlock(id, 0);
+      render(<BlockCard block={currentBlock(id)} />);
+      const text = screen.getByTestId('block-output').querySelector('pre')?.textContent ?? '';
+      expect(text).not.toContain('\x1b');
+      expect(text).toContain('file.txt');
+      expect(text).toContain('file2.txt');
+    });
+
+    it('nested SGR + OSC + DCS + charset-select all stripped in peek', () => {
+      const id = useBlockStore.getState().createBlock('strange', '/');
+      // Craft a pathological byte stream exercising every stripper branch:
+      //   ESC ] 0 ; title BEL          — OSC
+      //   ESC P payload ESC \          — DCS
+      //   ESC ( B                      — charset select
+      //   ESC 7                        — two-byte ESC
+      //   "hello" interleaved
+      //   ESC [ 1 ; 31 m               — CSI SGR
+      const bytes = new Uint8Array([
+        // OSC title "Hi" + BEL
+        0x1b, 0x5d, 0x30, 0x3b, 0x48, 0x69, 0x07,
+        // DCS payload + ST
+        0x1b, 0x50, 0x78, 0x1b, 0x5c,
+        // Charset select ( B
+        0x1b, 0x28, 0x42,
+        // Two-byte ESC 7 (save cursor)
+        0x1b, 0x37,
+        // "hi"
+        0x68, 0x69,
+        // CSI SGR
+        0x1b, 0x5b, 0x31, 0x3b, 0x33, 0x31, 0x6d,
+      ]);
+      useBlockStore.getState().appendBlockOutput(id, bytes);
+      useBlockStore.getState().completeBlock(id, 0);
+      useBlockStore.getState().toggleCollapse(id);
+      render(<BlockCard block={currentBlock(id)} />);
+      const peek = screen.getByTestId(`block-peek-${id}`);
+      const text = peek.textContent ?? '';
+      expect(text).not.toContain('\x1b');
+      expect(text).toContain('hi');
+    });
   });
 });

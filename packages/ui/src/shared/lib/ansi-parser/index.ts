@@ -24,3 +24,4 @@
 export { AnsiParser } from './parser.js';
 export { BACKSPACE_MARKER } from './types.js';
 export type { AnsiModeEvent } from './types.js';
+export { stripAnsi } from './strip.js';

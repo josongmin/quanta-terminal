@@ -161,22 +161,15 @@ function rowsForBlock(chunks: readonly Uint8Array[], collapsed: boolean): number
 
 function BlockRowChrome(props: {
   readonly id: string;
-  readonly topPx: number;
   readonly onRerun?: (blockId: string) => void;
   readonly onCopy?: (blockId: string, scope: 'command' | 'output') => void;
   readonly onCompare?: (blockId: string) => void;
-  readonly measureRef?: (el: HTMLElement | null) => void;
 }) {
-  const { id, topPx, onRerun, onCopy, onCompare, measureRef } = props;
+  const { id, onRerun, onCopy, onCompare } = props;
   const block = useBlock(id);
   if (!block) return null;
   return (
-    <div
-      ref={measureRef ?? undefined}
-      className={styles.row}
-      data-block-id={id}
-      style={{ transform: `translateY(${topPx}px)` }}
-    >
+    <div className={styles.row} data-block-id={id}>
       <BlockCard
         block={block}
         {...(onRerun ? { onRerun } : {})}
@@ -316,24 +309,16 @@ export function BlockList(props: BlockListProps) {
     );
   }
 
-  // Determine which block ranges are currently visible (i.e. at least one
-  // virtualized row lands inside them). We mount block chrome ONLY for
-  // ranges the viewport overlaps — chrome mounts/unmounts on scroll.
-  const items = virtualizer.getVirtualItems();
-  const totalSize = virtualizer.getTotalSize() || totalRows * ESTIMATED_ROW_HEIGHT_PX;
-
-  const visibleRangeIds = new Set<string>();
-  if (items.length > 0 && ranges.length > 0) {
-    const first = items[0]!.index;
-    const last = items[items.length - 1]!.index;
-    // Sweep all ranges that intersect [first, last].
-    const startIdx = Math.max(0, findRangeForRow(ranges, first));
-    const endIdx = Math.max(0, findRangeForRow(ranges, last));
-    for (let i = startIdx; i <= endIdx; i += 1) {
-      const range = ranges[i];
-      if (range) visibleRangeIds.add(range.blockId);
-    }
-  }
+  // Virtualization disabled — we render every in-scope block as a flex
+  // child. Row-range math, `cellToScreen` anchoring, and overscan are no
+  // longer needed. The ids list is already scoped to the active session
+  // (via `useBlocksForSession` / `useBlockIds`), so this is O(n) in the
+  // number of blocks the user has produced for the tab. Keeping the
+  // virtualizer call for its autoscroll side-effect would be silly; we
+  // just pin-scroll in the effect above.
+  void virtualizer; // keep the hook alive for the scroll-pin side effect
+  void ranges; // row-range math unused but retained for tests + future perf
+  void totalRows;
 
   return (
     <div
@@ -345,25 +330,16 @@ export function BlockList(props: BlockListProps) {
       aria-relevant="additions"
       aria-label={t('blockList.ariaLabel')}
     >
-      <div
-        className={styles.inner}
-        data-testid="block-list-inner"
-        style={{ height: `${totalSize}px` }}
-      >
-        {ranges.map((range) => {
-          if (!visibleRangeIds.has(range.blockId)) return null;
-          const topPx = cellToScreen(range.startRow, 0).y;
-          return (
-            <BlockRowChrome
-              key={range.blockId}
-              id={range.blockId}
-              topPx={topPx}
-              {...(onRerun ? { onRerun } : {})}
-              {...(onCopy ? { onCopy } : {})}
-              {...(onCompare ? { onCompare } : {})}
-            />
-          );
-        })}
+      <div className={styles.inner} data-testid="block-list-inner">
+        {ids.map((id) => (
+          <BlockRowChrome
+            key={id}
+            id={id}
+            {...(onRerun ? { onRerun } : {})}
+            {...(onCopy ? { onCopy } : {})}
+            {...(onCompare ? { onCompare } : {})}
+          />
+        ))}
       </div>
     </div>
   );

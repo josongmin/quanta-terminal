@@ -12,6 +12,19 @@
  * behind `ctx != null`; when the ctx is missing, the backend records what
  * WOULD have been painted (see `_paintLog`) so the parity suite can still
  * verify the sequence of applyGridDelta / applyCursor / applyMode calls.
+ *
+ * Font-resilience (tab-switch bug — see §Font Resilience below):
+ *   Canvas2D's default `ctx.font` is "10px sans-serif". The backend SHOULD
+ *   apply the terminal font stack on every paint entry so that:
+ *     1. First paint renders in the mono stack (not sans-serif).
+ *     2. Context state resets (Chromium occasionally discards some paint
+ *        state when a canvas is backgrounded + refocused under Tauri WebView)
+ *        cannot leave the terminal looking like sans-serif.
+ *   We also listen for `document.fonts.ready` once and for `visibilitychange`
+ *   for the lifetime of the mount: when web fonts arrive after first paint,
+ *   we invalidate the atlas and signal the renderer to reblit; when the tab
+ *   becomes visible again we do the same so any context-state drift is
+ *   healed on the next rAF tick.
  */
 
 import { DefaultClassifier, resolveAmbiguousPolicy } from '../../../lib/width/index.js';
@@ -47,9 +60,33 @@ interface PaintEvent {
     | 'overlay_mount'
     | 'overlay_update'
     | 'overlay_unmount'
-    | 'flush';
+    | 'flush'
+    | 'fonts_ready'
+    | 'visibility_refresh';
   readonly rows?: number;
   readonly cursorVisible?: boolean;
+}
+
+/**
+ * Canonical terminal monospace stack. Mirrors `--q-font-mono` in
+ * shared/config/tokens.css (source of truth for CSS consumers). The
+ * Canvas2D context does not read CSS variables — the string must be
+ * synthesized JS-side. Keep this in lockstep with tokens.css.
+ */
+const TERMINAL_FONT_STACK =
+  "'JetBrains Mono', 'Noto Sans Mono CJK JP', 'Noto Sans Mono CJK SC', " +
+  "'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', 'Apple Color Emoji', " +
+  "'Segoe UI Emoji', 'Noto Color Emoji', ui-monospace, 'SF Mono', Menlo, " +
+  'Consolas, monospace';
+
+/** The `font` shorthand string applied to `ctx.font` for the given cell
+ *  height. Canvas2D honors the same syntax as CSS `font`. */
+function buildFontString(cellHeightPx: number): string {
+  // Pick a glyph size that sits comfortably within the cell. 0.80 of the
+  // cell height matches what the metrics derivation targets and keeps the
+  // baseline offset (`metrics.baselineOffsetPx`) stable.
+  const px = Math.max(1, Math.round(cellHeightPx * 0.8));
+  return `${px}px ${TERMINAL_FONT_STACK}`;
 }
 
 export class Canvas2DBackend implements BackendContract {
@@ -76,6 +113,18 @@ export class Canvas2DBackend implements BackendContract {
   private readonly paintLog: PaintEvent[] = [];
   private gridRows = 0;
   private gridCols = 0;
+  /** Cached font shorthand — recomputed when metrics change. */
+  private fontString = '';
+  /** Teardown thunks collected by `mount`, flushed by `unmount`. */
+  private disposers: Array<() => void> = [];
+  /**
+   * Invalidation callback — fires when we need to force a re-raster + atlas
+   * drop (font load completion, tab refocus). The Renderer subscribes to
+   * its MirrorSource; this backend does not hold that subscription handle
+   * directly, so instead we invalidate the atlas and rely on the next rAF
+   * tick to reblit. Tests inject a spy via `_setInvalidationHook`.
+   */
+  private invalidationHook: (() => void) | null = null;
 
   mount(ctx: MountContext): void {
     this.container = ctx.container;
@@ -127,7 +176,98 @@ export class Canvas2DBackend implements BackendContract {
       this.cursorCtx = null;
     }
     this.atlas = new FontAtlas(this.metrics, { rasterizer: new MemoryRasterizer() });
+    this.fontString = buildFontString(this.metrics.cellHeightPx);
+    this.applyContextState();
+    this.wireFontAndVisibilityListeners();
     this.paintLog.push({ kind: 'mount' });
+  }
+
+  /**
+   * Apply font family, baseline, and fill state to both canvas contexts.
+   * Safe to call repeatedly: it overrides whatever the context inherited.
+   * Called on mount, on every paint entry (paintRows), on metrics change,
+   * and when fonts-ready or visibilitychange fires.
+   */
+  private applyContextState(): void {
+    if (this.cellCtx) {
+      this.cellCtx.font = this.fontString;
+      this.cellCtx.textBaseline = 'alphabetic';
+      // `fillStyle` defaults to "#000" on a fresh context which is invisible
+      // on dark themes. The CSS var cannot be read from a canvas, so fall
+      // back to the terminal foreground token's dark-theme default. A future
+      // pass will plumb the resolved `--q-fg` through mount context.
+      if (!this.cellCtx.fillStyle || this.cellCtx.fillStyle === '#000000') {
+        this.cellCtx.fillStyle = '#E6E8EE';
+      }
+    }
+    if (this.cursorCtx) {
+      this.cursorCtx.font = this.fontString;
+      this.cursorCtx.textBaseline = 'alphabetic';
+    }
+  }
+
+  /**
+   * Attach one-shot `document.fonts.ready` + long-lived `visibilitychange`
+   * listeners. Both flows converge on `refreshFontState` which drops the
+   * atlas and rewrites `ctx.font` so the next paint renders with the mono
+   * stack instead of the Canvas2D default sans-serif.
+   *
+   * This path covers the tab-switch repro: web fonts that loaded while the
+   * tab was backgrounded never triggered a re-raster, so the first frame
+   * after refocus displayed in the fallback font until user input nudged
+   * the renderer again.
+   */
+  private wireFontAndVisibilityListeners(): void {
+    if (typeof document === 'undefined') return;
+    // Fonts-ready — one-shot promise resolved once the browser has loaded
+    // every font the document references. We explicitly probe `JetBrains
+    // Mono` via `document.fonts.load` since `.ready` resolves even if
+    // individual faces 404.
+    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+    if (fonts) {
+      const probeAndRefresh = () => this.refreshFontState('fonts_ready');
+      try {
+        // Probe the primary face at the current cell size. `load()` returns
+        // a Promise that rejects if the font is unavailable; we still
+        // refresh on rejection because metrics may have changed and we want
+        // the context state reapplied.
+        void fonts
+          .load(`12px 'JetBrains Mono'`)
+          .then(probeAndRefresh, probeAndRefresh);
+      } catch {
+        // Legacy browsers w/o FontFaceSet.load — skip the probe, still rely
+        // on `.ready`.
+      }
+      if (fonts.ready && typeof fonts.ready.then === 'function') {
+        fonts.ready.then(probeAndRefresh, probeAndRefresh);
+      }
+    }
+    // Visibility — fires on tab blur/focus. Chromium under Tauri sometimes
+    // resets paint state on refocus; even when it doesn't, rAF is throttled
+    // while hidden so a pending invalidation may have stalled. Force a
+    // refresh on return.
+    const onVis = () => {
+      if (document.visibilityState === 'visible') {
+        this.refreshFontState('visibility_refresh');
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    this.disposers.push(() => {
+      document.removeEventListener('visibilitychange', onVis);
+    });
+  }
+
+  /**
+   * Drop the atlas, reapply context font state, and trigger the upstream
+   * invalidation hook so the Renderer schedules a full re-raster on the
+   * next rAF. Idempotent.
+   */
+  private refreshFontState(reason: 'fonts_ready' | 'visibility_refresh'): void {
+    this.fontString = buildFontString(this.metrics.cellHeightPx);
+    this.applyContextState();
+    this.atlas?.invalidateAll('font_load_complete');
+    this.invalidationHook?.();
+    this.paintLog.push({ kind: reason });
   }
 
   applyGridSnapshot(rows: readonly Row[], cursor: CursorState | null, mode: TerminalModeState): void {
@@ -176,6 +316,10 @@ export class Canvas2DBackend implements BackendContract {
     this.dpr = dpr;
     this.atlas?.invalidateAll('dpr_change');
     this.atlas?.applyMetrics(metrics);
+    // Metrics drive font size. Recompute the shorthand and reapply so
+    // subsequent fillText calls honor the new cell height.
+    this.fontString = buildFontString(metrics.cellHeightPx);
+    this.applyContextState();
     this.paintLog.push({ kind: 'metrics' });
   }
 
@@ -253,10 +397,25 @@ export class Canvas2DBackend implements BackendContract {
       el.parentElement?.removeChild(el);
     }
     this.overlays.clear();
+    // Flush font / visibility disposers.
+    for (const d of this.disposers) {
+      try {
+        d();
+      } catch {
+        // Swallow — DOM may already be torn down.
+      }
+    }
+    this.disposers = [];
     if (this.container) {
-      if (this.cellCanvas) this.container.removeChild(this.cellCanvas);
-      if (this.cursorCanvas) this.container.removeChild(this.cursorCanvas);
-      if (this.overlayLayer) this.container.removeChild(this.overlayLayer);
+      if (this.cellCanvas && this.cellCanvas.parentElement === this.container) {
+        this.container.removeChild(this.cellCanvas);
+      }
+      if (this.cursorCanvas && this.cursorCanvas.parentElement === this.container) {
+        this.container.removeChild(this.cursorCanvas);
+      }
+      if (this.overlayLayer && this.overlayLayer.parentElement === this.container) {
+        this.container.removeChild(this.overlayLayer);
+      }
     }
     this.cellCanvas = null;
     this.cursorCanvas = null;
@@ -265,7 +424,18 @@ export class Canvas2DBackend implements BackendContract {
     this.cursorCtx = null;
     this.atlas = null;
     this.container = null;
+    this.invalidationHook = null;
     this.paintLog.push({ kind: 'unmount' });
+  }
+
+  /**
+   * Register an invalidation hook. Called by the renderer wiring so that a
+   * late font-load or tab-refocus can request a fresh rAF tick. Safe to
+   * call more than once; the latest hook wins. The hook is cleared on
+   * unmount.
+   */
+  _setInvalidationHook(hook: (() => void) | null): void {
+    this.invalidationHook = hook;
   }
 
   /** @internal Test-only: the ordered record of backend operations. */
@@ -286,6 +456,15 @@ export class Canvas2DBackend implements BackendContract {
   private paintRows(rows: readonly Row[]): void {
     const ctx = this.cellCtx;
     if (!ctx) return;
+    // Defensive: re-apply font state every paint. The cost (a single
+    // property write) is negligible next to the per-glyph `fillText` cost,
+    // and it immunizes the paint loop against state drift — e.g., a
+    // resize of canvas.width which resets ctx state, or a Chromium/Tauri
+    // WebView edge case after visibilitychange.
+    if (ctx.font !== this.fontString) {
+      ctx.font = this.fontString;
+      ctx.textBaseline = 'alphabetic';
+    }
     const { cellWidthPx, cellHeightPx } = this.metrics;
     for (const row of rows) {
       if (!row) continue;

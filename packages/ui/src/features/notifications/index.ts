@@ -1,5 +1,9 @@
 export { notify, ensureNotificationPermission } from './notify.js';
-export type { NotifyOptions, NotifyResult } from './notify.js';
+export type {
+  NotifyOptions,
+  NotifyResult,
+  EnsurePermissionOptions,
+} from './notify.js';
 export {
   useNotifySettings,
   readStoredSettings,

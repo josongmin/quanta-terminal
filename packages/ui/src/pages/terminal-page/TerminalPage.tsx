@@ -60,7 +60,7 @@ import { useBannerStore, selectVisibleConditions } from '../../entities/banner/i
 import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import { installBannerDetectors } from '../../features/banner/index.js';
 import { bindBlockEntity } from '../../features/command/index.js';
-import { installTuiDetector } from '../../features/tui/index.js';
+import { installTuiDetector, TuiInputSurface, TuiRenderSurface } from '../../features/tui/index.js';
 import { rerunBlock, copyBlock } from '../../features/block/index.js';
 import { openCompareFromBlock } from '../../features/compare/index.js';
 import { submitCommand } from '../../features/composer/submit.js';
@@ -86,10 +86,7 @@ import { useKeymap } from '../../shared/lib/keymap.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { t } from '../../shared/i18n/index.js';
 import { useZoomStore } from '../../features/zoom/index.js';
-import {
-  ensureNotificationPermission,
-  installNotificationDetector,
-} from '../../features/notifications/index.js';
+import { installNotificationDetector } from '../../features/notifications/index.js';
 
 import styles from './terminal-page.module.css';
 
@@ -208,9 +205,11 @@ function TerminalPageContent() {
     };
   }, []);
 
-  // OS notifications: request permission lazily.
+  // OS notifications: install the detector only. Permission prompting is
+  // deferred to the settings-panel toggle (a real user gesture) — browsers
+  // reject `Notification.requestPermission()` calls made from non-gesture
+  // code paths like this mount-time effect.
   useEffect(() => {
-    void ensureNotificationPermission();
     const handle = installNotificationDetector();
     return () => handle.unsubscribe();
   }, []);
@@ -511,7 +510,10 @@ function TerminalPageContent() {
   const showAltScreenBar = altScreen.active || altScreen.crashed !== null;
 
   return (
-    <div className={styles.page} data-renderer="canvas">
+    <div
+      className={cx(styles.page, altScreen.active ? styles.altActive : undefined)}
+      data-renderer="canvas"
+    >
       <TitleBar onOpenPalette={openPalette} rightSlot={sessionTabsNode} />
       <BannerHost />
       {/* Degraded-mode banner renders above the terminal chrome, below the
@@ -545,8 +547,23 @@ function TerminalPageContent() {
         ) : (
           mainContent
         )}
+        {/* Alt-screen TUI surface: covers the block list while an alt-
+            screen program is active. Returns null when inactive so the
+            subscription + parser are only alive during a TUI session. */}
+        <TuiRenderSurface
+          sessionId={activeSessionId}
+          bridge={bridge ?? null}
+        />
+        {/* Alt-screen input sink: while a TUI program is active, this
+            surface routes keyboard/mouse/paste/focus/IME events directly
+            to the PTY via the input-host encoder layer. Returns null when
+            inactive, letting the Composer own focus by default. Mounted
+            last so it stacks above TuiRenderSurface for pointer capture. */}
+        <TuiInputSurface sessionId={activeSessionId} />
       </main>
-      <Composer />
+      <div className={styles.composerHost}>
+        <Composer />
+      </div>
       <StatusBar />
       <CommandPalette open={paletteOpen} onClose={closePalette} />
       <HistorySearch open={historyOpen} onClose={closeHistory} hydrating={hydrating} />

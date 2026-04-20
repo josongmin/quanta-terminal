@@ -46,6 +46,7 @@ import { createLogger } from '../../shared/lib/logger.js';
 import {
   appendToActiveBlock,
   finalizeActiveBlock,
+  IDLE_COMPLETE_MS,
   installCommandRouter,
 } from '../command/route-output.js'; // FIXME(fsd-layer-skip): session hands pty bytes + exit to command router per documented cross-slice handoff; see also the integration test comment for the inverse direction.
 // FIXME(fsd-layer-skip): the session feature consults the degraded gate so
@@ -116,7 +117,47 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // arrived synchronously during spawn() needs a live router to land on the
   // active block. The disposer is scoped to this session id so a sibling
   // session's router is untouched on close().
-  routerDispose = installCommandRouter(sessionId).dispose;
+  //
+  // Boundary-detector selection (real-shell mangling fix):
+  // ------------------------------------------------------
+  // The legacy (and still-default) router installs a mock-prompt boundary
+  // detector that scans every chunk for `MOCK_PROMPT_BYTES`
+  // (ESC[36m $ ESC[0m SPACE). That sequence is what the in-browser mock
+  // bridge emits after every command; a real zsh spawned by the Tauri
+  // sidecar produces no such marker on purpose, and the OSC 133 shell
+  // integration script is typically not installed yet (the user sees the
+  // "Shell integration is not installed" banner). Real PTY output can
+  // nonetheless match this byte sequence by coincidence — coloured `$`
+  // glyphs from oh-my-zsh themes, styled git-status prompts, or any ANSI
+  // SGR-reset surrounding a `$` in stdout. Every false-positive match
+  // silently closed the active block mid-stream and dropped the bytes
+  // after the match (route-output's "trailing bytes discarded" branch),
+  // producing the "ls → lls", "cd data → s" / "cd d" command-mangling
+  // symptoms reported by users.
+  //
+  // Until an OSC 133 D detector ships, the safest policy for real shells
+  // is: don't scan at all. We pick the mock detector when the spawn result
+  // identifies the mock bridge (shell `/bin/mock`), and otherwise pass
+  // `detector: null` so bytes flow verbatim to the active block.
+  //
+  // Block-close signals for the real-shell path:
+  //   1. `pty_exit` (authoritative, arrives when the PTY fully tears down —
+  //      basically only on shell quit, NOT between commands in an
+  //      interactive zsh);
+  //   2. the next-submit cancel path inside `submitCommand`;
+  //   3. idle auto-complete: if `idleCompletionMs` ms pass with no bytes,
+  //      the router calls `completeBlock(active, 0)` on the assumption that
+  //      the shell has drawn its prompt and is waiting for input. Without
+  //      (3), interactive sessions never see (1) between commands and the
+  //      block spinner spins forever. The idle window is a heuristic — see
+  //      the `IDLE_COMPLETE_MS` rationale in `route-output.ts`.
+  const isMockBridge = spawn.shell === '/bin/mock';
+  routerDispose = installCommandRouter(
+    sessionId,
+    isMockBridge
+      ? {}
+      : { detector: null, idleCompletionMs: IDLE_COMPLETE_MS },
+  ).dispose;
 
   // Seed the entity in the collection. `addSession` is a no-op if the id is
   // already known, so double-mount or late replay stays idempotent. We

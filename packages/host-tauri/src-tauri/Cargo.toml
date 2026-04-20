@@ -24,7 +24,7 @@ tauri = { version = "2.0", features = ["macos-private-api", "test"] }
 tempfile = "3"
 
 [dependencies]
-tauri = { version = "2.0", features = ["macos-private-api"] }
+tauri = { version = "2.0", features = [] }
 tauri-plugin-shell = "2.0"
 # The updater plugin is always compiled in so release builds ship with
 # auto-update support. The endpoint + pubkey are configured in
@@ -63,6 +63,15 @@ quanta-crash-reporter = { path = "../../../crates/quanta-crash-reporter" }
 portable-pty = { version = "0.8", optional = true }
 bytes = { version = "1", optional = true }
 
+# Unix-only: used by `embedded_shell::disable_echo` to clear ECHO on the
+# PTY line discipline before spawn. `libc::ptsname` + `libc::open` lets
+# us set termios on the SLAVE fd (the master is a no-op for line-
+# discipline flags per `pty(4)`). Gated behind `embedded-shell` because
+# that's the only place we open PTYs.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["term"], optional = true }
+libc = { version = "0.2", optional = true }
+
 # Sidecar path per ADR 0004: Tauri auto-spawns `quanta-core` and speaks the
 # real MessagePack+JSON protocol over a Unix socket. These deps are OFF by
 # default so `pnpm dev` keeps the lighter `embedded-shell` compile path.
@@ -78,7 +87,7 @@ which = { version = "6", optional = true }
 # `--features sidecar` (you should disable `embedded-shell` at the same time
 # so we never accidentally double-spawn a PTY).
 default = ["embedded-shell"]
-embedded-shell = ["dep:portable-pty", "dep:bytes"]
+embedded-shell = ["dep:portable-pty", "dep:bytes", "dep:nix", "dep:libc"]
 sidecar = ["dep:quanta-protocol", "dep:quanta-proto", "dep:which"]
 
 [[bin]]

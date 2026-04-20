@@ -15,6 +15,19 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 portable-pty = { workspace = true }
+tracing = { workspace = true }
+
+# Unix-only: disables PTY line-discipline ECHO at spawn time. See
+# `adapters::portable::disable_echo_on_pty_slave` — shell cooked-mode
+# echo is the source of the "ls → lls" command-doubling the user sees
+# in block output. Termios must be set on the SLAVE fd (via `ptsname`
+# reopen), not the master, because `pty(4)` on macOS and `pty(7)` on
+# Linux both state line-discipline ioctls are only honored on the
+# slave side. Windows ConPTY has no termios concept; `#[cfg(unix)]`
+# gates the call.
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+libc = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

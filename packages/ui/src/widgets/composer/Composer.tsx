@@ -31,7 +31,12 @@ import {
 
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { Separator } from '../../shared/ui/separator/index.js';
-import { submitCommand, type ComposerMode } from '../../features/composer/index.js';
+import {
+  applyInsert,
+  onComposerInsertText,
+  submitCommand,
+  type ComposerMode,
+} from '../../features/composer/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { t } from '../../shared/i18n/index.js';
@@ -85,6 +90,30 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (autoFocus) textareaRef.current?.focus();
   }, [autoFocus]);
+
+  // External text insertion (drag-and-drop of files, paste-from-toolbar, etc.).
+  // We use a window-level CustomEvent bus (see features/composer/insertText)
+  // instead of a ref so siblings stay decoupled from the widget instance.
+  useEffect(() => {
+    return onComposerInsertText((detail) => {
+      setValue((prev) => applyInsert(prev, detail));
+      if (detail.focus) {
+        // Defer focus until the state has flushed so the cursor lands at the
+        // end of the freshly-inserted text.
+        queueMicrotask(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          const len = el.value.length;
+          try {
+            el.setSelectionRange(len, len);
+          } catch {
+            // Some environments (jsdom on disabled textareas) throw.
+          }
+        });
+      }
+    });
+  }, []);
 
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => {

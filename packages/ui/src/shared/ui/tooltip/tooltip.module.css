@@ -1,5 +1,10 @@
 /* Tooltip — hover/focus reveal per ADR 0010. One sentence plus optional
-   action link. Keyboard-accessible via :focus-within on the wrapper. */
+   action link. Keyboard-accessible via focus on the wrapper.
+
+   The bubble is portaled to document.body (see Tooltip.tsx) to escape
+   ancestor `overflow: hidden` clips (e.g. BlockCard's rounded-corner clip).
+   Geometry is set inline with `position: fixed`; this stylesheet owns the
+   visual treatment only. */
 
 .wrap {
   position: relative;
@@ -8,10 +13,11 @@
 }
 
 .bubble {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%) translateY(2px);
+  /* Hidden by default — visibility is toggled via `data-open` which the
+     component sets from its open/close handlers. */
+  position: fixed;
+  top: 0;
+  left: 0;
   min-width: 160px;
   max-width: 280px;
   padding: 8px 10px;
@@ -25,17 +31,18 @@
   box-shadow: var(--q-shadow-pop);
   opacity: 0;
   pointer-events: none;
+  transform: translateY(2px);
   transition:
     opacity var(--q-dur-fast) var(--q-ease-out),
     transform var(--q-dur-fast) var(--q-ease-out);
-  z-index: 10;
+  /* Sit above virtualized block chrome, modal overlays stay higher. */
+  z-index: 1000;
 }
 
-.wrap:hover .bubble,
-.wrap:focus-within .bubble {
+.bubble[data-open='true'] {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 .arrow {

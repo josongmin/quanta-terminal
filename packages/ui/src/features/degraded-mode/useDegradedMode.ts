@@ -28,8 +28,22 @@ const log = createLogger('degraded-mode');
 
 /** Default stall threshold in ms. Tuned per EPIC-H §4.4.1: 1 s → "stalled". */
 const DEFAULT_STALLED_MS = 1_000;
-/** Default degraded threshold — 5 s silence collapses to banner. */
-const DEFAULT_DEGRADED_MS = 5_000;
+/**
+ * Default degraded threshold — effectively disabled for interactive
+ * shells. Originally 5 s (EPIC-H §4.4.1), but that assumption treats the
+ * PTY as a continuously-streaming source. In a real shell the user
+ * routinely sits for 10+ seconds reading output or composing a command,
+ * which would wedge a false-positive "engine crashed" banner on a
+ * perfectly healthy session (the exact failure this hook is supposed to
+ * prevent).
+ *
+ * Callers that genuinely want silence-based escalation (e.g. a
+ * headless CI runner watching a known-chatty stream) can opt in via
+ * `degradedAfterMs`. The default is `Number.POSITIVE_INFINITY`, which
+ * means the timer only marks `stalled` — the banner is reserved for
+ * explicit crash signals (`sidecar_crash_recovered` or `report()`).
+ */
+const DEFAULT_DEGRADED_MS = Number.POSITIVE_INFINITY;
 
 export type DegradedState = 'healthy' | 'stalled' | 'degraded';
 
@@ -91,17 +105,31 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
     degradedAfterMs = DEFAULT_DEGRADED_MS,
     now = () => Date.now(),
     disableTimers = false,
-    currentSessionId = null,
+    currentSessionId,
   } = options;
 
-  // Keep the latest session-id resolver in a ref so the subscribe effect
-  // does NOT re-run every time the id changes (which would re-subscribe
-  // to the bridge on every render of TerminalPage).
+  // `currentSessionId` gate:
+  //   - option OMITTED (`undefined`) → legacy behavior (any
+  //     `sidecar_crash_recovered` event flips to degraded, irrespective
+  //     of session id);
+  //   - option PROVIDED (even `null`) → strict filter. An event whose
+  //     `sessionId` does not equal the resolver's current return value
+  //     is treated as a stale notification (prior-run crash marker
+  //     replay that fired before the UI had any session of its own) and
+  //     does NOT flip the banner.
+  //
+  // This distinction matters for the Tauri cold-start path: the sidecar
+  // crash marker is replayed BEFORE the UI auto-boots a session, so the
+  // active session is still `null` at event-arrival time. Without the
+  // "option was provided" discriminator, a caller that wires a nullable
+  // active-id (the common case) would silently fall through to the
+  // legacy path and pin the banner on.
+  const hasSessionGate = currentSessionId !== undefined;
   const currentSessionIdRef = useRef<() => SessionId | null>(() => null);
   currentSessionIdRef.current =
     typeof currentSessionId === 'function'
       ? currentSessionId
-      : () => currentSessionId;
+      : () => (currentSessionId ?? null);
 
   const [status, setStatus] = useState<DegradedStatus>(() => ({
     state: 'healthy',
@@ -176,16 +204,22 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
       // otherwise wedge the banner on over a perfectly healthy new
       // session (RFC §20: degraded must be a live failure signal).
       if (event.kind === 'pty_exit' && event.signal === 'sidecar_crash_recovered') {
-        const active = currentSessionIdRef.current();
-        if (active !== null && event.sessionId !== active) {
-          log.debug(
-            'degraded-mode: ignoring sidecar_crash_recovered for stale session',
-            { stale: event.sessionId, active },
-          );
-          // Still count this as liveness for the current active stream —
-          // the bridge is clearly responsive enough to forward events.
-          touch();
-          return;
+        if (hasSessionGate) {
+          // Strict gate. `event.sessionId` must equal the active id; any
+          // mismatch — including `active === null` at cold-start, before
+          // the UI has spawned its first session — is stale and MUST
+          // NOT flip the banner. Otherwise the prior-run crash-marker
+          // replay pins the banner on a healthy post-boot session.
+          const active = currentSessionIdRef.current();
+          if (event.sessionId !== active) {
+            log.debug(
+              'degraded-mode: ignoring sidecar_crash_recovered for stale session',
+              { eventSession: event.sessionId, active },
+            );
+            // Bridge is responsive — count this as a liveness touch.
+            touch();
+            return;
+          }
         }
         report('engine_crashed');
         return;

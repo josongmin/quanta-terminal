@@ -38,6 +38,13 @@
   flex-direction: column;
 }
 
+/* Wrapper around the Composer so we can hide it via CSS while an alt-
+ * screen TUI program is active. Keeps the Composer mounted so local state
+ * (draft text, suggestion widget, history index) survives the excursion. */
+.composerHost {
+  display: contents;
+}
+
 /* EPIC-H §4.2: alt-screen active does not hide the block list anymore. The
  * BlockCard chrome collapse transitions the running card to a thin bar;
  * the AltScreenStatusBar renders at the top of the page with the program
@@ -45,6 +52,16 @@
  * (e.g. darkening the canvas backdrop) and is cheap to leave empty. */
 .main.altActive {
   background: var(--q-bg);
+}
+
+/* Alt-screen active: the TuiRenderSurface (a sibling inside the main
+ * region) covers the BlockList, so we hide the block-list host with
+ * `display: none` to keep the layout from reserving space behind the
+ * surface. State is preserved — the BlockList / Composer components
+ * remain mounted; only their visibility is toggled. */
+.main.altActive .blockListHost,
+.page.altActive .composerHost {
+  display: none;
 }
 
 /* Degraded mode: disable pointer events on the terminal chrome so the only

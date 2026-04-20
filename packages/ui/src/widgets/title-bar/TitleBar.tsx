@@ -1,14 +1,18 @@
 /**
- * TitleBar — frameless macOS-first window chrome.
+ * TitleBar — app toolbar rendered directly below the OS-native window chrome.
  *
  * Layout (left → right):
- *   [traffic-light cutout]  [Quanta · dir]  …drag…  [session chip]  [⌘K hint]
+ *   [Quanta · dir]  …flex spacer…  [session chip]  [⌘K hint]
  *
- * The traffic-light cutout on the left is a non-drag region so the native
- * macOS buttons receive clicks; the rest of the bar is draggable. The right
- * side hosts the palette hint — clicking it opens the palette by firing a
- * keydown the app listens for (keeps the title bar ignorant of the palette's
- * open state).
+ * History: prior versions used a frameless-window design where this bar
+ * doubled as the window drag handle (`data-tauri-drag-region="true"`) with a
+ * 72 px cutout on the left for macOS traffic lights. That approach has been
+ * retired in favour of native OS decorations — `tauri.conf.json` now sets
+ * `decorations: true` and `titleBarStyle: "Visible"`, so the OS draws the
+ * real title bar above this widget. Window drag, double-click-to-maximize,
+ * the system context menu, and traffic-light buttons are all handled by the
+ * window manager. This component is now a plain semantic `<header>` with no
+ * drag-region attributes or cutouts.
  */
 
 import type { ReactNode } from 'react';
@@ -33,22 +37,16 @@ export function TitleBar(props: TitleBarProps) {
   const shell = useSessionStore((s) => s.shell);
   const cwd = useSessionStore((s) => s.cwd);
   return (
-    <header
-      className={styles.bar}
-      data-tauri-drag-region="true"
-      role="banner"
-      aria-label={t('titleBar.region')}
-    >
-      <div className={styles.trafficCutout} data-tauri-drag-region="false" aria-hidden />
-      <div className={styles.left} data-tauri-drag-region="true">
+    <header className={styles.bar} role="banner" aria-label={t('titleBar.region')}>
+      <div className={styles.left}>
         <strong className={styles.brand}>Quanta</strong>
         <span className={styles.sep} aria-hidden>
           ·
         </span>
         <span className={styles.subtle}>{shell ? shortenCwd(cwd) : t('titleBar.booting')}</span>
       </div>
-      <div className={styles.center} data-tauri-drag-region="true" aria-hidden />
-      <div className={styles.right} data-tauri-drag-region="false">
+      <div className={styles.center} aria-hidden />
+      <div className={styles.right}>
         {rightSlot}
         <button
           type="button"

@@ -170,6 +170,10 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
 
   const bridge: HostBridge = {
     capabilities: {
+      // Tauri now renders with native decorations (titleBarStyle: Visible +
+      // decorations: true). The window manager owns drag, double-click-to-
+      // maximize, and the OS context menu; the app's TitleBar widget is a
+      // secondary toolbar below the real title bar.
       nativeWindowChrome: true,
       systemNotifications: false,
       // The Tauri host resolves an editor on PATH (code → cursor → subl →

@@ -34,6 +34,7 @@ import {
 import { useSessionStore } from '../../entities/session/index.js';
 import {
   useNotifySettings,
+  ensureNotificationPermission,
   MIN_LONG_RUN_THRESHOLD_MS,
   MAX_LONG_RUN_THRESHOLD_MS,
 } from '../../features/notifications/index.js';
@@ -269,7 +270,18 @@ function NotificationsSection() {
           <input
             type="checkbox"
             checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setEnabled(next);
+              // Prompt for OS notification permission only when the user
+              // actively enables the setting — this onChange fires inside a
+              // user gesture, so the browser will accept the request. We
+              // ignore the resolved value: if the user denies, the detector
+              // will simply short-circuit in notify().
+              if (next) {
+                void ensureNotificationPermission({ allowPrompt: true });
+              }
+            }}
             data-testid="settings-notify-toggle"
           />{' '}
           {t('settings.notifications.toggleLabel')}

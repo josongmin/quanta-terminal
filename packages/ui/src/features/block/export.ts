@@ -19,49 +19,16 @@
  */
 
 import { concatChunks, useBlockStore, type Block, type BlockStatus } from '../../entities/block/index.js';
+import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
 
 export type ExportFormat = 'markdown' | 'json' | 'text';
 
 const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
 
-/**
- * Strip CSI / OSC / SS2 / SS3 / DCS escape sequences plus control bytes that
- * show up in PTY streams but would corrupt a plain-text export (BEL, escape,
- * shift-in/out). Keeps newlines, tabs, carriage returns — everything a user
- * would expect to see in their text editor.
- *
- * This is deliberately regex-based rather than running a full ANSI parser:
- * export is called once per block on user request, not in the hot path.
- */
-export function stripAnsi(input: string): string {
-  // ESC [ ... <final>    — CSI (cursor moves, SGR, ED/EL, …)
-  // ESC ] ... BEL/ST     — OSC (titles, 133, 633)
-  // ESC P ... ST         — DCS
-  // ESC (N) / ESC )(N)   — charset designate (one trailing byte)
-  // ESC letter           — standalone two-byte escapes
-  // eslint-disable-next-line no-control-regex
-  const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/gu;
-  // eslint-disable-next-line no-control-regex
-  const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/gu;
-  // eslint-disable-next-line no-control-regex
-  const DCS = /\x1bP[^\x1b]*\x1b\\/gu;
-  // eslint-disable-next-line no-control-regex
-  const SIMPLE = /\x1b[()][A-Za-z0-9]/gu;
-  // eslint-disable-next-line no-control-regex
-  const TWO_BYTE = /\x1b[@-Z\\-_]/gu;
-  // Other C0 controls that aren't whitespace. Keeping \t (0x09), \n (0x0A),
-  // \r (0x0D). Removing \x00-\x08, \x0B, \x0C, \x0E-\x1F, \x7F.
-  // eslint-disable-next-line no-control-regex
-  const C0 = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/gu;
-
-  return input
-    .replace(OSC, '')
-    .replace(DCS, '')
-    .replace(CSI, '')
-    .replace(SIMPLE, '')
-    .replace(TWO_BYTE, '')
-    .replace(C0, '');
-}
+// `stripAnsi` lives in `shared/lib/ansi-parser/strip` so the renderer, copy,
+// diff, history-search and export paths share one implementation. Re-exported
+// here for backwards compatibility with existing callers / tests.
+export { stripAnsi };
 
 /**
  * Best-effort language hint from the command's first token. Used as the

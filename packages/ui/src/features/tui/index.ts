@@ -14,3 +14,7 @@ export { installTuiDetector } from './install.js';
 export type { TuiInstallHandle } from './install.js';
 export { createAltScreenDetector } from './detect.js';
 export type { AltScreenDetector } from './detect.js';
+export { TuiRenderSurface } from './TuiRenderSurface.js';
+export type { TuiRenderSurfaceProps } from './TuiRenderSurface.js';
+export { TuiInputSurface } from './TuiInputSurface.js';
+export type { TuiInputSurfaceProps } from './TuiInputSurface.js';

@@ -220,6 +220,67 @@ describe('useDegradedMode', () => {
     expect(result.current.state).toBe('degraded');
   });
 
+  it('currentSessionId EXPLICITLY null (cold-start, session not spawned yet) treats the event as STALE', () => {
+    // This is the exact Tauri cold-start ordering: the sidecar's crash
+    // marker replay fires BEFORE the UI's auto-boot effect has a chance
+    // to create its first session. `activeSessionId` is therefore `null`
+    // at event-arrival time. The gate must fire "stale" in this case,
+    // NOT fall through to the legacy "always degraded" path.
+    const { bridge, emit } = fakeBridge();
+    const { result } = renderHook(() =>
+      useDegradedMode({
+        bridge,
+        currentSessionId: null,
+        disableTimers: true,
+      }),
+    );
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'old-dead-session',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('healthy');
+    expect(result.current.reason).toBeNull();
+  });
+
+  it('getter returning null at event time (session not yet ready) treats the event as STALE', () => {
+    // Same scenario as above but through the getter form (what
+    // TerminalPage actually uses when it threads zustand state).
+    const { bridge, emit } = fakeBridge();
+    let active: string | null = null;
+    const { result } = renderHook(() =>
+      useDegradedMode({
+        bridge,
+        currentSessionId: () => active,
+        disableTimers: true,
+      }),
+    );
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'some-old-id',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('healthy');
+    // Later: the UI finally spawns its session. A subsequent genuine
+    // crash for that new session DOES flip to degraded.
+    active = 'new-session';
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'new-session',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('degraded');
+  });
+
   it('treats any other bridge event as a liveness touch', () => {
     const { bridge, emit } = fakeBridge();
     const { result } = renderHook(() =>
@@ -251,6 +312,33 @@ describe('useDegradedMode', () => {
   //   3. A later touch recovers `stalled` → `healthy`.
   // -------------------------------------------------------------------
   describe('liveness timer', () => {
+    it('DEFAULT degradedAfterMs is effectively disabled — interactive-shell silence must never auto-flip the banner', () => {
+      // Regression pin for the production bug observed in dogfood:
+      // a user sitting idle reading `ls` output for 6+ seconds would
+      // trip the old 5 s default and wedge the crash banner on a
+      // perfectly healthy shell. The default is now `Number.POSITIVE_INFINITY`;
+      // callers that want silence-based escalation must opt in.
+      vi.useFakeTimers();
+      let clock = 1_000;
+      const now = () => clock;
+      const { bridge, emit } = fakeBridge();
+      const { result } = renderHook(() =>
+        useDegradedMode({ bridge, now }),
+      );
+      // First event establishes the liveness reference.
+      act(() => {
+        emit({ kind: 'pty_data', sessionId: 'x', seq: 1, bytesB64: '' });
+      });
+      // Advance the clock 60 s — 12× the old 5 s threshold.
+      act(() => {
+        clock += 60_000;
+        vi.advanceTimersByTime(60_000);
+      });
+      // Banner MUST NOT show on silence alone with the default config.
+      expect(result.current.state).not.toBe('degraded');
+      vi.useRealTimers();
+    });
+
     it('DOES NOT escalate to degraded while waiting for the first event (slow-boot window)', () => {
       vi.useFakeTimers();
       let clock = 1_000;

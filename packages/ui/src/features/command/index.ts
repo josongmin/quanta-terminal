@@ -22,7 +22,9 @@ export {
   getActiveBlockId,
   addRouterRawObserver,
   setRouterBlockSessionLookup,
+  IDLE_COMPLETE_MS,
 } from './route-output.js';
+export type { InstallCommandRouterOptions } from './route-output.js';
 
 export {
   createMockBoundaryDetector,

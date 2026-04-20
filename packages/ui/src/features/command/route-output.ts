@@ -45,16 +45,128 @@ import {
 
 const log = createLogger('command.route-output');
 
+/**
+ * Default idle-completion window for real-shell sessions, in milliseconds.
+ *
+ * Rationale: after a command finishes, an interactive zsh (1) flushes any
+ * trailing output, (2) redraws its PS1 prompt, and then (3) blocks on user
+ * input — at which point the PTY goes silent. Empirically, the flush +
+ * redraw on a local machine completes in tens of milliseconds; 400 ms gives
+ * ~10x headroom for remote SSH / slow-themed prompts while still feeling
+ * snappy to the user (no noticeable delay before the spinner stops). We
+ * pick the low end of the range because the auto-complete is recoverable
+ * (any late byte re-enters `appendToActiveBlock`, which would go to the
+ * next block — acceptable noise) whereas a long idle window keeps the
+ * spinner running unnecessarily.
+ *
+ * Exported so tests can reference it via `vi.useFakeTimers` and so future
+ * settings panels can surface it as a tunable without reaching into the
+ * router internals.
+ */
+export const IDLE_COMPLETE_MS = 400;
+
 // ----- Per-session router state -----
 
 interface RouterHandle {
   readonly sessionId: SessionId;
-  /** Current per-block boundary detector. Replaced when a new block opens
-   *  via the `resetBoundaryDetector` entry point below. */
-  detector: BoundaryDetector;
+  /**
+   * Per-block boundary detector. Replaced when a new block opens via
+   * `createDetector`. May be `null` — see `createDetector` below.
+   *
+   * Why nullable: the phase-2 mock detector scans every chunk for
+   * `MOCK_PROMPT_BYTES` (an ANSI-escaped cyan `$` glyph followed by a
+   * space). That byte sequence is the synthetic terminator the in-browser
+   * mock bridge emits after every command. In a REAL zsh session spawned
+   * via the Tauri sidecar, zsh emits its own prompt (user-themed PS1) AND
+   * the OSC 133 shell-integration script is usually not installed yet — so
+   * the real byte stream never contains this exact terminator intentionally
+   * but can legitimately contain it by coincidence (colored `$` glyphs in
+   * oh-my-zsh themes, styled git-status prompts, colored command output,
+   * etc.). A false-positive match mid-stream makes the router slice the
+   * chunk, close the active block prematurely, and DROP all bytes that
+   * follow the false terminator (see the "trailing bytes are discarded"
+   * branch in `createMockBoundaryDetector`). That is the root cause of the
+   * user-visible "ls → lls", "cd data → s" / "cd d" command-mangling bug.
+   *
+   * The fix: allow the install site to opt OUT of the mock detector for
+   * real-shell sessions. When `detector === null`, PTY bytes flow
+   * unconditionally to the active block and block close is driven only by
+   * `pty_exit` (via `finalizeActiveBlock`) or by `submitCommand` cancelling
+   * the previous running block. This is conservative — without a real
+   * boundary signal (OSC 133 D, or an authoritative prompt-regex detector)
+   * the next command's output will glom onto the previous block visually —
+   * but it is strictly safer than mis-splitting blocks and silently
+   * truncating command text. OSC 133 detection is the phase-2 follow-up
+   * that will supply the real `BoundaryDetector` implementation here.
+   */
+  detector: BoundaryDetector | null;
+  /**
+   * Factory used to create a fresh detector every time a block boundary
+   * closes, or on install. Centralised here so the "reset on boundary"
+   * branch does not have to know which detector variant the router was
+   * installed with. Returns `null` to mean "no detector at all" (the real-
+   * shell case above).
+   */
+  createDetector: () => BoundaryDetector | null;
+  /**
+   * Idle-completion timer. Real-shell blocks have no authoritative boundary
+   * signal (OSC 133 D detector not yet shipped and mock-prompt scan was
+   * disabled to stop the "ls → lls" mangling bug). Without ANY close trigger,
+   * interactive zsh sessions never fire `pty_exit` until the window closes,
+   * so blocks remain stuck in `running` state forever — the spinner in the
+   * block header spins indefinitely and `submitCommand` sees a still-active
+   * block when the user runs their next command.
+   *
+   * The idle timer is the poor-man's boundary signal: after each append,
+   * we (re)schedule a timer for `idleTimeoutMs` ms. If no more bytes land
+   * in that window, we assume the shell has drawn its prompt and is waiting
+   * for input → the command is done → we mark the active block `complete`
+   * with exit code 0 (unknown; real exit isn't observable without OSC 133).
+   *
+   * This is heuristic but robust:
+   *   - Any further output re-starts the timer (long-running commands that
+   *     pause briefly — e.g. `make` between subtasks — stay `running`).
+   *   - `submitCommand` allocates a new active block; when the stale timer
+   *     fires, the guard (`activeAtScheduleTime !== store.getActiveBlockId()`)
+   *     skips the close.
+   *   - Dispose clears the timer so a torn-down session can't fire into a
+   *     later install's state.
+   */
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * How long to wait after the last append before auto-completing the
+   * active block. `null` disables the idle timer entirely — used by the
+   * mock bridge (which has its own authoritative terminator) and by tests
+   * that want to hand-drive the router.
+   */
+  idleTimeoutMs: number | null;
 }
 
 const routers = new Map<SessionId, RouterHandle>();
+
+/**
+ * Normalise the user-supplied `detector` option into a factory that produces
+ * a fresh `BoundaryDetector | null` on every call. Three input shapes collapse
+ * to one output:
+ *
+ *   - `undefined` → `createMockBoundaryDetector` (legacy default).
+ *   - `null`      → `() => null` (the real-shell opt-out).
+ *   - `() => …`   → used verbatim.
+ *
+ * Returning a direct `BoundaryDetector` instance as `detector` is NOT allowed
+ * via the option (it would be reused across blocks and leak carry state). A
+ * factory forces fresh-per-block semantics at the type level.
+ */
+function resolveDetectorFactory(
+  option: InstallCommandRouterOptions['detector'],
+): () => BoundaryDetector | null {
+  if (option === undefined) return () => createMockBoundaryDetector();
+  if (option === null) return () => null;
+  // Factory: fresh detector per block. The option type disallows a raw
+  // `BoundaryDetector` instance because reusing one across blocks would
+  // leak the previous block's carried-prefix state into the next block.
+  return option;
+}
 
 /**
  * Side-channel observers for raw PTY chunks flowing through the router.
@@ -125,13 +237,69 @@ export function __emitRawChunkForTests(chunk: Uint8Array): void {
  * meant a sibling session's in-flight block could get nuked during a race
  * between session close and adapter registration.
  */
-export function installCommandRouter(sessionId: SessionId): { dispose: () => void } {
+/**
+ * Options for `installCommandRouter`.
+ *
+ * `detector` (optional):
+ *   - `undefined` (default) — legacy/mock-bridge behavior: install a fresh
+ *     `createMockBoundaryDetector()` and regenerate one on every boundary.
+ *     Used by the in-browser mock bridge and by every pre-existing test
+ *     site that relies on `MOCK_PROMPT_BYTES` closing blocks.
+ *   - `null` — no boundary detection. PTY bytes flow unconditionally to the
+ *     active block; blocks close via `pty_exit` / next-submit cancel only.
+ *     Use this for real-shell sessions until an OSC-133-based detector
+ *     ships. This is the fix for the real-shell command-mangling bug
+ *     documented on `RouterHandle.detector`.
+ *   - a function — called once on install and again after every boundary
+ *     to produce a fresh detector instance (per-block lifecycle). Reserved
+ *     for the OSC 133 detector and for custom test detectors.
+ */
+export interface InstallCommandRouterOptions {
+  /**
+   * Boundary detection strategy. `null` disables boundary scanning entirely
+   * (real-shell fallback). A factory function is invoked once on install and
+   * again after every boundary so the detector is per-block (the shared-
+   * instance variant would leak carry state between blocks). Omit to keep
+   * the legacy mock-bridge behavior.
+   */
+  readonly detector?: null | (() => BoundaryDetector | null);
+  /**
+   * Optional idle-timeout (ms) after which the active block is auto-completed
+   * if no new output arrives. Designed for real-shell sessions that have no
+   * authoritative close signal; the interactive shell stops emitting bytes
+   * once its prompt is drawn, and that silence is our proxy for "command
+   * finished". Set to a positive number (e.g. 600) for real shells; leave
+   * undefined or pass `null` to disable (mock bridge, tests). The router
+   * resets this timer on every append and clears it on dispose.
+   */
+  readonly idleCompletionMs?: number | null;
+}
+
+export function installCommandRouter(
+  sessionId: SessionId,
+  options: InstallCommandRouterOptions = {},
+): { dispose: () => void } {
   if (routers.has(sessionId)) {
     log.debug('installCommandRouter: replacing existing router for', sessionId);
+    // Re-install replaces the handle; ensure any pending idle timer on the
+    // stale handle is cleared so it cannot fire against the fresh one's
+    // state (the guard in `scheduleIdleCompletion` would catch a stray fire
+    // via the activeAtScheduleTime check, but proactively clearing is
+    // cheaper and deterministic).
+    const existing = routers.get(sessionId);
+    if (existing?.idleTimer !== null && existing?.idleTimer !== undefined) {
+      clearTimeout(existing.idleTimer);
+    }
   }
+  const createDetector = resolveDetectorFactory(options.detector);
+  const idleTimeoutMs =
+    options.idleCompletionMs === undefined ? null : options.idleCompletionMs;
   const handle: RouterHandle = {
     sessionId,
-    detector: createMockBoundaryDetector(),
+    detector: createDetector(),
+    createDetector,
+    idleTimer: null,
+    idleTimeoutMs,
   };
   routers.set(sessionId, handle);
   return {
@@ -141,6 +309,16 @@ export function installCommandRouter(sessionId: SessionId): { dispose: () => voi
       // state the current router owns.
       if (routers.get(sessionId) !== handle) return;
       routers.delete(sessionId);
+
+      // Clear any pending idle-completion timer so it cannot fire after
+      // dispose and land a completeBlock on a freshly-installed successor's
+      // active block. (The successor would have its own active pointer
+      // different from ours, so the guard would skip, but we still do not
+      // want stray timers lying around.)
+      if (handle.idleTimer !== null) {
+        clearTimeout(handle.idleTimer);
+        handle.idleTimer = null;
+      }
 
       // Clear the active pointer ONLY when it still points at a block owned
       // by THIS session. Blanket-clearing here would stomp on a sibling
@@ -234,6 +412,20 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
     }
   }
 
+  // No-detector branch: real-shell install path. We bypass boundary
+  // detection entirely and append the whole chunk to the active block.
+  // Block close is driven by `finalizeActiveBlock` on `pty_exit`, by
+  // `submitCommand` cancelling the prior active block on the next submit,
+  // or (new) by the idle-completion timer below when the shell goes quiet.
+  // This is the conservative fallback documented on `RouterHandle.detector`.
+  if (handle.detector === null) {
+    if (chunk.length > 0) {
+      store.appendBlockOutput(active, chunk);
+    }
+    scheduleIdleCompletion(handle, store, active);
+    return;
+  }
+
   const { preBoundary, hadBoundary } = handle.detector.feed(chunk);
   if (preBoundary.length > 0) {
     store.appendBlockOutput(active, preBoundary);
@@ -242,9 +434,73 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
     // Mock boundary carries no exit code; use 0 (mock can't fail).
     store.completeBlock(active, 0);
     // Reset the per-block detector so carry bytes from the prior block
-    // can't leak into the next.
-    handle.detector = createMockBoundaryDetector();
+    // can't leak into the next. The factory captured at install time picks
+    // the right implementation (mock, null, or a future OSC 133 detector).
+    handle.detector = handle.createDetector();
+    // An authoritative boundary supersedes any pending idle timer — drop it
+    // so it can't double-close or race with the next block's timer.
+    if (handle.idleTimer !== null) {
+      clearTimeout(handle.idleTimer);
+      handle.idleTimer = null;
+    }
+  } else {
+    // Still mid-stream under the detector path. Schedule idle completion
+    // in case the detector never fires (e.g. future null-returning factory
+    // variant). With `idleTimeoutMs === null` this is a no-op.
+    scheduleIdleCompletion(handle, store, active);
   }
+}
+
+/**
+ * Arm (or re-arm) the idle-completion timer for a handle.
+ *
+ * Contract:
+ *   - If `idleTimeoutMs === null`, do nothing (mock bridge / tests opt out).
+ *   - Any prior pending timer is cleared first so the window is measured
+ *     from the LATEST append, not the first.
+ *   - When the timer fires, we only complete the block when the active
+ *     pointer is STILL the same id we scheduled against. If the user
+ *     submitted a new command in the meantime, `submitCommand` has
+ *     allocated a new active block and closing this older one via a stale
+ *     timer would be wrong (and likely already handled by the
+ *     prev-block-cancel path inside submit).
+ *
+ * The handle is captured by closure; even if the session's router is
+ * replaced or disposed before the timer fires, the fire-time check against
+ * `store.getActiveBlockId()` is the authoritative guard.
+ */
+function scheduleIdleCompletion(
+  handle: RouterHandle,
+  // The store at schedule-time is passed for symmetry with the caller's
+  // resolved locals, but we intentionally re-resolve through
+  // `tryGetBlockStore()` inside the timer callback below so a teardown
+  // between schedule and fire cannot use a stale reference. The parameter
+  // is deliberately unused at the body level — keeping it here preserves
+  // call-site readability (`scheduleIdleCompletion(handle, store, active)`
+  // mirrors the variables in scope at every caller) without paying for
+  // the resolved-but-unused handle.
+  _store: NonNullable<ReturnType<typeof tryGetBlockStore>>,
+  active: BlockId,
+): void {
+  if (handle.idleTimeoutMs === null) return;
+  if (handle.idleTimer !== null) clearTimeout(handle.idleTimer);
+  const activeAtScheduleTime = active;
+  handle.idleTimer = setTimeout(() => {
+    handle.idleTimer = null;
+    // Re-resolve the store at fire time. The bound store is the same
+    // singleton but we take the defensive path in case of test teardown.
+    const liveStore = tryGetBlockStore();
+    if (!liveStore) return;
+    const currentActive = liveStore.getActiveBlockId();
+    // Guard: only close when the same block is still active AND non-null.
+    // If the user submitted a new command, `currentActive` points at the
+    // new block; closing the old one via idle-timer here would either be
+    // a no-op (prev-block-cancel already fired) or, worse, close the NEW
+    // block. The mismatch check protects against both.
+    if (currentActive !== activeAtScheduleTime) return;
+    if (currentActive === null) return;
+    liveStore.completeBlock(currentActive, 0);
+  }, handle.idleTimeoutMs);
 }
 
 /**
@@ -259,9 +515,20 @@ export function finalizeActiveBlock(
   exitCode: number | null,
   _signal: string | null,
 ): void {
-  if (!routers.has(sessionId)) return;
+  const handle = routers.get(sessionId);
+  if (!handle) return;
   const store = tryGetBlockStore();
   if (!store) return;
+
+  // Clear any pending idle-completion timer — pty_exit is an authoritative
+  // terminal signal and supersedes the idle heuristic. Letting the timer
+  // fire later would either be a no-op (active pointer nulled below) or,
+  // in a race with a rapid subsequent install, fire against a successor's
+  // active block.
+  if (handle.idleTimer !== null) {
+    clearTimeout(handle.idleTimer);
+    handle.idleTimer = null;
+  }
 
   const active = store.getActiveBlockId();
   const running = store.getRunningBlockIds();
@@ -283,6 +550,14 @@ export function finalizeActiveBlock(
 /** Reset the module to uninstalled state. Exposed for test setup; do not
  *  call from production code. */
 export function __resetRouterForTests(): void {
+  // Clear any pending idle timers so they can't fire into a subsequent test's
+  // state — stray setTimeouts are the #1 source of cross-test flake here.
+  for (const handle of routers.values()) {
+    if (handle.idleTimer !== null) {
+      clearTimeout(handle.idleTimer);
+      handle.idleTimer = null;
+    }
+  }
   routers.clear();
   rawChunkObservers.clear();
   blockSessionLookup = null;

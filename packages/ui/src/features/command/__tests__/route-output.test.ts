@@ -33,10 +33,12 @@ import {
   appendToActiveBlock,
   finalizeActiveBlock,
   getActiveBlockId,
+  IDLE_COMPLETE_MS,
   installCommandRouter,
   isCommandRouterInstalled,
   setRouterBlockSessionLookup,
 } from '../route-output.js';
+import { createMockBoundaryDetector } from '../boundary-detector.js';
 import { bindBlockStore, type BlockStoreActions } from '../block-store-port.js';
 
 // ----- Test fixtures: precomputed base64 for mock-terminator scenarios -----
@@ -918,3 +920,462 @@ describe('__resetRouterForTests & friends', () => {
     expect(isCommandRouterInstalled(A)).toBe(true);
   });
 });
+
+// =====================================================================
+// H. Install options — real-shell boundary-detector opt-out
+// =====================================================================
+//
+// The Phase-2 mock boundary detector scans every chunk for
+// `MOCK_PROMPT_BYTES`. That is correct for the in-browser mock bridge,
+// which synthesizes exactly those bytes after every command, but WRONG
+// for a real zsh spawned by the Tauri sidecar: real output can contain
+// the sequence by coincidence (coloured `$` glyphs in themed prompts,
+// styled git-status segments, ANSI-coloured command output) and the
+// router would then mis-split the block and drop every byte following
+// the false-positive match — the user-visible bug where `ls` arrives as
+// `lls` and `cd data` arrives as `s` / `cd d` with the `data` suffix
+// leaking into the next block.
+//
+// The fix threads an `options.detector` through `installCommandRouter`:
+//   - undefined (default) keeps the mock detector (legacy behavior for
+//     every existing test site and for the mock bridge);
+//   - `null` opts out of boundary scanning entirely, which is what the
+//     real-shell install path uses until an OSC 133 detector ships;
+//   - a factory function will hold the future OSC 133 detector.
+// The tests below pin every branch.
+
+describe('installCommandRouter — options.detector', () => {
+  // "hello" + full MOCK_PROMPT_BYTES terminator, base64. Intentionally the
+  // exact byte sequence that would CLOSE a block under the legacy default.
+  // Shared with the C-suite fixtures above but redeclared locally so this
+  // describe block reads standalone.
+  const B64_HELLO_WITH_FAKE_TERM = B64_HELLO_TERM;
+
+  it('detector: null → mock-prompt bytes do NOT close the block (real-shell fix)', () => {
+    // This is the direct regression guard for the real-shell command-mangling
+    // bug. A real zsh can emit bytes that match MOCK_PROMPT_BYTES by chance;
+    // without the opt-out, those bytes would close the block prematurely and
+    // drop the tail of the current command.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+
+    // The whole chunk (hello + the 11 terminator bytes) lands on the block
+    // verbatim. NOTHING is discarded, NOTHING closes the block.
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.appends).toHaveLength(1);
+    // 5 ("hello") + 11 (MOCK_PROMPT_BYTES) = 16 bytes flowed through.
+    expect(rec.appends[0]!.bytes.length).toBe(16);
+    // Active block pointer is still the same — no boundary was signalled.
+    expect(rec.store.getActiveBlockId()).toBe('blk-a');
+  });
+
+  it('detector: null → partial-terminator chunks also flow verbatim (no carry)', () => {
+    // The legacy detector would have carried 5 bytes forward waiting for the
+    // rest of the terminator. A null detector must NOT carry — every chunk
+    // flushes in full as it arrives, matching the real-shell policy of
+    // "bytes are just output; boundaries come from pty_exit".
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_PARTIAL_TERM); // "hello" + 5-byte partial
+    appendToActiveBlock(A, B64_TERM_REST); // 6-byte rest
+
+    // No boundary signalled on either feed.
+    expect(rec.completes).toHaveLength(0);
+    // Both chunks appended in full.
+    expect(rec.appends).toHaveLength(2);
+    // Byte totals: 10 (hello + 5 partial) and 6 (rest).
+    expect(rec.appends[0]!.bytes.length).toBe(10);
+    expect(rec.appends[1]!.bytes.length).toBe(6);
+  });
+
+  it('detector: null → finalize still closes the active block with pty_exit code', () => {
+    // With boundary detection disabled, `pty_exit` becomes the sole close
+    // signal. Pin that path explicitly so a future refactor does not
+    // accidentally untangle finalize from the null-detector case.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+    rec.setRunning(['blk-a' as BlockId]);
+
+    appendToActiveBlock(A, B64_FOO); // no boundary, just output
+    finalizeActiveBlock(A, 0, null);
+
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('default (undefined) preserves legacy mock-bridge boundary behavior', () => {
+    // Backwards-compat guard: the change is opt-in. Existing tests and the
+    // mock bridge continue to see block closes on MOCK_PROMPT_BYTES.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A); // no options
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('hello');
+  });
+
+  it('factory form: detector factory is called once per block (fresh instance after boundary)', () => {
+    // The factory must be invoked on install AND after every boundary so the
+    // detector never carries state from the previous block. We install with
+    // a spying factory that returns the mock detector; exercise a boundary;
+    // assert the factory fired twice (install + re-create).
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const factory = vi.fn(() => createMockBoundaryDetector());
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: factory });
+    rec.setActive('blk-a' as BlockId);
+
+    // Install calls the factory once.
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    // Trigger a boundary: the router should create a fresh detector after
+    // closing the block so carry from the previous block can't leak.
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it('factory returning null per block = behaves identically to passing detector: null', () => {
+    // A factory that always returns null should be indistinguishable from
+    // the null shorthand. Pin both branches emit the same observable
+    // behaviour so a future "factory-never-null" invariant can't be snuck
+    // in without updating this test.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: () => null });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+
+    // No boundary signalled; full chunk appended.
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.appends).toHaveLength(1);
+    expect(rec.appends[0]!.bytes.length).toBe(16);
+  });
+
+  it('simulated real-zsh stream: output containing MOCK_PROMPT_BYTES across multiple commands does not mis-split', () => {
+    // End-to-end style scenario mirroring the user bug report: three
+    // consecutive commands (`ls`, `ls`, `cd data`) each land as one or
+    // more chunks that happen to contain the MOCK_PROMPT_BYTES sequence
+    // somewhere inside. Under the legacy default every accidental match
+    // would close the block and drop the tail; under the real-shell
+    // install path nothing should close until `finalizeActiveBlock`.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+
+    // Feed two chunks, each ending in MOCK_PROMPT_BYTES — exactly the
+    // pattern an oh-my-zsh themed prompt produces around a `$`/`%` glyph.
+    // The base64 fixtures are the same ones the mock-branch tests use, so
+    // the byte content is identical — only the detector choice differs.
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+    appendToActiveBlock(A, B64_HELLO_WITH_FAKE_TERM);
+
+    // Both chunks flowed to the same block. No premature close, no split.
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.appends).toHaveLength(2);
+    expect(rec.store.getActiveBlockId()).toBe('blk-a');
+    // Full 16-byte chunk each time (5 payload + 11 mock-prompt bytes).
+    expect(rec.appends[0]!.bytes.length).toBe(16);
+    expect(rec.appends[1]!.bytes.length).toBe(16);
+  });
+
+  it('raw observers still fire when detector is null (side-channel is independent of boundary detection)', () => {
+    // The TUI alt-screen detector and similar hooks ride the raw observer
+    // channel. They must not be coupled to the existence of a boundary
+    // detector — a real-shell session (no detector) still needs to fan
+    // out raw chunks.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const seen: Uint8Array[] = [];
+    addRouterRawObserver((c) => seen.push(new Uint8Array(c)));
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+
+    expect(seen).toHaveLength(1);
+    expect(bytesToText(seen[0]!)).toBe('foo');
+    // Store still received the bytes, too — observer and append are
+    // independent.
+    expect(rec.appends).toHaveLength(1);
+  });
+});
+
+// =====================================================================
+// I. Idle-based auto-completion (real-shell fallback)
+// =====================================================================
+//
+// Real-shell sessions install with `detector: null` (see suite H above).
+// That means `pty_exit` / next-submit cancel are the ONLY block-close
+// signals — and interactive zsh never emits `pty_exit` between commands,
+// so blocks would stay in `running` forever (the user-visible "spinner
+// spins forever" bug). The idle timer is the poor-man's boundary: when
+// the PTY goes silent for `idleCompletionMs` ms, we assume the prompt
+// has been drawn and auto-complete the block with exit code 0.
+//
+// We use `vi.useFakeTimers` so these tests run in microseconds and so
+// timer races are deterministic. Every test in this suite tears the
+// fake timers down in an inner `afterEach` to avoid leaking faked
+// `setTimeout` into unrelated suites.
+
+describe('appendToActiveBlock — idle auto-completion', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // Drain any pending timers before restoring real ones so a stray
+    // scheduled `completeBlock` can't fire into the next suite.
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('detector null + idleCompletionMs: auto-completes the active block after the idle window', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    // Timer is armed but hasn't fired yet.
+    expect(rec.completes).toHaveLength(0);
+
+    // Just under the window — still running.
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS - 1);
+    expect(rec.completes).toHaveLength(0);
+
+    // Cross the boundary: timer fires, block auto-completes.
+    vi.advanceTimersByTime(1);
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+    // Active pointer was cleared by the recorder's `completeBlock` impl.
+    expect(rec.store.getActiveBlockId()).toBeNull();
+  });
+
+  it('consecutive chunks reset the idle window (long-running command stays running)', () => {
+    // Regression guard against a "first-append-wins" off-by-one: the timer
+    // must be re-armed on every chunk, otherwise a long command that pauses
+    // briefly between stdout flushes would be marked complete mid-stream.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    // Wait almost the full window, then append again — timer must reset.
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS - 50);
+    appendToActiveBlock(A, B64_BAR);
+    // Advance to what WOULD have been the original fire time: the timer
+    // should NOT have fired (it was cleared and re-armed).
+    vi.advanceTimersByTime(60);
+    expect(rec.completes).toHaveLength(0);
+
+    // Now actually wait out the full window from the last append.
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS);
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+  });
+
+  it('default (mock) detector install does NOT auto-complete on idle', () => {
+    // The idle timer is opt-in via `idleCompletionMs`. The mock bridge /
+    // existing test sites pass no options and must see zero behavior change:
+    // the MOCK_PROMPT_BYTES terminator is still the only close signal, and
+    // a chunk without one leaves the block running indefinitely under fake
+    // timers.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A); // default: mock detector, no idle timer
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO); // no terminator, no boundary
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS * 10);
+
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.store.getActiveBlockId()).toBe('blk-a');
+  });
+
+  it('finalizeActiveBlock clears the pending idle timer (no double-close)', () => {
+    // When `pty_exit` lands, finalize closes the block authoritatively. A
+    // pending idle timer must be dropped so it can't (a) fire a second
+    // completeBlock on the now-null active pointer or (b) race with a
+    // freshly-spawned successor session's block.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-a' as BlockId);
+    rec.setRunning(['blk-a' as BlockId]);
+
+    appendToActiveBlock(A, B64_FOO);
+    // pty_exit arrives before the idle window elapses.
+    finalizeActiveBlock(A, 42, null);
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 42 }]);
+
+    // Run any remaining timers — the idle timer must have been cancelled
+    // so no second completeBlock fires.
+    vi.runAllTimers();
+    expect(rec.completes).toHaveLength(1);
+  });
+
+  it('dispose cancels the pending idle timer (leak prevention)', () => {
+    // A timer that outlives the router's session is a leak vector: if a
+    // sibling session installs next, the stale timer could fire and close
+    // THAT session's active block. The dispose() path must proactively
+    // clear, regardless of whether the fire-time guard would catch it.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    setRouterBlockSessionLookup(rec.lookup);
+
+    const A = 'sess-a' as SessionId;
+    const ra = installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.bindBlockToSession('blk-a' as BlockId, A);
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    // Dispose BEFORE the timer fires.
+    ra.dispose();
+    // After dispose, active pointer was cleared (owned by A). Run timers —
+    // the disposed timer must NOT fire.
+    vi.runAllTimers();
+    expect(rec.completes).toHaveLength(0);
+  });
+
+  it('idle timer does not fire when active pointer has moved to a new block', () => {
+    // If the user submits a second command before the idle window elapses,
+    // `submitCommand` allocates a new active block. The stale timer's
+    // fire-time guard (`currentActive !== activeAtScheduleTime`) must skip
+    // the close so the new block is not accidentally terminated.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-1' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    // Simulate `submitCommand` flipping the active pointer to a new block.
+    // In production `submitCommand` also cancels the old block; we skip
+    // that step to isolate the guard under test.
+    rec.setActive('blk-2' as BlockId);
+
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS + 10);
+
+    // Guard must have skipped: neither block was completed by the idle
+    // timer (blk-1 wasn't current; blk-2 wasn't the one we scheduled for).
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.store.getActiveBlockId()).toBe('blk-2');
+  });
+
+  it('re-install on same session clears the prior handle\'s pending idle timer', () => {
+    // Defense in depth — the same-session replace path (tested for detector
+    // replacement in suite A) must also drop the stale timer so it can't
+    // fire into the new handle's state. The new handle's own guard would
+    // also catch it, but proactively clearing keeps the behaviour
+    // deterministic in case future refactors touch the guard.
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-a' as BlockId);
+    appendToActiveBlock(A, B64_FOO); // arms timer on first handle
+
+    // Re-install without an idle timer configured — the stale timer from
+    // the previous handle must not fire.
+    installCommandRouter(A, { detector: null });
+
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS * 2);
+    expect(rec.completes).toHaveLength(0);
+  });
+
+  it('empty chunk still re-arms the idle timer (tracks "time since any pty_data")', () => {
+    // The idle window represents "time since the host last spoke to us",
+    // not "time since the host said something useful". An empty-payload
+    // pty_data frame is still a signal that the PTY is alive, so it must
+    // reset the timer. (This matters for shell integrations that emit
+    // zero-byte marker events.)
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      idleCompletionMs: IDLE_COMPLETE_MS,
+    });
+    rec.setActive('blk-a' as BlockId);
+
+    appendToActiveBlock(A, B64_FOO);
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS - 50);
+    // Empty chunk — the router's >0 guard skips appendBlockOutput but the
+    // idle timer still re-arms from the handle.
+    appendToActiveBlock(A, '');
+    vi.advanceTimersByTime(60);
+    expect(rec.completes).toHaveLength(0);
+
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS);
+    expect(rec.completes).toEqual([{ id: 'blk-a', exitCode: 0 }]);
+  });
+
+  it('IDLE_COMPLETE_MS is a positive number (sanity check)', () => {
+    // Pinning the constant's shape so a future refactor to `null` default
+    // or a zero/negative value fails loudly. The exact value is a product
+    // decision — don't pin it here.
+    expect(IDLE_COMPLETE_MS).toBeGreaterThan(0);
+    expect(Number.isFinite(IDLE_COMPLETE_MS)).toBe(true);
+  });
+});
+

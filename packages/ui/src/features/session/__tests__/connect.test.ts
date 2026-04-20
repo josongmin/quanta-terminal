@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  BlockId,
   HostBridge,
   HostEvent,
   HostEventListener,
@@ -21,9 +22,11 @@ import type {
   SessionId,
   Subscription,
 } from '@quanta/host-common';
-import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
+import { DEFAULT_CAPABILITIES, MOCK_PROMPT_BYTES } from '@quanta/host-common';
 import { connectSession } from '../connect.js';
 import { useSessionStore } from '../../../entities/session/index.js';
+import { bindBlockStore, type BlockStoreActions } from '../../command/index.js';
+import { __resetRouterForTests } from '../../command/route-output.js';
 
 interface ScriptedBridge extends HostBridge {
   emit: (event: HostEvent) => void;
@@ -296,5 +299,161 @@ describe('connectSession', () => {
     await Promise.all([conn.close(), conn.close()]);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(bridge.listenerCount()).toBe(0);
+  });
+});
+
+// ------------------------------------------------------------------
+// Boundary-detector selection by bridge kind (real-shell mangling fix).
+// ------------------------------------------------------------------
+//
+// connectSession() must install the command router such that a REAL
+// shell (non-`/bin/mock` spawn) does NOT run the mock-prompt boundary
+// detector. Without this gating, zsh output that happens to contain
+// `MOCK_PROMPT_BYTES` (e.g. a coloured `$` glyph in an oh-my-zsh themed
+// prompt) would mis-close the active block and drop the bytes that
+// follow, producing the user-visible "ls → lls", "cd data → s" / "cd d"
+// command-mangling symptoms.
+//
+// Conversely, the mock bridge (shell `/bin/mock`) MUST still observe
+// mock-prompt closes, otherwise the in-browser dev flow would leave
+// every block permanently open. The two tests below pin both sides of
+// that selection.
+describe('connectSession — boundary-detector selection by bridge kind', () => {
+  // Small helper: stateful fake block store that records appends +
+  // completeBlock calls so we can observe what the router did with
+  // the pty_data bytes.
+  function makeBlockRecorder() {
+    let active: BlockId | null = null;
+    const appends: Array<{ id: BlockId; bytes: Uint8Array }> = [];
+    const completes: Array<{ id: BlockId; exitCode: number | null }> = [];
+    const store: BlockStoreActions = {
+      createBlock: vi.fn(() => 'blk-unused' as BlockId),
+      startBlock: vi.fn(() => 'blk-unused' as BlockId),
+      setActiveBlockId: (id) => {
+        active = id;
+      },
+      getActiveBlockId: () => active,
+      appendBlockOutput: (id, chunk) => {
+        appends.push({ id, bytes: new Uint8Array(chunk) });
+      },
+      completeBlock: (id, exitCode) => {
+        completes.push({ id, exitCode });
+        if (active === id) active = null;
+      },
+      cancelBlock: vi.fn(),
+      errorBlock: vi.fn(),
+      getRunningBlockIds: vi.fn(() => [] as readonly BlockId[]),
+    };
+    return {
+      store,
+      appends,
+      completes,
+      setActive: (id: BlockId | null) => {
+        active = id;
+      },
+    };
+  }
+
+  // Build base64 for an arbitrary Uint8Array payload. `btoa` is available
+  // under jsdom (what @quanta/ui tests run on).
+  function toB64(bytes: Uint8Array): string {
+    let s = '';
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+
+  // "hello" + the mock-prompt terminator — the exact pattern that would
+  // trigger a premature close under the legacy detector.
+  function helloThenMockPromptB64(): string {
+    const helloBytes = new TextEncoder().encode('hello');
+    const buf = new Uint8Array(helloBytes.length + MOCK_PROMPT_BYTES.length);
+    buf.set(helloBytes, 0);
+    buf.set(MOCK_PROMPT_BYTES, helloBytes.length);
+    return toB64(buf);
+  }
+
+  let unbind: (() => void) | undefined;
+  beforeEach(() => {
+    __resetRouterForTests();
+    useSessionStore.getState().reset();
+  });
+  afterEach(() => {
+    if (unbind) unbind();
+    unbind = undefined;
+    __resetRouterForTests();
+  });
+
+  it('real-shell spawn (shell !== /bin/mock): mock-prompt bytes do NOT close the block', async () => {
+    const rec = makeBlockRecorder();
+    unbind = bindBlockStore(rec.store);
+
+    const bridge = makeBridge({
+      sessionId: 'sess-real' as SessionId,
+      shell: '/bin/zsh',
+    });
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+
+    // Simulate the UI opening a block right after connect (what submitCommand
+    // would do), then the shell emitting a chunk that contains the mock
+    // terminator as a false-positive.
+    rec.setActive('blk-real' as BlockId);
+    bridge.emit({
+      kind: 'pty_data',
+      sessionId: 'sess-real',
+      seq: 0,
+      bytesB64: helloThenMockPromptB64(),
+    });
+
+    // The real-shell install path should have passed `detector: null`, so
+    // the whole chunk flows verbatim and the block stays open.
+    expect(rec.completes).toHaveLength(0);
+    expect(rec.appends).toHaveLength(1);
+    // 5 ("hello") + 11 (MOCK_PROMPT_BYTES) = 16 bytes.
+    expect(rec.appends[0]!.bytes.length).toBe(16);
+    expect(rec.store.getActiveBlockId()).toBe('blk-real');
+
+    await conn.close();
+  });
+
+  it('mock bridge spawn (shell === /bin/mock): mock-prompt bytes DO close the block (legacy)', async () => {
+    // Backwards-compat guard: the in-browser mock workflow relies on the
+    // mock boundary detector to close each command's block. If a future
+    // change flips the default the wrong way, the dev mock UI would
+    // silently break — this test pins it.
+    const rec = makeBlockRecorder();
+    unbind = bindBlockStore(rec.store);
+
+    const bridge = makeBridge({
+      sessionId: 'sess-mock' as SessionId,
+      shell: '/bin/mock',
+    });
+    const conn = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+    });
+
+    rec.setActive('blk-mock' as BlockId);
+    bridge.emit({
+      kind: 'pty_data',
+      sessionId: 'sess-mock',
+      seq: 0,
+      bytesB64: helloThenMockPromptB64(),
+    });
+
+    // Mock bridge → mock detector → block closes, pre-boundary bytes land.
+    expect(rec.completes).toEqual([{ id: 'blk-mock', exitCode: 0 }]);
+    // "hello" appended; the 11 terminator bytes are consumed by the
+    // detector and NOT forwarded as output.
+    expect(rec.appends).toHaveLength(1);
+    expect(rec.appends[0]!.bytes.length).toBe(5);
+
+    await conn.close();
   });
 });

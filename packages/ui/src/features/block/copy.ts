@@ -7,6 +7,7 @@
  */
 
 import { concatChunks, useBlockStore } from '../../entities/block/index.js';
+import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
 
 export type CopyScope = 'command' | 'output';
 
@@ -33,10 +34,14 @@ const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
 export async function copyBlock(options: CopyOptions): Promise<CopyResult> {
   const block = useBlockStore.getState().entities[options.blockId];
   if (!block) return { ok: false, reason: 'not-found' };
+  // Output: decode bytes and strip ANSI escapes before writing to the
+  // clipboard. Users paste into editors / chats / tickets — raw ESC bytes
+  // (e.g. zsh's PROMPT_EOL_MARK `\e[1m\e[7m%\e[0m`) would render as tofu
+  // glyphs in almost every surface. Parity with `exportAsText`.
   const text =
     options.scope === 'command'
       ? block.command
-      : DECODER.decode(concatChunks(block.outputChunks));
+      : stripAnsi(DECODER.decode(concatChunks(block.outputChunks)));
   const writer = options.writeText ?? defaultWriter();
   if (!writer) return { ok: false, reason: 'no-clipboard' };
   try {

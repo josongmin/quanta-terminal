@@ -13,6 +13,7 @@
 import { bootstrapUi } from '@quanta/ui';
 import { invoke } from '@tauri-apps/api/core';
 import { createHostBridge } from './bridge-factory.js';
+import { installDragDropBridge } from './drag-drop.js';
 import { installUnhandledRejectionHandlers, setCrashReporter } from './unhandled-rejection.js';
 import { checkForUpdates } from './updater.js';
 
@@ -113,6 +114,11 @@ async function main() {
     );
   }
   bootstrapUi({ root, bridge });
+  // External file drag-and-drop → composer. Wired after UI boot so the
+  // insert-text bus has a listener attached. The helper swallows its own
+  // setup failures (e.g. non-Tauri runtime), so we don't branch on bridge
+  // kind here.
+  void installDragDropBridge();
   // Schedule after UI boot so a slow updater endpoint doesn't gate paint.
   void scheduleUpdateProbe();
 }

@@ -33,6 +33,14 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize 
 use crate::domain::{PtyExit, PtySize, PtySpec};
 use crate::ports::{PtyError, PtyHandle, PtyPort};
 
+// Unix-only termios helpers used to disable the PTY line-discipline ECHO
+// flags before the child process inherits it. See `disable_echo_on_master`
+// for the full rationale.
+#[cfg(unix)]
+use std::os::fd::{BorrowedFd, RawFd};
+#[cfg(unix)]
+use nix::sys::termios::{tcgetattr, tcsetattr, LocalFlags, SetArg};
+
 /// Bounded capacity for the reader thread's channel. Backpressure on the
 /// reader thread naturally throttles the PTY; 256 chunks × 8 KiB = 2 MiB
 /// of in-flight output before the thread parks.
@@ -66,6 +74,112 @@ enum ReadMsg {
     Err(String),
 }
 
+/// Clear the ECHO family of `LocalFlags` on the **slave** pty's line
+/// discipline so the child shell never echoes bytes we write.
+///
+/// # Why master doesn't work (was the bug)
+///
+/// On macOS and Linux the pseudo-terminal pair has **separate** termios
+/// on the master and slave sides. Quoting `pty(4)` on macOS: "Ioctls
+/// affecting the underlying device driver such as `TIOC_{GET,SET}ATTR`
+/// are only honored on the slave side." Setting `ECHO` off on the
+/// master fd returns `Ok(())` but is a no-op on the line discipline,
+/// so the child (which only sees the slave) still runs with `ECHO`
+/// enabled and we keep getting every keystroke echoed back.
+///
+/// The previous implementation of this helper set termios on the master
+/// fd and the bug survived. This version opens the slave fd via
+/// `ptsname` and sets `ECHO` off there before the child is spawned —
+/// which is what `spawn()`-based TTY frontends (libvte, hyper, iTerm2)
+/// all do.
+///
+/// # Why turning off ECHO is safe
+///
+///   * Our Composer is the source of user input; we never rely on the
+///     shell to display keystrokes back to us.
+///   * TUI apps (vim, less, htop) call `tcsetattr(... raw)` themselves
+///     when they want total line-discipline control; our change is a
+///     no-op for those apps because they overwrite the flags.
+///   * Windows ConPTY has no termios concept; the whole helper is gated
+///     on `#[cfg(unix)]`, and the caller skips it on Windows.
+///
+/// Failures are logged but non-fatal — echo comes back, which is
+/// better than refusing to spawn a shell.
+#[cfg(unix)]
+fn disable_echo_on_pty_slave(master_fd: RawFd) -> Result<(), PtyError> {
+    use std::ffi::CStr;
+
+    // `ptsname(master_fd)` returns a pointer to a path like `/dev/pts/3`
+    // (Linux) or `/dev/ttys005` (macOS). The returned pointer is backed
+    // by a statically-allocated buffer in libc and is NOT thread-safe;
+    // we copy the string out immediately so nothing else in this
+    // process can race us.
+    //
+    // SAFETY: `master_fd` is a live, owned fd returned by
+    // `MasterPty::as_raw_fd()`. `ptsname` reads the kernel's pts mapping
+    // for that fd and returns a pointer to its own static storage; we
+    // do not outlive that pointer here.
+    #[allow(unsafe_code)]
+    let slave_path = unsafe {
+        let ptr = libc::ptsname(master_fd);
+        if ptr.is_null() {
+            return Err(PtyError::Spawn(format!(
+                "ptsname({master_fd}) returned null: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        CStr::from_ptr(ptr).to_owned()
+    };
+
+    // Open the slave read-write with O_NOCTTY so this open does not
+    // steal the slave as our controlling terminal (the child needs to
+    // claim it). `open()` on an already-in-use pts is allowed and just
+    // returns another fd referencing the same tty struct, so setting
+    // termios here propagates to the child.
+    //
+    // SAFETY: `slave_path.as_ptr()` points into the owned `CString`
+    // which lives for the duration of the call.
+    #[allow(unsafe_code)]
+    let slave_fd = unsafe {
+        libc::open(slave_path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY)
+    };
+    if slave_fd < 0 {
+        return Err(PtyError::Spawn(format!(
+            "open slave {slave_path:?}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // Ensure the slave fd is closed even if tcsetattr / tcgetattr panic.
+    struct AutoClose(RawFd);
+    impl Drop for AutoClose {
+        fn drop(&mut self) {
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+    let _guard = AutoClose(slave_fd);
+
+    // SAFETY: `slave_fd` is live until `_guard` drops.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { BorrowedFd::borrow_raw(slave_fd) };
+    let mut t = tcgetattr(borrowed)
+        .map_err(|e| PtyError::Spawn(format!("tcgetattr on pts slave: {e}")))?;
+    t.local_flags.remove(
+        LocalFlags::ECHO
+            | LocalFlags::ECHOE
+            | LocalFlags::ECHOK
+            | LocalFlags::ECHOKE
+            | LocalFlags::ECHOCTL
+            | LocalFlags::ECHONL,
+    );
+    tcsetattr(borrowed, SetArg::TCSANOW, &t)
+        .map_err(|e| PtyError::Spawn(format!("tcsetattr on pts slave: {e}")))?;
+    Ok(())
+}
+
 fn open_blocking(spec: &PtySpec) -> Result<PortablePtyHandle, PtyError> {
     let sys = native_pty_system();
     let pair = sys
@@ -89,6 +203,24 @@ fn open_blocking(spec: &PtySpec) -> Result<PortablePtyHandle, PtyError> {
     // parent's env unchanged — documented as a known gap.
     for (k, v) in &spec.env {
         cmd.env(k, v);
+    }
+
+    // Disable line-discipline ECHO on the PTY BEFORE spawning the child
+    // so the shell inherits a termios with ECHO off. See the full
+    // rationale on `disable_echo_on_pty_slave`. The previous
+    // implementation set termios on the MASTER fd, which on macOS/Linux
+    // is a no-op per `pty(4)` — causing the user-visible "ls → lls"
+    // duplication (every character gets doubled because the shell's
+    // readline echoes AND the line-discipline echoes). The fix opens
+    // the slave via `ptsname` and clears ECHO there.
+    //
+    // Failures are logged but non-fatal. If the platform doesn't honor
+    // the request, the UI sees echoed bytes — ugly but not broken.
+    #[cfg(unix)]
+    if let Some(fd) = pair.master.as_raw_fd() {
+        if let Err(err) = disable_echo_on_pty_slave(fd) {
+            tracing::warn!(%err, "portable-pty: failed to disable pty ECHO; echo will appear in block output");
+        }
     }
 
     let child = pair

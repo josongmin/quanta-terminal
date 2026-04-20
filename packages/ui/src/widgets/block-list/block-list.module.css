@@ -29,22 +29,29 @@
 }
 
 .inner {
-  position: relative;
+  /*
+   * Switched from absolutely-positioned virtualizer rows to a natural
+   * flex column. The virtualizer math used `rowsForBlock × 16px` to
+   * anchor each card, but BlockCard's real layout (header + padding +
+   * body) routinely renders taller than that prediction, which caused
+   * cards to overlap visually (the user's "겹치는거 다 나오게" report).
+   *
+   * For interactive shells with a handful of cards on screen, a plain
+   * flex column is the right trade-off: simple, correct, and cheap.
+   * Per-card virtualization can return later as a card-height-aware
+   * layout (not row-grid-based) once the PTY-side boundary signals
+   * stabilize.
+   */
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-3); /* 12px gap between cards */
   width: 100%;
+  min-height: 100%;
 }
 
 .row {
-  position: absolute;
-  top: 0;
-  left: 0;
+  /* Stacks naturally in the flex column; no absolute positioning. */
   width: 100%;
-  padding-bottom: var(--q-space-3); /* 12px gap between cards */
-  /* Cell-area pointer-events are owned by TerminalCanvas' screenToCell. The
-     card itself reclaims pointer events for its header + buttons. */
-  pointer-events: none;
-}
-.row > * {
-  pointer-events: auto;
 }
 
 .empty {

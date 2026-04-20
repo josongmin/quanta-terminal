@@ -9,9 +9,17 @@
  *   - a health pulse dot that mirrors the per-session `health` value;
  *   - a `×` close button that fades in on hover / focus.
  *
+ * DOM shape:
+ *   - The outer tab is a `<div role="tab">` — NOT a `<button>` — because it
+ *     contains interactive children (the kebab menu `<button>` and the
+ *     close `[role=button]` span). Native buttons may not nest interactive
+ *     descendants (HTML spec + React's `validateDOMNesting` warning), so we
+ *     reach for the ARIA-equivalent with explicit keyboard support below.
+ *
  * Keyboard:
- *   - Tabs are focusable (native `<button>`); Enter/Space activate via the
- *     default button click behavior, so we only need `onClick` here.
+ *   - Tabs are focusable (`tabIndex=0`). Enter/Space activate the tab —
+ *     these used to come free from the native button element; with a `div`
+ *     we wire them explicitly in `handleKeyDown`.
  *   - Delete / Backspace on a focused tab closes it — matches Chrome's tab
  *     affordance. We listen via `onKeyDown` on the tab element (scoped, not
  *     global) so it doesn't leak outside the tabstrip.
@@ -63,17 +71,17 @@ export function SessionTabs(props: SessionTabsProps) {
   if (tabs.length === 0) {
     return (
       <div className={styles.row} role="tablist" aria-label={t('sessionTabs.rowLabel')}>
-        <button
-          type="button"
+        <div
           role="tab"
           aria-selected="true"
+          aria-disabled="true"
           aria-label={t('sessionTabs.noActive')}
-          className={cx(styles.tab, styles.active)}
-          disabled
+          className={cx(styles.tab, styles.active, styles.disabled)}
+          data-disabled="true"
         >
           <span className={cx(styles.pulse)} aria-hidden />
           <span className={styles.label}>session</span>
-        </button>
+        </div>
         {onCreate && <NewTabButton onCreate={onCreate} />}
       </div>
     );
@@ -103,7 +111,7 @@ interface SessionTabProps {
 }
 
 function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
-  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const tabRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLSpanElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dropSide, setDropSide] = useState<'none' | 'left' | 'right'>('none');
@@ -133,7 +141,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
     if (tab.isActive && !wasActiveRef.current) {
       // jsdom lacks `scrollIntoView`; guard the call so unit tests don't
       // throw while still getting the effect in browsers.
-      const el = btnRef.current;
+      const el = tabRef.current;
       if (el && typeof el.scrollIntoView === 'function') {
         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
@@ -158,13 +166,22 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
   );
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLButtonElement>) => {
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      // Native buttons handle Enter/Space activation for free; with a div
+      // we wire it explicitly. Only fire when the event originates on the
+      // tab element itself — interactive descendants (kebab, close) handle
+      // their own Enter/Space and should not re-activate the parent tab.
+      if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        onSelect?.(tab.id);
+        return;
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         onClose?.(tab.id);
       }
     },
-    [onClose, tab.id],
+    [onClose, onSelect, tab.id],
   );
 
   const handleMenuToggle = useCallback(
@@ -215,7 +232,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
   // on drop we read it back and dispatch `reorderSessions` against the store.
   // The `dropSide` state tracks the visual insertion indicator.
   const handleDragStart = useCallback(
-    (e: DragEvent<HTMLButtonElement>) => {
+    (e: DragEvent<HTMLDivElement>) => {
       e.stopPropagation();
       if (e.dataTransfer) {
         e.dataTransfer.setData(DND_TAB_MIME, tab.id);
@@ -225,7 +242,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
     },
     [tab.id],
   );
-  const handleDragOver = useCallback((e: DragEvent<HTMLButtonElement>) => {
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     const dt = e.dataTransfer;
     if (!dt) return;
     // Only accept drops of our own tab payload. This guard prevents random
@@ -243,7 +260,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
     setDropSide('none');
   }, []);
   const handleDrop = useCallback(
-    (e: DragEvent<HTMLButtonElement>) => {
+    (e: DragEvent<HTMLDivElement>) => {
       const dt = e.dataTransfer;
       if (!dt) return;
       const payload = dt.getData(DND_TAB_MIME) || dt.getData('text/plain');
@@ -268,10 +285,10 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
   const ariaLabel = buildAriaLabel(tab);
 
   return (
-    <button
-      type="button"
+    <div
       role="tab"
-      ref={btnRef}
+      ref={tabRef}
+      tabIndex={0}
       aria-selected={tab.isActive}
       aria-label={ariaLabel}
       title={ariaLabel}
@@ -339,12 +356,13 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
       {onClose && (
         <span
           role="button"
-          // The close affordance sits INSIDE the outer tab button because the
+          // The close affordance sits inside the outer tab element so the
           // hover-fade animation is positioned relative to the tab chrome.
-          // Nested interactive elements are technically invalid HTML, but this
-          // pattern is widespread (Chrome tabs, Terminal.app tabs) and every
-          // current browser dispatches click events to the inner target as
-          // long as we stopPropagation on click AND mousedown — which we do.
+          // The parent is a `<div role="tab">` (not a `<button>`), so nesting
+          // this role=button span — and the kebab `<button>` earlier — is
+          // spec-valid HTML and no longer trips React's validateDOMNesting.
+          // We still stopPropagation on click + mousedown so the outer tab's
+          // activation handler doesn't fire alongside our close action.
           // For keyboard access we expose the close as tabbable (tabIndex=0)
           // and handle Enter/Space locally so screen-reader + keyboard users
           // can close a tab without relying on Delete/Backspace on the parent.
@@ -365,7 +383,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
           {'\u00D7'}
         </span>
       )}
-    </button>
+    </div>
   );
 }
 

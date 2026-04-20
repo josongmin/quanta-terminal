@@ -56,6 +56,21 @@
   animation: q-caret-pulse 1.1s var(--q-ease-in-out) infinite;
 }
 
+/*
+ * Suppress the app-level `:focus-visible` outline (shared/config/app.css)
+ * on this textarea. The composer card already paints its own focus
+ * affordance via `.wrap.focused` (border + box-shadow glow), so the
+ * global 2px outline would stack into a visible double-ring. Higher
+ * specificity via the `&:focus-visible` pair beats the bare
+ * `:focus-visible` rule in the cascade regardless of stylesheet order.
+ */
+.editor:focus,
+.editor:focus-visible {
+  outline: none;
+  outline-offset: 0;
+  box-shadow: none;
+}
+
 .editor::placeholder {
   color: var(--q-fg-faint);
 }

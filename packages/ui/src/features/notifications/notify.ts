@@ -5,10 +5,15 @@
  * when neither is available / permission was denied.
  *
  * Permission flow:
- *   - `ensurePermission()` resolves once on boot; the caller may call it
- *     again later (e.g. when the user toggles the setting on). It never
- *     throws: a denied permission resolves `false` and subsequent
- *     `notify()` calls short-circuit.
+ *   - `ensureNotificationPermission()` is READ-ONLY by default: it reports
+ *     the current permission (granted/denied/default) without prompting.
+ *     Browsers (Chrome/Safari/Tauri webview) reject
+ *     `Notification.requestPermission()` calls made outside a user gesture
+ *     — calling it from a mount-time `useEffect` logs the error
+ *     "Notification prompting can only be done from a user gesture" to the
+ *     console. So the prompt is gated behind an explicit `allowPrompt: true`
+ *     option and must be invoked from a real interaction handler (e.g. the
+ *     settings-panel toggle onChange).
  *   - When the Notification API is absent entirely (non-browser host), the
  *     wrapper never asks for permission and treats every notify as a
  *     success when the bridge is available, or a silent no-op otherwise.
@@ -26,16 +31,35 @@ export interface NotifyOptions {
 
 export type NotifyResult = 'ok' | 'no-permission' | 'no-api' | 'failed';
 
+export interface EnsurePermissionOptions {
+  /**
+   * When `true`, and the current permission is `'default'`, call
+   * `Notification.requestPermission()` to show the browser prompt. MUST be
+   * invoked from within a user-gesture handler (click/keydown/etc.) —
+   * otherwise the browser will reject the call and log a console error.
+   * Defaults to `false`: the function just reports the current state.
+   */
+  readonly allowPrompt?: boolean;
+}
+
 /**
- * Request Notification permission from the browser. Returns `true` when
- * permission has been granted (either just now or previously). Calls with a
- * non-browser host resolve `false` without prompting.
+ * Report / request Notification permission. By default this is a read-only
+ * probe (no prompt) so it is safe to call from non-gesture code paths like
+ * mount-time effects. Pass `{ allowPrompt: true }` from a user-gesture
+ * handler when the caller genuinely wants to surface the permission prompt.
+ *
+ * Returns `true` only when permission is currently granted. Non-browser
+ * hosts and denied permissions resolve `false`.
  */
-export async function ensureNotificationPermission(): Promise<boolean> {
+export async function ensureNotificationPermission(
+  options: EnsurePermissionOptions = {},
+): Promise<boolean> {
   if (typeof Notification === 'undefined') return false;
   const current = Notification.permission;
   if (current === 'granted') return true;
   if (current === 'denied') return false;
+  // current === 'default'
+  if (!options.allowPrompt) return false;
   try {
     const granted = await Notification.requestPermission();
     return granted === 'granted';

@@ -122,12 +122,41 @@ describe('ensureNotificationPermission', () => {
     await expect(ensureNotificationPermission()).resolves.toBe(false);
   });
 
-  it('requests permission when default and resolves based on user choice', async () => {
+  it('does NOT prompt when permission is default and allowPrompt is unset (avoids user-gesture error)', async () => {
     const { ctor, requestMock } = makeNotificationCtor('default');
     requestMock.mockResolvedValue('granted');
     (globalThis as unknown as { Notification: NotificationCtor }).Notification = ctor;
-    await expect(ensureNotificationPermission()).resolves.toBe(true);
+    await expect(ensureNotificationPermission()).resolves.toBe(false);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT prompt when allowPrompt is explicitly false', async () => {
+    const { ctor, requestMock } = makeNotificationCtor('default');
+    requestMock.mockResolvedValue('granted');
+    (globalThis as unknown as { Notification: NotificationCtor }).Notification = ctor;
+    await expect(
+      ensureNotificationPermission({ allowPrompt: false }),
+    ).resolves.toBe(false);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it('requests permission when default AND allowPrompt is true, resolving based on user choice', async () => {
+    const { ctor, requestMock } = makeNotificationCtor('default');
+    requestMock.mockResolvedValue('granted');
+    (globalThis as unknown as { Notification: NotificationCtor }).Notification = ctor;
+    await expect(
+      ensureNotificationPermission({ allowPrompt: true }),
+    ).resolves.toBe(true);
     expect(requestMock).toHaveBeenCalled();
+  });
+
+  it('short-circuits to true when permission already granted without prompting, even with allowPrompt true', async () => {
+    const { ctor, requestMock } = makeNotificationCtor('granted');
+    (globalThis as unknown as { Notification: NotificationCtor }).Notification = ctor;
+    await expect(
+      ensureNotificationPermission({ allowPrompt: true }),
+    ).resolves.toBe(true);
+    expect(requestMock).not.toHaveBeenCalled();
   });
 });
 

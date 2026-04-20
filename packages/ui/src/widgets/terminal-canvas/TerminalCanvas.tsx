@@ -276,6 +276,25 @@ export const TerminalCanvas = forwardRef<TerminalCanvasHandle, TerminalCanvasPro
       const dpr = dprProp ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
       plumbing.backend.mount({ container: el, metrics, dpr });
       plumbing.hitTest.applyMetrics(metrics);
+      // Wire the backend's font-load / visibility invalidation hook so that
+      // a late web-font arrival OR a tab refocus forces a fresh rAF tick.
+      // The hook re-rasters every visible row by marking all rows dirty
+      // and scheduling a frame; without this the atlas gets emptied by
+      // the backend but the renderer has nothing new to draw so the frame
+      // remains in the stale fallback-font state.
+      const maybeSetHook = (
+        plumbing.backend as BackendContract & {
+          _setInvalidationHook?: (hook: (() => void) | null) => void;
+        }
+      )._setInvalidationHook;
+      if (typeof maybeSetHook === 'function') {
+        maybeSetHook.call(plumbing.backend, () => {
+          const dims2 = mirror.getDimensions();
+          const damage = plumbing.buffer.peekDamage();
+          for (let r = 0; r < dims2.rows; r += 1) damage.addRow(r);
+          plumbing.renderer.scheduleFrame();
+        });
+      }
       // Seed with the mirror's current state.
       const dims = mirror.getDimensions();
       const rows: Row[] = [];
@@ -287,6 +306,9 @@ export const TerminalCanvas = forwardRef<TerminalCanvasHandle, TerminalCanvasPro
       plumbing.buffer.writeSnapshot(rows);
       plumbing.renderer.start();
       return () => {
+        if (typeof maybeSetHook === 'function') {
+          maybeSetHook.call(plumbing.backend, null);
+        }
         plumbing.renderer.dispose();
         plumbing.buffer.dispose();
         plumbing.backend.unmount();

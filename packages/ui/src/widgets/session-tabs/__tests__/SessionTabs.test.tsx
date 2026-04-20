@@ -26,7 +26,10 @@ describe('<SessionTabs />', () => {
     render(<SessionTabs />);
     const tab = screen.getByRole('tab');
     expect(tab).toHaveAttribute('aria-selected', 'true');
-    expect(tab).toBeDisabled();
+    // Tab is a `<div role="tab">` (the outer shell contains nested interactive
+    // controls and can't be a native button), so `aria-disabled` is how we
+    // signal the fallback state to AT users.
+    expect(tab).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('renders one tab per session with shell basename visible', () => {
@@ -38,7 +41,7 @@ describe('<SessionTabs />', () => {
     });
     render(<SessionTabs />);
     const tab = screen.getByTestId('session-tab-sess-1');
-    expect(tab).toBeEnabled();
+    expect(tab).not.toHaveAttribute('aria-disabled', 'true');
     expect(tab).toHaveAttribute('aria-selected', 'true');
     expect(tab).toHaveTextContent(/zsh/);
   });
@@ -115,5 +118,50 @@ describe('<SessionTabs />', () => {
     const tab = screen.getByTestId('session-tab-sess-1');
     fireEvent.keyDown(tab, { key: 'Backspace' });
     expect(onClose).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('does not nest a <button> inside another <button>', () => {
+    // Regression: the outer tab used to be a native `<button>`, which made
+    // the kebab `<button>` and `<button>` menu items a validateDOMNesting
+    // violation + HTML5 spec violation. The outer element is now a
+    // `<div role="tab">` so nested buttons are legal.
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: 'a' as SessionId, shell: '/bin/zsh', health: 'ready' });
+    coll.addSession({ id: 'b' as SessionId, shell: '/bin/bash', health: 'ready' });
+    const { container } = render(<SessionTabs onClose={vi.fn()} />);
+    expect(container.querySelectorAll('button button').length).toBe(0);
+  });
+
+  it('activates the tab on Enter when focused (ARIA tab keyboard pattern)', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: 'a' as SessionId, shell: '/bin/zsh', health: 'ready' });
+    coll.addSession({ id: 'b' as SessionId, shell: '/bin/bash', health: 'ready' });
+    const onSelect = vi.fn();
+    render(<SessionTabs onSelect={onSelect} />);
+    const tab = screen.getByTestId('session-tab-b');
+    fireEvent.keyDown(tab, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith('b');
+  });
+
+  it('activates the tab on Space when focused', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: 'a' as SessionId, shell: '/bin/zsh', health: 'ready' });
+    coll.addSession({ id: 'b' as SessionId, shell: '/bin/bash', health: 'ready' });
+    const onSelect = vi.fn();
+    render(<SessionTabs onSelect={onSelect} />);
+    const tab = screen.getByTestId('session-tab-b');
+    fireEvent.keyDown(tab, { key: ' ' });
+    expect(onSelect).toHaveBeenCalledWith('b');
+  });
+
+  it('keeps the tab focusable in the tab order (tabIndex=0)', () => {
+    useSessionsStore.getState().addSession({
+      id: 'sess-1' as SessionId,
+      shell: '/bin/zsh',
+      health: 'ready',
+    });
+    render(<SessionTabs />);
+    const tab = screen.getByTestId('session-tab-sess-1');
+    expect(tab.getAttribute('tabIndex')).toBe('0');
   });
 });

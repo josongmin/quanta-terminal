@@ -18,18 +18,22 @@
         "height": 760,
         "minWidth": 640,
         "minHeight": 400,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
+        "titleBarStyle": "Visible",
+        "hiddenTitle": false,
         "resizable": true,
-        "fullscreen": false
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "fullscreen": false,
+        "dragDropEnabled": true
       }
     ],
     "security": {
       "csp": null
     },
-    "macOSPrivateApi": true
+    "macOSPrivateApi": false
   },
   "bundle": {
     "active": true,
