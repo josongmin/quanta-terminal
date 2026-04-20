@@ -66,6 +66,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { AnsiParser } from '../../shared/lib/ansi-parser/parser.js';
 import { GridMirror } from '../../shared/lib/grid-mirror/GridMirror.js';
 import type {
   ClipboardRequestPayload,
@@ -261,6 +262,74 @@ describe('OSC 52 — clipboard_request envelope', () => {
     if (r.outcome === 'discarded') {
       expect(r.reason).toBe('stale_sequence');
     }
+  });
+});
+
+describe('Byte-level parser behaviour for OSC 0/2/52 — envelope-only contract', () => {
+  // The UI-side `AnsiParser` (shared/lib/ansi-parser/parser.ts) is a
+  // block-mode parser — it intentionally handles OSC 8 only and swallows
+  // every other OSC number up to the terminator (BEL or ESC \). Production
+  // metadata (title, clipboard) reaches the UI via Rust-emitted envelopes,
+  // NOT via the TS parser. These bytes-level tests pin that contract so a
+  // future expansion of the TS parser cannot silently duplicate work the
+  // engine already does.
+
+  function parse(raw: string) {
+    const parser = new AnsiParser();
+    const out = [...parser.feed(new TextEncoder().encode(raw))];
+    out.push(...parser.flush());
+    return out;
+  }
+
+  it('OSC 0;<title> BEL is consumed: zero spans emitted, no link side-effect', () => {
+    // `ESC ] 0 ; foo BEL` — title OSC with BEL terminator. The parser
+    // must not leak the payload into the visible text stream.
+    const spans = parse('\x1b]0;foo\x07after');
+    // Only 'after' should survive — the OSC was swallowed cleanly.
+    expect(spans).toEqual([{ text: 'after' }]);
+  });
+
+  it('OSC 2;<title> ESC\\ is consumed (ST terminator), no spans emitted for title bytes', () => {
+    const spans = parse('\x1b]2;my title\x1b\\tail');
+    expect(spans).toEqual([{ text: 'tail' }]);
+  });
+
+  it('OSC 52;c;<base64> ESC\\ is consumed, no spans emitted, no link applied', () => {
+    // Note: some xterm forks also accept BEL here; the parser tolerates
+    // both. The assertion is that none of the payload leaks.
+    const spans = parse('\x1b]52;c;aGVsbG8=\x1b\\x');
+    expect(spans).toEqual([{ text: 'x' }]);
+  });
+
+  it('OSC 52;p;? (clipboard query) is consumed silently; no "?" leaks into text', () => {
+    const spans = parse('\x1b]52;p;?\x07END');
+    expect(spans).toEqual([{ text: 'END' }]);
+  });
+
+  it('OSC 52 does not fire any AnsiModeEvent (mode events are DEC-private-CSI only)', () => {
+    // Sanity-check: `onMode` is scoped to `CSI ?...h/l`. OSC of any kind
+    // must not trigger a mode event, so consumers applying parser events
+    // 1:1 against the mirror cannot accidentally disturb mode state from
+    // clipboard/title traffic.
+    const parser = new AnsiParser();
+    let count = 0;
+    parser.onMode = () => {
+      count += 1;
+    };
+    parser.feed(new TextEncoder().encode('\x1b]52;c;aGVsbG8=\x1b\\'));
+    parser.flush();
+    expect(count).toBe(0);
+  });
+
+  it('OSC 0 with embedded ESC-that-is-not-ST aborts safely', () => {
+    // Defensive: a raw ESC inside an OSC payload that is NOT followed by `\`
+    // aborts the OSC and returns to Ground, per the parser contract. We
+    // assert nothing crashes and the stream ends cleanly.
+    const spans = parse('\x1b]0;title\x1bxtail');
+    // The OSC was aborted; "tail" survives as Ground text. The `x` byte
+    // after the lone ESC is handled by the Escape state's default branch
+    // (silently dropped) — so the visible tail is "tail" only, NOT "xtail".
+    expect(spans).toEqual([{ text: 'tail' }]);
   });
 });
 

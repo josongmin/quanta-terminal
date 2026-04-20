@@ -400,4 +400,94 @@ describe('IME x bracketed-paste interactions (e2e)', () => {
     expect(bytesOut.length).toBe(0);
     expect(handle.state().kind).toBe('Idle');
   });
+
+  // ------------------------------------------------------------------
+  // 13. A commit payload containing an embedded end-sentinel must ALSO
+  //     be stripped, because the IME commit flows through
+  //     `Paste.encode()` (ADR 0018 I-4). A malicious (or pathological)
+  //     IME that produces the end-sentinel verbatim in `compositionend`
+  //     data should never be able to forge an early close of the
+  //     bracketed-paste window.
+  // ------------------------------------------------------------------
+  it('IME commit containing ESC[201~ is stripped before wrapping (parity with paste path)', () => {
+    harness = makeHarness({ bracketedPaste: true });
+    const { container, bytesOut } = harness;
+
+    // Build a payload "A" + ESC[201~ + "B" directly through
+    // compositionend.data. In practice no IME does this; we pin the
+    // defensive behavior anyway because it is a free safety property.
+    const embedded =
+      'A' + String.fromCharCode(0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e) + 'B';
+    container.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+    container.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'ㅎ' }));
+    container.dispatchEvent(new CompositionEvent('compositionend', { data: embedded }));
+
+    expect(bytesOut.length).toBe(1);
+    // Embedded END sentinel stripped, outer START/END still applied.
+    expect(hex(bytesOut)).toBe(`${START_HEX}4142${END_HEX}`);
+  });
+
+  // ------------------------------------------------------------------
+  // 14. Byte-reference immutability: the Uint8Array delivered to
+  //     onBytesOut must not alias a buffer that we later mutate. Pin
+  //     this by grabbing the reference and confirming that a follow-up
+  //     paste with different content does not retroactively alter the
+  //     earlier chunk.
+  // ------------------------------------------------------------------
+  it('previously emitted chunks are not mutated by subsequent emissions', () => {
+    harness = makeHarness({ bracketedPaste: true });
+    const { container, bytesOut } = harness;
+    dispatchPaste(container, 'first');
+    const firstRef = bytesOut[0]!;
+    const firstSnapshot = new Uint8Array(firstRef); // copy
+
+    dispatchPaste(container, 'SECOND');
+    container.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+    container.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'ㅎ' }));
+    container.dispatchEvent(new CompositionEvent('compositionend', { data: '한' }));
+
+    // The original reference still deep-equals its captured snapshot.
+    expect(Array.from(firstRef)).toEqual(Array.from(firstSnapshot));
+  });
+
+  // ------------------------------------------------------------------
+  // 15. Snapshot epoch distinct: flipping mode and re-emitting should
+  //     produce a different `snapshotEpoch` on each Paste.encode call.
+  //     We observe this indirectly by flipping modes between two pastes
+  //     and verifying both their wrapping semantics match the CURRENT
+  //     mode at emission time (not captured at mount time).
+  // ------------------------------------------------------------------
+  it('each paste encode reads the mode fresh: wrap ON → OFF → ON produces matching outputs', () => {
+    harness = makeHarness({ bracketedPaste: true });
+    const { container, bytesOut, mirror } = harness;
+
+    dispatchPaste(container, 'a'); // ON → wrapped
+    mirror.applyMode({ bracketedPaste: false });
+    dispatchPaste(container, 'b'); // OFF → bare
+    mirror.applyMode({ bracketedPaste: true });
+    dispatchPaste(container, 'c'); // ON again → wrapped
+
+    expect(bytesOut.length).toBe(3);
+    expect(hex([bytesOut[0]!])).toBe(`${START_HEX}61${END_HEX}`); // 'a'
+    expect(hex([bytesOut[1]!])).toBe('62'); // 'b'
+    expect(hex([bytesOut[2]!])).toBe(`${START_HEX}63${END_HEX}`); // 'c'
+  });
+
+  // ------------------------------------------------------------------
+  // 16. Multi-sentinel embedded payload: multiple interleaved START +
+  //     END sentinels in the payload all strip, leaving only the outer
+  //     frame.
+  // ------------------------------------------------------------------
+  it('paste payload with multiple embedded START and END sentinels strips every occurrence', () => {
+    harness = makeHarness({ bracketedPaste: true });
+    const { container, bytesOut } = harness;
+    const S = String.fromCharCode(0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e); // ESC[200~
+    const E = String.fromCharCode(0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e); // ESC[201~
+    const payload = `X${S}Y${E}Z${S}${E}`;
+    dispatchPaste(container, payload);
+
+    expect(bytesOut.length).toBe(1);
+    // Only X Y Z remain in the payload, wrapped once at the outside.
+    expect(hex(bytesOut)).toBe(`${START_HEX}58595a${END_HEX}`);
+  });
 });

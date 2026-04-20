@@ -203,4 +203,73 @@ describe('alt-screen transition (e2e, byte-driven)', () => {
     // Re-install so the afterEach teardown is idempotent-safe.
     tui = installTuiDetector();
   });
+
+  it('fully balanced enter/exit walk of depth 3 returns chrome to expanded with depth 0', () => {
+    // Regression guard: an imbalanced pop would leave residue on the depth
+    // counter; assert the strict mirror property holds for a realistic vim-
+    // in-tmux-in-vim nesting and back-out.
+    render(<ChromeProbe />);
+    act(() => {
+      __emitRawChunkForTests(ENTER_1049);
+      __emitRawChunkForTests(ENTER_1049);
+      __emitRawChunkForTests(ENTER_1049);
+    });
+    expect(useTuiStore.getState().depth).toBe(3);
+    expect(screen.getByTestId('status-bar').dataset['depth']).toBe('3');
+    act(() => {
+      __emitRawChunkForTests(EXIT_1049);
+    });
+    expect(screen.getByTestId('status-bar').dataset['depth']).toBe('2');
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('true');
+    act(() => {
+      __emitRawChunkForTests(EXIT_1049);
+    });
+    expect(screen.getByTestId('status-bar').dataset['depth']).toBe('1');
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('true');
+    act(() => {
+      __emitRawChunkForTests(EXIT_1049);
+    });
+    // Final exit collapses to inactive; status bar is gone; depth is exactly 0.
+    expect(useTuiStore.getState().depth).toBe(0);
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('false');
+    expect(screen.queryByTestId('status-bar')).toBeNull();
+  });
+
+  it('a mixed 1049/1047/47 nesting — each encoding increments depth and the matching exit unwinds one level', () => {
+    // All three DEC private modes must route through the SAME depth counter
+    // per ADR 0008; a regression that split them into per-mode counters would
+    // show up as depth != 3 after three mixed enters.
+    render(<ChromeProbe />);
+    act(() => {
+      __emitRawChunkForTests(ENTER_1049);
+      __emitRawChunkForTests(ENTER_1047);
+      __emitRawChunkForTests(ENTER_47);
+    });
+    expect(useTuiStore.getState().depth).toBe(3);
+    // Any one exit (using the canonical 1049l) pops one frame — not three.
+    act(() => {
+      __emitRawChunkForTests(EXIT_1049);
+    });
+    expect(useTuiStore.getState().depth).toBe(2);
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('true');
+  });
+
+  it('bytes emitted BEFORE a detector install are silently dropped (no store mutation leaks)', () => {
+    // Protect against a future regression where the installer races with
+    // bridge-attach and the raw observer Set is read before the detector is
+    // added. Tear down the installer, emit an enter, then re-install and
+    // confirm the store saw nothing from the pre-install emission.
+    tui.unsubscribe();
+    __emitRawChunkForTests(ENTER_1049);
+    expect(useTuiStore.getState().depth).toBe(0);
+    // Re-install; only new bytes mutate state.
+    tui = installTuiDetector();
+    render(<ChromeProbe />);
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('false');
+    act(() => {
+      __emitRawChunkForTests(ENTER_1049);
+    });
+    expect(screen.getByTestId('chrome').dataset['hidden']).toBe('true');
+    expect(useTuiStore.getState().depth).toBe(1);
+  });
 });

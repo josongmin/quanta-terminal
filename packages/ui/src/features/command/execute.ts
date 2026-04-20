@@ -37,6 +37,11 @@ import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import { useSessionStore } from '../../entities/session/index.js';
 import type { BlockId } from '../../shared/types/generated/index.js';
 import { tryGetBlockStore } from './block-store-port.js';
+// FIXME(fsd-layer-skip): the command feature consults the degraded gate so
+// the single production write path honors RFC §20 ("input disabled during
+// degraded state"). The gate is a narrow port; only the TerminalPage orchestrator
+// binds it, so the command slice stays decoupled from the degraded-mode UI.
+import { tryGetDegradedGate } from '../degraded-mode/degraded-gate.js';
 import { createLogger } from '../../shared/lib/logger.js';
 
 const log = createLogger('command.submit');
@@ -64,7 +69,7 @@ export type SubmitCommandResult =
   | { readonly ok: true; readonly blockId: BlockId }
   | {
       readonly ok: false;
-      readonly reason: 'no-session' | 'no-bridge' | 'empty';
+      readonly reason: 'no-session' | 'no-bridge' | 'empty' | 'degraded';
       readonly error?: Error;
     }
   | {
@@ -98,6 +103,17 @@ export async function submitCommand(
   const sessionId = sessionState.id;
   if (sessionId === null) {
     return { ok: false, reason: 'no-session' };
+  }
+
+  // RFC §20 / ADR 0010: while the engine is degraded, user input must not
+  // reach the PTY. We drop the bytes and bump the telemetry counter so
+  // `droppedInputs` becomes observable in the debug panel. The check runs
+  // BEFORE `startBlock` so we never leave a half-open block around.
+  const gate = tryGetDegradedGate();
+  if (gate?.isDegraded()) {
+    gate.reportDroppedInput();
+    log.debug('submit dropped: session is degraded');
+    return { ok: false, reason: 'degraded' };
   }
 
   const blockStore = tryGetBlockStore();

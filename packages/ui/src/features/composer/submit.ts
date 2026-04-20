@@ -53,7 +53,7 @@ export interface SubmitOptions {
 
 export interface SubmitResult {
   readonly ok: boolean;
-  readonly reason?: 'no-session' | 'no-bridge' | 'empty';
+  readonly reason?: 'no-session' | 'no-bridge' | 'empty' | 'degraded';
   readonly error?: Error;
 }
 

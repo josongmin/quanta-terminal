@@ -51,13 +51,23 @@ export interface TuiInstallHandle {
  */
 export function installTuiDetector(): TuiInstallHandle {
   const detector = createAltScreenDetector((ev) => {
+    // The detector today only emits alt-screen events, but the shared
+    // `AnsiModeEvent` union is wider (Phase 4 added cursor visibility,
+    // bracketed paste, mouse tracking/encoding, etc.). Branch explicitly so
+    // a future detector expansion cannot regress us into treating an
+    // unrelated mode flip as an alt-screen exit.
     if (ev.kind === 'alt_screen_enter') {
       log.debug('tui: alt-screen enter');
       useTuiStore.getState().enter();
       return;
     }
-    log.debug('tui: alt-screen exit');
-    useTuiStore.getState().exit();
+    if (ev.kind === 'alt_screen_exit') {
+      log.debug('tui: alt-screen exit');
+      useTuiStore.getState().exit();
+      return;
+    }
+    // Other mode events are not our concern — the TUI feature only cares
+    // about alt-screen for page-layout swapping.
   });
 
   const disposer = addRouterRawObserver((chunk) => {

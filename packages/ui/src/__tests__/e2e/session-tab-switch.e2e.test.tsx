@@ -369,6 +369,43 @@ describe('session tab switch (e2e, mirror swap + selection reset)', () => {
     expect(s.activeId).toBe(ID_B);
   });
 
+  it('closing the active session ALSO swings the canvas onto the surviving session (observable in the mounted tree)', async () => {
+    // This is the "actions.ts 내부 로직이 아닌 실제 전환 관찰" check. The
+    // previous test only asserts store state; here we prove the harness —
+    // which mirrors TerminalPage's own plumbing (activeId → mirror via
+    // key={activeId}) — actually re-mounts the canvas onto B when A is
+    // closed. Identity of the CellBuffer changes, the mirror identity
+    // points at B's mirror, and the grapheme at (0,0) is B's seed text.
+    const entryA = makeSessionMirror({ sessionId: ID_A, contents: ['alpha'] });
+    const entryB = makeSessionMirror({ sessionId: ID_B, contents: ['bravo'] });
+    const mirrors = new Map<SessionId, SessionMirrorEntry>([
+      [ID_A, entryA],
+      [ID_B, entryB],
+    ]);
+    const ref = createRef<TerminalCanvasHandle>();
+    render(<Harness mirrors={mirrors} canvasRef={ref as Ref<TerminalCanvasHandle>} />);
+    await flush();
+    // Anchor: starts on A.
+    const bufferA = ref.current!.cellBuffer;
+    expect(ref.current?.cellBuffer.getCell(0, 0)?.grapheme).toBe('alpha');
+    expect(ref.current!.mirrorSource).toBe(entryA.source);
+
+    // Close A — the store flips active to B, and the harness's selector
+    // re-renders, causing key={activeId} to switch and the canvas to
+    // remount with B's mirror/source.
+    act(() => {
+      useSessionsStore.getState().removeSession(ID_A);
+    });
+    await flush();
+    expect(useSessionsStore.getState().activeId).toBe(ID_B);
+    // Distinct CellBuffer — remount guarantees a fresh instance.
+    expect(ref.current!.cellBuffer).not.toBe(bufferA);
+    // Mirror / source plumbed to B, not A.
+    expect(ref.current!.mirrorSource).toBe(entryB.source);
+    // And the grid content reflects B's seed.
+    expect(ref.current?.cellBuffer.getCell(0, 0)?.grapheme).toBe('bravo');
+  });
+
   it('closing the last session leaves the collection empty and active=null (page-level respawn is out of scope)', async () => {
     act(() => {
       useSessionsStore.getState().removeSession(ID_A);

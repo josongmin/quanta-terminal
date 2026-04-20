@@ -48,35 +48,50 @@ fn dcs_complete_with_st_returns_to_ground() {
 }
 
 #[test]
-fn dcs_bel_does_not_terminate_and_print_is_swallowed() {
-    // Documented quirk: unlike OSC (which accepts BEL as an ST surrogate
-    // per xterm), DCS in the upstream `vte` state machine does **not**
-    // unhook on BEL — BEL inside DCS is just another payload byte. The
-    // trailing "Y" therefore never reaches Ground unless a proper ST is
-    // sent. This test pins that observable behaviour so any future
-    // change (e.g. swapping parsers, or relaxing DCS termination) is a
-    // deliberate, visible breakage.
-    //
-    // Production gap: if an app incorrectly terminates a DCS with BEL
-    // (rare but seen in the wild), everything after it up to the next ST
-    // is silently discarded. See test-suite report.
+fn dcs_bel_terminates_and_trailing_print_reaches_ground() {
+    // Upstream `vte` does **not** accept BEL (0x07) as an ST surrogate
+    // inside DCS. The adapter works around that by pre-filtering the
+    // byte stream: when we detect BEL inside a DCS envelope we rewrite
+    // it to `ESC \` before handing it to vte, matching the behaviour
+    // most real-world apps already expect (they use BEL for both OSC
+    // and DCS termination). This test pins the working path.
     let mut g = grid(3, 10);
     let _ = g.feed(b"\x1bPfoo\x07Y");
     let snap = g.snapshot();
     assert_eq!(
         snap.cells[0][0].grapheme.as_str(),
-        "",
-        "BEL does not terminate DCS in `vte`; trailing 'Y' stays inside the accumulator"
+        "Y",
+        "BEL must terminate the DCS so the trailing 'Y' reaches Ground"
     );
 
-    // …but a real ST recovers. After ST, Ground is restored and a
-    // follow-up CSI works normally.
-    let _ = g.feed(b"\x1b\\\x1b[H!");
+    // A follow-up CSI H + print must also work without any recovery
+    // kick — Ground is already restored.
+    let _ = g.feed(b"\x1b[H!");
     let snap = g.snapshot();
     assert_eq!(
         snap.cells[0][0].grapheme.as_str(),
         "!",
-        "ST after the stuck DCS must restore Ground so '!' can print"
+        "CSI H after the BEL-terminated DCS must land '!' at origin"
+    );
+}
+
+#[test]
+fn dcs_bel_termination_within_single_feed_mixed_with_sync() {
+    // BEL-terminated DCS followed immediately by a synchronised-update
+    // DCS — the prefilter must hand control cleanly back to vte so the
+    // subsequent sync event still fires. Exercises the prefilter's
+    // DcsActive → Ground transition on rewritten ST.
+    let mut g = grid(3, 10);
+    let events = g.feed(b"\x1bPjunk\x07\x1bP=1$q\x1b\\X");
+    assert!(
+        saw_sync_begin(&events),
+        "sync begin should fire after BEL-terminated DCS"
+    );
+    let snap = g.snapshot();
+    assert_eq!(
+        snap.cells[0][0].grapheme.as_str(),
+        "X",
+        "trailing print must land after BEL-DCS + sync-DCS"
     );
 }
 

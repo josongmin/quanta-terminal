@@ -468,4 +468,243 @@ describe('plain-key input full loop (e2e)', () => {
     keyDown(container, { key: 'Shift', code: 'ShiftLeft', shiftKey: true });
     expect(bytesOut).toHaveLength(0);
   });
+
+  it('modifier-only keydowns (Control / Alt / Meta / CapsLock) emit no bytes', () => {
+    const { container, bytesOut } = harness;
+    for (const mod of [
+      { key: 'Control', code: 'ControlLeft', ctrlKey: true },
+      { key: 'Alt', code: 'AltLeft', altKey: true },
+      { key: 'Meta', code: 'MetaLeft', metaKey: true },
+      { key: 'CapsLock', code: 'CapsLock' },
+    ] as const) {
+      keyDown(container, mod);
+    }
+    expect(bytesOut).toHaveLength(0);
+  });
+
+  // -- Named keys: complete legacy coverage ---------------------------------
+  //
+  // These keys are referenced by readline/vim/emacs bindings and each
+  // must emit its canonical xterm sequence. The legacy encoder builds
+  // them from the SPECIAL_TILDE_CODE / ENDPOINT_FINAL tables, so any
+  // drift in those tables breaks the CLI UX.
+
+  it('Home → ESC [ H (unmodified, DECCKM off)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'Home', code: 'Home' });
+    expect(hex(bytesOut)).toBe('1b5b48'); // ESC [ H
+  });
+
+  it('End → ESC [ F (unmodified, DECCKM off)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'End', code: 'End' });
+    expect(hex(bytesOut)).toBe('1b5b46'); // ESC [ F
+  });
+
+  it('Insert → ESC [ 2 ~', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'Insert', code: 'Insert' });
+    expect(hex(bytesOut)).toBe('1b5b327e');
+  });
+
+  it('Delete → ESC [ 3 ~', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'Delete', code: 'Delete' });
+    expect(hex(bytesOut)).toBe('1b5b337e');
+  });
+
+  it('PageUp → ESC [ 5 ~ / PageDown → ESC [ 6 ~', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'PageUp', code: 'PageUp' });
+    keyDown(container, { key: 'PageDown', code: 'PageDown' });
+    expect(bytesOut).toHaveLength(2);
+    expect(Array.from(bytesOut[0]!)).toEqual([0x1b, 0x5b, 0x35, 0x7e]);
+    expect(Array.from(bytesOut[1]!)).toEqual([0x1b, 0x5b, 0x36, 0x7e]);
+  });
+
+  it('F1 → SS3 P, F2 → SS3 Q, F3 → SS3 R, F4 → SS3 S (unmodified)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'F1', code: 'F1' });
+    keyDown(container, { key: 'F2', code: 'F2' });
+    keyDown(container, { key: 'F3', code: 'F3' });
+    keyDown(container, { key: 'F4', code: 'F4' });
+    expect(bytesOut).toHaveLength(4);
+    // Each is ESC O <final>
+    expect(Array.from(bytesOut[0]!)).toEqual([0x1b, 0x4f, 0x50]);
+    expect(Array.from(bytesOut[1]!)).toEqual([0x1b, 0x4f, 0x51]);
+    expect(Array.from(bytesOut[2]!)).toEqual([0x1b, 0x4f, 0x52]);
+    expect(Array.from(bytesOut[3]!)).toEqual([0x1b, 0x4f, 0x53]);
+  });
+
+  it('F5 → ESC [ 1 5 ~ / F12 → ESC [ 2 4 ~ (tilde-form)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'F5', code: 'F5' });
+    keyDown(container, { key: 'F12', code: 'F12' });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x1b, 0x5b, 0x31, 0x35, 0x7e]);
+    expect(Array.from(bytesOut[1]!)).toEqual([0x1b, 0x5b, 0x32, 0x34, 0x7e]);
+  });
+
+  // -- Modifier-bit encoding -------------------------------------------------
+  //
+  // The xterm modifier bitmap is off-by-one (1 = none, 2 = Shift, 3 = Alt,
+  // 5 = Ctrl, 6 = Ctrl+Shift). Modified arrows use the CSI 1 ; <mod>
+  // <final> form, NOT the DECCKM SS3 form. Pin a handful of the common
+  // combos since readline + terminfo care.
+
+  it('Shift+ArrowUp → ESC [ 1 ; 2 A (modifier bit = 2)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'ArrowUp', code: 'ArrowUp', shiftKey: true });
+    expect(hex(bytesOut)).toBe('1b5b313b3241');
+  });
+
+  it('Ctrl+ArrowLeft → ESC [ 1 ; 5 D (modifier bit = 5, word-back in readline)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'ArrowLeft', code: 'ArrowLeft', ctrlKey: true });
+    expect(hex(bytesOut)).toBe('1b5b313b3544');
+  });
+
+  it('Alt+ArrowRight → ESC [ 1 ; 3 C (modifier bit = 3)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'ArrowRight', code: 'ArrowRight', altKey: true });
+    expect(hex(bytesOut)).toBe('1b5b313b3343');
+  });
+
+  it('Ctrl+Shift+End → ESC [ 1 ; 6 F (modifier bit = 6)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'End', code: 'End', ctrlKey: true, shiftKey: true });
+    expect(hex(bytesOut)).toBe('1b5b313b3646');
+  });
+
+  it('Shift+F1 → ESC O 1 ; 2 P (F1-F4 modified form uses SS3)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'F1', code: 'F1', shiftKey: true });
+    expect(hex(bytesOut)).toBe('1b4f313b3250');
+  });
+
+  // -- DECCKM mode changes arrow encoding -----------------------------------
+
+  it('ArrowUp with DECCKM ON → SS3 A (ESC O A)', () => {
+    harness.handle.unmount();
+    harness.container.remove();
+    harness = makeInputHarness({ decckm: true });
+    keyDown(harness.container, { key: 'ArrowUp', code: 'ArrowUp' });
+    expect(hex(harness.bytesOut)).toBe('1b4f41');
+  });
+
+  // -- Space and Ctrl+Space --------------------------------------------------
+
+  it('Space → 0x20 (plain space)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: ' ', code: 'Space' });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x20]);
+  });
+
+  it('Ctrl+Space → 0x00 (NUL byte, readline set-mark)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: ' ', code: 'Space', ctrlKey: true });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x00]);
+  });
+
+  it('Alt+Space → ESC 0x20 (Alt prefix wraps space)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: ' ', code: 'Space', altKey: true });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x1b, 0x20]);
+  });
+
+  // -- Ctrl+Backspace / Ctrl+Alt+Backspace ----------------------------------
+
+  it('Ctrl+Backspace → 0x08 (BS, encoder disambiguates from 0x7f)', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'Backspace', code: 'Backspace', ctrlKey: true });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x08]);
+  });
+
+  it('Ctrl+Alt+Backspace → ESC 0x08', () => {
+    const { container, bytesOut } = harness;
+    keyDown(container, { key: 'Backspace', code: 'Backspace', ctrlKey: true, altKey: true });
+    expect(Array.from(bytesOut[0]!)).toEqual([0x1b, 0x08]);
+  });
+
+  // -- keyup path ------------------------------------------------------------
+  //
+  // The legacy encoder is kind-agnostic: it sees the key + modifiers,
+  // not the press/release kind. So under legacy encoding the keyup path
+  // produces the SAME bytes as the keydown. This pins that observed
+  // behaviour so a later fix (e.g. gating release to kitty L2+ at the
+  // KeyEncoder level) is caught as an intentional change.
+
+  it('keyup routes through the encoder and emits the same legacy bytes as keydown', () => {
+    const { container, bytesOut } = harness;
+    container.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'a', code: 'KeyA', bubbles: true }),
+    );
+    expect(bytesOut).toHaveLength(1);
+    expect(Array.from(bytesOut[0]!)).toEqual([0x61]);
+  });
+
+  it('keyup for pure-modifier keys (Shift alone) still emits nothing', () => {
+    const { container, bytesOut } = harness;
+    container.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Shift', code: 'ShiftLeft', bubbles: true }),
+    );
+    expect(bytesOut).toHaveLength(0);
+  });
+
+  it('keyup during Composing is short-circuited by input-host (no encoder call)', () => {
+    const { container, bytesOut } = harness;
+    container.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+    container.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'ㅎ' }));
+    const before = bytesOut.length;
+    container.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'a', code: 'KeyA', bubbles: true }),
+    );
+    expect(bytesOut.length).toBe(before);
+  });
+
+  // -- Paste path: bracketed ON + embedded end sentinel ---------------------
+
+  it('paste path: bracketed paste ON with empty text emits no bytes', () => {
+    harness.handle.unmount();
+    harness.container.remove();
+    harness = makeInputHarness({ bracketedPaste: true });
+    dispatchPaste(harness.container, '');
+    // Even wrapped, a zero-length payload would still emit START+END; the
+    // input-host skips the emit because out.bytes.length is 0.
+    // Actually START+END is 12 bytes, so the guard only trips when payload
+    // AND sentinels are both absent. Here Paste.encode returns an empty
+    // array only when bracketed is off AND text is empty. With bracketed
+    // on, it returns [START, END] (12 bytes). Input-host emits that.
+    expect(harness.bytesOut).toHaveLength(1);
+    expect(hex(harness.bytesOut)).toBe('1b5b3230307e1b5b3230317e');
+  });
+
+  // -- IME state machine integration on focus/blur --------------------------
+
+  it('focus/blur route through the IME state machine and leave it in Idle on a plain session', () => {
+    const { container, handle } = harness;
+    container.dispatchEvent(new Event('focus'));
+    expect(handle.state().kind).toBe('Idle');
+    container.dispatchEvent(new Event('blur'));
+    expect(handle.state().kind).toBe('Idle');
+  });
+
+  // -- Unmount leak check ----------------------------------------------------
+
+  it('unmount also removes paste/focus/blur listeners, not just keydown', () => {
+    const { container, handle, bytesOut } = harness;
+    handle.unmount();
+
+    // None of these should result in any byte emission because all
+    // listeners are detached.
+    dispatchPaste(container, 'x');
+    container.dispatchEvent(new Event('focus'));
+    container.dispatchEvent(new Event('blur'));
+    container.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+    container.dispatchEvent(new CompositionEvent('compositionend', { data: '한' }));
+    keyDown(container, { key: 'a', code: 'KeyA' });
+
+    expect(bytesOut).toHaveLength(0);
+    // Rehydrate so afterEach unmount call is valid.
+    harness = makeInputHarness();
+  });
 });

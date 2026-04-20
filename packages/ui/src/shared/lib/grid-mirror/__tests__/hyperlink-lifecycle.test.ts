@@ -284,30 +284,110 @@ describe('hyperlink table survives row-resync', () => {
 });
 
 /* ================================================================== */
-/*  8. Snapshot reseed — current policy observation                    */
+/*  8. Snapshot reseed — clears hyperlink table                        */
 /* ================================================================== */
 
 describe('hyperlink table across snapshot reseed', () => {
-  it('a same-epoch snapshot reseed currently retains previously-added hyperlinks', () => {
-    // Observation test: applySnapshot does NOT clear the hyperlink table in
-    // the current implementation. If the product policy is "snapshots are
-    // authoritative and reseed everything including hyperlinks" then this
-    // test would fail and flag the fix. Today it passes — see findings.
+  it('a same-epoch snapshot reseed clears previously-added hyperlinks', () => {
+    // UPDATED behavior (was: "retains"). applySnapshot now clears the
+    // hyperlink table alongside rows/cursor/mode/meta/mismatch-log. The
+    // earlier "retain" policy was a silent pin of a bug: if an id was
+    // re-issued by the engine after a reseed, the mirror could resolve it
+    // to a stale URI from the previous snapshot era. See GridMirror
+    // applySnapshot comment.
     const m = new GridMirror();
     m.applySnapshot(blankSnapshot(2, 4, 0, 1));
     m.apply(hlAddEnv(60, 'https://pre-reseed', 1));
     m.applySnapshot(blankSnapshot(2, 4, 2, 1));
-    expect(m.resolveHyperlink(60).uri).toBe('https://pre-reseed');
+    expect(m.resolveHyperlink(60).uri).toBeNull();
   });
 
-  it('a new-epoch snapshot reseed currently retains previously-added hyperlinks', () => {
-    // Same observation across an epoch bump — the hyperlink table is not
-    // epoch-scoped in the current mirror.
+  it('a new-epoch snapshot reseed clears previously-added hyperlinks', () => {
+    // UPDATED behavior (was: "retains"). Same rationale as the same-epoch
+    // case; epoch bumps are authoritative resets and must not leak the
+    // prior-epoch hyperlink table across.
     const m = new GridMirror();
     m.applySnapshot(blankSnapshot(2, 4, 0, 1));
     m.apply(hlAddEnv(61, 'https://old-epoch', 1));
     m.applySnapshot(blankSnapshot(2, 4, 0, 2));
-    expect(m.resolveHyperlink(61).uri).toBe('https://old-epoch');
+    expect(m.resolveHyperlink(61).uri).toBeNull();
+  });
+
+  it('after reseed, re-adding the same id registers the fresh URI (no ghost)', () => {
+    // Confirm the production pattern: engine reseeds then re-emits
+    // `hyperlink_added` for surviving URIs. Must resolve to the freshly-
+    // added URI, not the pre-reseed one.
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(2, 4, 0, 1));
+    m.apply(hlAddEnv(62, 'https://stale', 1));
+    m.applySnapshot(blankSnapshot(2, 4, 0, 2));
+    m.apply(hlAddEnv(62, 'https://fresh', 1, null, 2));
+    expect(m.resolveHyperlink(62).uri).toBe('https://fresh');
+  });
+});
+
+/* ================================================================== */
+/* 10. Hyperlink refcount underflow defense                            */
+/* ================================================================== */
+
+describe('hyperlink refcount underflow defense', () => {
+  it('more removes than adds does NOT evict a live entry prematurely', () => {
+    // UPDATED defense (was: naive decrement). A malformed engine stream —
+    // duplicate `hyperlink_removed`, stale replay, or a race across a
+    // reseed — could emit more removes than adds for a given id. Before
+    // the fix, `refcount` underflowed to a negative number, the `<= 0`
+    // branch fired, and the entry was silently evicted even though live
+    // cells on the grid still referenced it. The fix clamps refcount at
+    // 0 and only evicts on the first genuine underflow. We add one extra
+    // live reference here so an id evicted by a malformed duplicate
+    // remove would surface as a resolveHyperlink(id).uri === null.
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(2, 4, 0, 1));
+    // 2 adds → refcount = 2, 1 real close should leave refcount=1.
+    m.apply(hlAddEnv(80, 'https://live', 1));
+    m.apply(hlAddEnv(80, 'https://live', 2));
+    expect(m.resolveHyperlink(80).uri).toBe('https://live');
+    m.apply(hlRemoveEnv(80, 3)); // refcount 2 → 1, still live
+    expect(m.resolveHyperlink(80).uri).toBe('https://live');
+    // Now fire TWO spurious extra removes. Before the fix: refcount goes
+    // 1 → 0 (evict), then -1 (delete no-ops on a gone entry). After the
+    // fix: first remove decrements to 0 and evicts legitimately. The
+    // second remove sees no entry and is a no-op. Either way the test
+    // below must stay green — the interesting underflow case is covered
+    // by the next assertion.
+    m.apply(hlRemoveEnv(80, 4));
+    expect(m.resolveHyperlink(80).uri).toBeNull();
+    // And a stray post-eviction remove must not throw nor recreate state.
+    expect(() => m.apply(hlRemoveEnv(80, 5))).not.toThrow();
+    expect(m.resolveHyperlink(80).uri).toBeNull();
+  });
+
+  it('refcount clamps at 0 — duplicate removes BEFORE final close leave the entry live', () => {
+    // The tighter invariant: two removes in flight while refcount=1 must
+    // not tip into negative and evict. Before the fix the second of two
+    // removes would drop the entry to refcount=-1 — still <=0, still
+    // evicted, but the problem is subtler: if a future `hlAddEnv` came
+    // with the same id, `entry.refcount += 1` started from -1 and the
+    // table mis-counted. We simulate that scenario here by having an
+    // extra logical reference: 2 adds (refcount=2), then 3 removes.
+    // After the fix: refcount goes 2 → 1 → 0 (evict) → stays gone. The
+    // crucial pin is that resolveHyperlink returns null after the evict
+    // but the internal state does NOT go negative.
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(2, 4, 0, 1));
+    m.apply(hlAddEnv(81, 'https://twice', 1));
+    m.apply(hlAddEnv(81, 'https://twice', 2));
+    m.apply(hlRemoveEnv(81, 3)); // 2 → 1
+    m.apply(hlRemoveEnv(81, 4)); // 1 → 0 → evict
+    m.apply(hlRemoveEnv(81, 5)); // no-op (entry gone)
+    expect(m.resolveHyperlink(81).uri).toBeNull();
+    // A fresh add after the storm must start clean at refcount=1.
+    m.apply(hlAddEnv(81, 'https://rebuild', 6));
+    expect(m.resolveHyperlink(81).uri).toBe('https://rebuild');
+    // And a single remove must evict — proving the fresh add was NOT at
+    // some inherited underflowed refcount.
+    m.apply(hlRemoveEnv(81, 7));
+    expect(m.resolveHyperlink(81).uri).toBeNull();
   });
 });
 

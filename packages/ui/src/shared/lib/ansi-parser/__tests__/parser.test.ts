@@ -184,12 +184,15 @@ describe('B. CSI sequences', () => {
     expect(textOf(parse('a\x1b[?1000hb'))).toBe('ab');
   });
 
-  it('batched ESC [ ? 1049 ; 25 h emits one alt_screen_enter via onMode', () => {
+  it('batched ESC [ ? 1049 ; 25 h emits alt_screen_enter + cursor_visible_set (Phase 4)', () => {
     const events: AnsiModeEvent[] = [];
     const p = new AnsiParser();
     p.onMode = (ev) => events.push(ev);
     p.feed(enc.encode('\x1b[?1049;25h'));
-    expect(events).toEqual([{ kind: 'alt_screen_enter' }]);
+    expect(events).toEqual([
+      { kind: 'alt_screen_enter' },
+      { kind: 'cursor_visible_set', value: true },
+    ]);
   });
 
   it('invalid byte inside CSI aborts the sequence (returns to Ground)', () => {
@@ -468,24 +471,14 @@ describe('E. other two-char ESC sequences', () => {
     ]);
   });
 
-  it('ESC c (RIS) drops a mid-sequence partial CSI (parser returns to Ground)', () => {
-    // A half-formed CSI is NOT part of ECMA-48's RIS semantics per se, but
-    // reset() wipes the FSM as a side effect. Pin that: RIS mid-CSI
-    // abandons the partial sequence and the next bytes parse from Ground.
+  it('ESC c (RIS) clears pending partial UTF-8 bytes', () => {
+    // reset() wipes the decoder AND textBuf, so a partial multibyte
+    // codepoint held across an RIS must not leak into subsequent output.
     const p = new AnsiParser();
-    p.feed(enc.encode('\x1b[31')); // mid-CSI (no final byte yet)
-    // Now RIS arrives — the partial `31` parameter is inside `seqBuf`.
-    // Feeding ESC c straight in would re-enter Escape inside Csi state;
-    // instead we exit the CSI cleanly with an invalid byte first (0x00).
-    // The real interesting case is: RIS while in Ground after a completed
-    // SGR wipes the style + FSM. That's what this sub-test pins.
-    p.feed(enc.encode('\x00')); // aborts the CSI → Ground
-    p.feed(enc.encode('\x1b[1mA\x1bc'));
-    const spans = [...p.feed(enc.encode('B')), ...p.flush()];
-    expect(spans).toEqual([
-      { text: 'A', bold: true },
-      { text: 'B' },
-    ]);
+    p.feed(new Uint8Array([0xed, 0x95])); // partial Hangul (2 of 3 bytes)
+    p.feed(enc.encode('\x1bc')); // RIS → reset
+    const spans = [...p.feed(enc.encode('hello')), ...p.flush()];
+    expect(spans).toEqual([{ text: 'hello' }]);
   });
 });
 
@@ -527,24 +520,41 @@ describe('F. onMode callback', () => {
     expect(drive('\x1b[?47l')).toEqual([{ kind: 'alt_screen_exit' }]);
   });
 
-  it('?25h (cursor show, non-alt-screen) emits no event', () => {
-    expect(drive('\x1b[?25h')).toEqual([]);
+  it('?25h (cursor show) fires cursor_visible_set=true (Phase 4)', () => {
+    expect(drive('\x1b[?25h')).toEqual([
+      { kind: 'cursor_visible_set', value: true },
+    ]);
   });
 
-  it('?25l (cursor hide) emits no event', () => {
-    expect(drive('\x1b[?25l')).toEqual([]);
+  it('?25l (cursor hide) fires cursor_visible_set=false (Phase 4)', () => {
+    expect(drive('\x1b[?25l')).toEqual([
+      { kind: 'cursor_visible_set', value: false },
+    ]);
   });
 
-  it('?2004h (bracketed paste enable) emits no event — not in the event union', () => {
-    expect(drive('\x1b[?2004h')).toEqual([]);
+  it('?2004h (bracketed paste enable) fires bracketed_paste_set=true (Phase 4)', () => {
+    expect(drive('\x1b[?2004h')).toEqual([
+      { kind: 'bracketed_paste_set', value: true },
+    ]);
   });
 
-  it('?2004l (bracketed paste disable) emits no event', () => {
-    expect(drive('\x1b[?2004l')).toEqual([]);
+  it('?2004l (bracketed paste disable) fires bracketed_paste_set=false (Phase 4)', () => {
+    expect(drive('\x1b[?2004l')).toEqual([
+      { kind: 'bracketed_paste_set', value: false },
+    ]);
   });
 
-  it('?1000h (mouse click reporting) emits no event', () => {
-    expect(drive('\x1b[?1000h')).toEqual([]);
+  it('?1000h (mouse button reporting) fires mouse_tracking_set=button_event (Phase 4)', () => {
+    expect(drive('\x1b[?1000h')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'button_event' },
+    ]);
+  });
+
+  it('completely unknown private modes still emit no event', () => {
+    // `?9999` isn't in our recognized set; the CSI is consumed but nothing
+    // fires. Pins the conservative-side-channel contract: we only surface
+    // modes we can name.
+    expect(drive('\x1b[?9999h')).toEqual([]);
   });
 
   it('parser with no onMode attached behaves identically on alt-screen CSI', () => {

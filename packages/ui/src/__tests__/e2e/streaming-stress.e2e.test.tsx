@@ -307,7 +307,7 @@ describe('streaming stress (e2e)', () => {
   /* --------------------------- Mass output --------------------------- */
 
   it(
-    'single-batch GridDelta with 10_000 row updates applies cleanly and last row is correct',
+    'single-batch GridDelta with 10_000 row updates applies cleanly — first/middle/last rows verified, buffer matches',
     { timeout: 10_000 },
     async () => {
       const ROWS = 10_000;
@@ -328,11 +328,20 @@ describe('streaming stress (e2e)', () => {
       expect(result.outcome).toBe('applied');
       // Generous upper bound — just proves the pipeline completes.
       expect(elapsed).toBeLessThan(8000);
-      // Last row content is authoritative in the mirror.
-      const lastRow = m.mirror.getRow(ROWS - 1);
-      expect(lastRow?.cells[0]?.grapheme).toBe(`row${ROWS - 1}`);
-      // First row too — ensures nothing was dropped mid-iteration.
+      // Mirror-side correctness: first, middle, and last rows all present.
       expect(m.mirror.getRow(0)?.cells[0]?.grapheme).toBe('row0');
+      expect(m.mirror.getRow(ROWS / 2)?.cells[0]?.grapheme).toBe(`row${ROWS / 2}`);
+      expect(m.mirror.getRow(ROWS - 1)?.cells[0]?.grapheme).toBe(`row${ROWS - 1}`);
+      // Push the snapshot into the widget's CellBuffer and verify the same
+      // three rows round-trip through the damage-set → buffer path. A
+      // regression where the delta-driven path dropped rows mid-iteration
+      // would surface as a mismatch on any of these checkpoints.
+      driveSnapshotIntoWidget(m);
+      await flushEffects();
+      const buf = m.ref.current!.cellBuffer;
+      expect(buf.getCell(0, 0)?.grapheme).toBe('row0');
+      expect(buf.getCell(ROWS / 2, 0)?.grapheme).toBe(`row${ROWS / 2}`);
+      expect(buf.getCell(ROWS - 1, 0)?.grapheme).toBe(`row${ROWS - 1}`);
       m.unmount();
     },
   );
@@ -415,7 +424,7 @@ describe('streaming stress (e2e)', () => {
   );
 
   it(
-    'revision-mismatch storm (≥ K within W) escalates to SnapshotRequest',
+    'revision-mismatch storm (≥ K within W) escalates to SnapshotRequest — fewer than K does NOT escalate',
     { timeout: 10_000 },
     async () => {
       const snapshotRequested = vi.fn<(req: SnapshotRequest) => void>();
@@ -429,10 +438,24 @@ describe('streaming stress (e2e)', () => {
       });
       await flushEffects();
 
-      // Row 0 seed rev = 1. We intentionally feed `revision_before: 99`
-      // for each delta → every row is a mismatch.
+      // First: feed K-1 = 4 mismatches and prove NO escalation yet. This
+      // pins the threshold boundary — the original test only asserted that
+      // ≥K triggers, never that <K does not. A regression to K=1 would
+      // have passed the old test.
       let seq = 1;
-      for (let i = 0; i < 6; i += 1) {
+      for (let i = 0; i < 4; i += 1) {
+        m.mirror.applyDelta(
+          deltaEnv({
+            seq: seq++,
+            rowDeltas: [makeRowDelta(0, 'x', 16, 99, 100)],
+          }),
+        );
+      }
+      expect(snapshotRequested).not.toHaveBeenCalled();
+
+      // Row 0 seed rev = 1. We intentionally feed `revision_before: 99`
+      // for each delta → every row is a mismatch. Cross the threshold.
+      for (let i = 0; i < 2; i += 1) {
         m.mirror.applyDelta(
           deltaEnv({
             seq: seq++,
@@ -444,6 +467,11 @@ describe('streaming stress (e2e)', () => {
       expect(snapshotRequested).toHaveBeenCalled();
       const callArg = snapshotRequested.mock.calls[0]?.[0];
       expect(callArg?.reason).toBe('row_mismatch_storm');
+      // The request must carry the correct session and grid epoch so the
+      // host knows which session to re-snapshot. A stray request with
+      // wrong coordinates would be a cross-session resync leak.
+      expect(callArg?.session_id).toBe(SESSION_ID);
+      expect(callArg?.epoch).toBe(1);
       m.unmount();
     },
   );
@@ -482,7 +510,7 @@ describe('streaming stress (e2e)', () => {
   );
 
   it(
-    '100KB paste with embedded end-sentinel is stripped before wrap and still emitted once',
+    '100KB paste with embedded end-sentinel is stripped before wrap and still emitted once (byte-level START/END + interior verified)',
     { timeout: 10_000 },
     () => {
       const h = makePasteHarness({ bracketedPaste: true });
@@ -502,12 +530,36 @@ describe('streaming stress (e2e)', () => {
         // Expected body: 50k 'z' + 50k 'z' (embedded sentinel stripped).
         // Plus 6+6 sentinel bytes for START/END.
         expect(emitted.length).toBe(6 + 100_000 + 6);
+        // START sentinel bytes (ESC [ 2 0 0 ~).
+        expect(Array.from(emitted.slice(0, 6))).toEqual([
+          0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e,
+        ]);
+        // END sentinel bytes (ESC [ 2 0 1 ~).
+        expect(Array.from(emitted.slice(-6))).toEqual([
+          0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e,
+        ]);
         // Count interior 'z' bytes — the stripped sentinel leaves only 'z's.
+        // Also prove NO interior bytes form the end sentinel pattern — a
+        // naive strip-by-replace implementation could miss overlapping
+        // sentinels at boundaries, so walk the whole interior looking for
+        // the ESC[201~ byte pattern.
         let zCount = 0;
         for (let i = 6; i < emitted.length - 6; i += 1) {
           if (emitted[i] === 0x7a) zCount += 1;
         }
         expect(zCount).toBe(100_000);
+        // No stray end-sentinel byte sequence in the interior.
+        const body = emitted.slice(6, emitted.length - 6);
+        for (let i = 0; i <= body.length - 6; i += 1) {
+          const is201 =
+            body[i] === 0x1b &&
+            body[i + 1] === 0x5b &&
+            body[i + 2] === 0x32 &&
+            body[i + 3] === 0x30 &&
+            body[i + 4] === 0x31 &&
+            body[i + 5] === 0x7e;
+          expect(is201).toBe(false);
+        }
       } finally {
         h.handle.unmount();
         h.container.remove();

@@ -48,6 +48,8 @@ import { MouseEncoder } from '../../features/input/MouseEncoder.js';
 import { Paste } from '../../features/input/Paste.js';
 import { createStubMirror, ModeSnapshot } from '../../features/input/ModeSnapshot.js';
 import { mount } from '../../features/input/input-host.js';
+import { AnsiParser } from '../../shared/lib/ansi-parser/parser.js';
+import type { AnsiModeEvent } from '../../shared/lib/ansi-parser/types.js';
 
 interface InputHarness {
   container: HTMLElement;
@@ -503,6 +505,86 @@ describe('kitty keyboard + modifyOtherKeys + focus reporting (e2e)', () => {
         ['1b5b4f', '1b5b49', '1b5b39383b3575'].join(''),
         // ESC [ O , ESC [ I , ESC [ 9 8 ; 5 u   (b=98, ctrl mod=5)
       );
+    });
+
+    it('ESC[?1004h parsed as focus_reporting_set=true → next blur emits CSI O', () => {
+      // Byte-level round trip: TUI emits DECSET 1004 as CSI bytes, the real
+      // parser hands us a mode event, we apply it to the mirror, and the
+      // next DOM blur event encodes `CSI O`. Proves the new parser
+      // mode-event pathway for focus reporting is wired end-to-end.
+      harness = makeInputHarness({ focusReporting: false });
+      const { container, bytesOut, mirror } = harness;
+      const parser = new AnsiParser();
+      const events: AnsiModeEvent[] = [];
+      parser.onMode = (e) => events.push(e);
+      parser.feed(new TextEncoder().encode('\x1b[?1004h'));
+      parser.flush();
+      expect(events).toEqual([{ kind: 'focus_reporting_set', value: true }]);
+      mirror.applyMode({ focusReporting: true });
+      container.dispatchEvent(new FocusEvent('blur'));
+      expect(bytesOut).toHaveLength(1);
+      expect(hex(bytesOut)).toBe('1b5b4f'); // CSI O
+    });
+
+    it('ESC[?1004l parsed as focus_reporting_set=false → next focus emits nothing', () => {
+      harness = makeInputHarness({ focusReporting: true });
+      const { container, bytesOut, mirror } = harness;
+      const parser = new AnsiParser();
+      const events: AnsiModeEvent[] = [];
+      parser.onMode = (e) => events.push(e);
+      parser.feed(new TextEncoder().encode('\x1b[?1004l'));
+      parser.flush();
+      expect(events).toEqual([{ kind: 'focus_reporting_set', value: false }]);
+      mirror.applyMode({ focusReporting: false });
+      container.dispatchEvent(new FocusEvent('focus'));
+      expect(bytesOut).toHaveLength(0);
+    });
+  });
+
+  // ======================================================================
+  // Kitty query reply is a parser-layer concern — not the encoder's job
+  // ======================================================================
+
+  describe('kitty query (CSI ? u) is not handled by the encoder', () => {
+    it('no DOM event produces a kitty-query reply from the encoder', () => {
+      // Pins the gap: when a TUI sends `CSI ? u` asking the terminal to
+      // report its current kitty flags, the encoder has no say — that
+      // reply is the parser/engine side's concern. The encoder never
+      // inject s bytes on its own, so here we simply assert that no
+      // keydown / focus event spuriously emits a kitty-query reply.
+      harness = makeInputHarness({ kittyKeyboard: 3 });
+      const { bytesOut } = harness;
+      // No DOM activity → no encoder output.
+      expect(bytesOut).toHaveLength(0);
+    });
+  });
+
+  // ======================================================================
+  // kitty L3 ambiguity: Ctrl+Shift+A vs Ctrl+A
+  // ======================================================================
+
+  describe('kitty L3 — Ctrl+<letter> disambiguation', () => {
+    beforeEach(() => {
+      harness = makeInputHarness({ kittyKeyboard: 3 });
+    });
+
+    it('Ctrl+a alone → mod=5 (ctrl-only)', () => {
+      const { container, bytesOut } = harness;
+      keyDown(container, { key: 'a', code: 'KeyA', ctrlKey: true });
+      expect(bytesOut).toHaveLength(1);
+      // 'a' keycode = 97; ctrl = bit 4 → 4+1 = 5. ESC [ 9 7 ; 5 u
+      expect(hex(bytesOut)).toBe('1b5b39373b3575');
+    });
+
+    it('Ctrl+Shift+A → mod=6 differs from Ctrl+a alone — distinct bindings possible', () => {
+      const { container, bytesOut } = harness;
+      keyDown(container, { key: 'A', code: 'KeyA', ctrlKey: true, shiftKey: true });
+      expect(hex(bytesOut)).toBe('1b5b39373b3675'); // ESC [ 9 7 ; 6 u
+      // Byte for the Ctrl-only sibling is different; readline under kitty can
+      // therefore distinguish C-a from C-S-A. This is the whole point of L3.
+      harness.bytesOut.length = 0;
+      keyDown(container, { key: 'a', code: 'KeyA', ctrlKey: true });
+      expect(hex(harness.bytesOut)).toBe('1b5b39373b3575');
     });
   });
 });

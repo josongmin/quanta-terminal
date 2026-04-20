@@ -49,6 +49,10 @@ import {
   finalizeActiveBlock,
   installCommandRouter,
 } from '../../features/command/route-output.js';
+import {
+  __resetDegradedGateForTests,
+  bindDegradedGate,
+} from '../../features/degraded-mode/degraded-gate.js';
 import { useBlockStore } from '../../entities/block/index.js';
 import { useSessionStore } from '../../entities/session/index.js';
 import { BlockCard } from '../../widgets/block-card/index.js';
@@ -189,6 +193,7 @@ afterEach(() => {
   unbindBlockEntity?.();
   unbindBlockEntity = undefined;
   __resetRouterForTests();
+  __resetDegradedGateForTests();
   useBlockStore.getState().resetAll();
   useSessionStore.getState().reset();
 });
@@ -324,12 +329,55 @@ describe('composer submit → block lifecycle (e2e)', () => {
 
     const blank = await submitCommand({ text: '   ', bridge });
     const emptyStr = await submitCommand({ text: '', bridge });
+    // CRLF-only also normalizes to empty (submitCommand pre-normalizes \r\n
+    // → \n before the trim check). Pin that — the composer on Windows can
+    // deliver a pure `\r\n` when the user hits Enter on an empty line.
+    const crlfOnly = await submitCommand({ text: '\r\n', bridge });
 
     expect(blank).toEqual({ ok: false, reason: 'empty' });
     expect(emptyStr).toEqual({ ok: false, reason: 'empty' });
+    expect(crlfOnly).toEqual({ ok: false, reason: 'empty' });
     expect(write).not.toHaveBeenCalled();
     expect(useBlockStore.getState().order).toEqual([]);
     expect(getActiveBlockIdFromStore()).toBeNull();
+  });
+
+  it('submit while the degraded gate reports degraded → reason=degraded, no block, no bridge.write, dropped counter bumps', async () => {
+    // RFC §20 / ADR 0010: when the engine is considered dead, user input
+    // must never reach the PTY. submitCommand consults the degraded gate
+    // BEFORE creating the block so a failed submit does not leave a
+    // half-open block behind. A fresh gate is bound here with a closure
+    // that reports `degraded=true` so we can observe all three contract
+    // pieces (return value, zero side-effects, telemetry bump).
+    const { bridge, write } = makeBridge();
+    let dropped = 0;
+    const unbind = bindDegradedGate({
+      isDegraded: () => true,
+      reportDroppedInput: () => {
+        dropped += 1;
+      },
+    });
+    try {
+      const result = await submitCommand({ text: 'echo blocked', bridge });
+      expect(result).toEqual({ ok: false, reason: 'degraded' });
+      expect(write).not.toHaveBeenCalled();
+      // No block is created on the store — the gate fires BEFORE startBlock.
+      expect(useBlockStore.getState().order).toEqual([]);
+      expect(getActiveBlockIdFromStore()).toBeNull();
+      // Telemetry counter incremented exactly once.
+      expect(dropped).toBe(1);
+
+      // When the gate clears, the very next submit proceeds normally and
+      // reaches both the block store and the bridge — proving the gate is
+      // a transient check, not a permanent lock.
+      unbind();
+      const ok = await submitCommand({ text: 'echo free', bridge });
+      expect(ok.ok).toBe(true);
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledWith(SESSION_ID, 'echo free\n');
+    } finally {
+      __resetDegradedGateForTests();
+    }
   });
 
   it('BlockCard renders the running → completed transition with the final exit code visible', async () => {

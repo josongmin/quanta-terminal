@@ -52,6 +52,22 @@ function textSpan(text: string): CellSpan {
   };
 }
 
+/**
+ * Build an array of single-cell spans, one per character. Use this when a
+ * test needs per-cell grapheme assertions (e.g. copy's exact substring at a
+ * selected column range). The default `textSpan` stamps the entire string
+ * onto col 0 — fine for width-of-row tests, wrong for range slicing.
+ */
+function perCellSpans(text: string): CellSpan[] {
+  return [...text].map((ch) => ({
+    cols: 1,
+    sgr: '0x0000000000000000',
+    graphemes: { utf8: ch },
+    hyperlink_id: 0,
+    ext: null,
+  }));
+}
+
 function blankSpan(cols: number): CellSpan {
   return {
     cols,
@@ -240,9 +256,9 @@ describe('full-stack UI pipeline (e2e)', () => {
     unsub();
   });
 
-  it('pointerdown → selection begins and fires onSelectionChange', async () => {
+  it('pointerdown → move → up produces a non-null selection at the anchored cell and onSelectionChange reports start+end', async () => {
     const onSelectionChange = vi.fn();
-    const { container } = mountCanvas({
+    const { container, ref } = mountCanvas({
       rows: 4,
       cols: 16,
       contents: ['hello world'],
@@ -250,21 +266,121 @@ describe('full-stack UI pipeline (e2e)', () => {
     });
     await flushEffects();
     const app = container.querySelector('[role="application"]') as HTMLElement;
-    fireEvent.pointerDown(app, { clientX: 2, clientY: 2, pointerId: 1, detail: 1 });
-    fireEvent.pointerMove(app, { clientX: 40, clientY: 2, pointerId: 1 });
-    fireEvent.pointerUp(app, { clientX: 40, clientY: 2, pointerId: 1 });
+    // jsdom's DOMRect / PointerEvent combo returns zero rects and drops
+    // `clientX`/`clientY` off synthesized PointerEvents. We stub both sides
+    // so the production path (container.getBoundingClientRect(), hitTest
+    // against DEFAULT_METRICS 8×16 CSS px cells) has well-defined inputs
+    // and the exact cell-arithmetic is observable.
+    app.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 } as DOMRect);
+    const makePointerEvent = (type: string, clientX: number, clientY: number): Event =>
+      new (class extends Event {
+        clientX = clientX;
+        clientY = clientY;
+        pointerId = 1;
+        button = 0;
+        buttons = type === 'pointerup' ? 0 : 1;
+        detail = 1;
+        pointerType = 'mouse';
+        ctrlKey = false;
+        metaKey = false;
+        altKey = false;
+        shiftKey = false;
+      })(type, { bubbles: true, cancelable: true });
+    // pointerDown at (2,2) → cell (0,0); move to (40,2) → cell (0, 5); up.
+    act(() => {
+      app.dispatchEvent(makePointerEvent('pointerdown', 2, 2));
+    });
+    act(() => {
+      app.dispatchEvent(makePointerEvent('pointermove', 40, 2));
+    });
+    act(() => {
+      app.dispatchEvent(makePointerEvent('pointerup', 40, 2));
+    });
     expect(onSelectionChange).toHaveBeenCalled();
+    // The SelectionManager is the source of truth; the callback merely
+    // broadcasts. A "crash-proof" assertion (just `.toHaveBeenCalled()`) would
+    // not catch a regression where the manager stopped receiving the drag
+    // events, so we also verify a concrete selection landed at the exact
+    // cells the pixel arithmetic maps to.
+    const final = ref.current!.selection.get();
+    expect(final).not.toBeNull();
+    expect(final!.start).toEqual({ row: 0, col: 0 });
+    expect(final!.end.row).toBe(0);
+    expect(final!.end.col).toBe(5);
+    expect(final!.mode).toBe('char');
   });
 
-  it('Cmd/Ctrl+C on a non-empty selection calls onCopyRequest with the selected text', async () => {
+  it('Ctrl+C on a non-empty selection calls onCopyRequest with the EXACT selected substring', async () => {
+    // Use per-cell spans so `getCell(row, c)` returns one grapheme per column
+    // — the ordinary `textSpan(text)` stamps the whole string at col 0 and
+    // would let the test pass by accident for any selection overlapping col 0.
     const onCopyRequest = vi.fn();
-    const { container, ref } = mountCanvas({
-      rows: 4,
-      cols: 16,
-      contents: ['abcdefghij'],
-      onCopyRequest,
+    const source = new MirrorSource();
+    const mirror = new GridMirror({ onChange: (d) => source.emit(d) });
+    const cols = 16;
+    const row0Spans = [
+      ...perCellSpans('abcdefghij'),
+      blankSpan(cols - 10),
+    ];
+    mirror.applySnapshot({
+      session_id: SESSION_ID,
+      grid_epoch: 1,
+      sequence_no: 0,
+      resize_generation: 0,
+      buffer_kind: 'main',
+      payload: {
+        kind: 'grid_snapshot',
+        rows: 4,
+        cols,
+        buffer_kind: 'main',
+        row_deltas: [
+          {
+            row: 0,
+            revision_before: 0,
+            revision_after: 1,
+            spans: row0Spans,
+            continuation: false,
+            hyperlink_refs: [],
+          },
+          ...[1, 2, 3].map((r) => ({
+            row: r,
+            revision_before: 0,
+            revision_after: 1,
+            spans: [blankSpan(cols)],
+            continuation: false,
+            hyperlink_refs: [],
+          })),
+        ],
+        cursor: {
+          row: 0,
+          col: 0,
+          visible: true,
+          shape: 'block',
+          blinking: false,
+          pending_wrap: false,
+        },
+        mode_state: {},
+        meta: {},
+      },
     });
+    const ref = createRef<TerminalCanvasHandle>();
+    const { container } = render(
+      <TerminalCanvas
+        ref={ref as Ref<TerminalCanvasHandle>}
+        mirror={mirror}
+        mirrorSource={source}
+        backend="memory"
+        metrics={DEFAULT_METRICS}
+        platform="linux"
+        onCopyRequest={onCopyRequest}
+      />,
+    );
     await flushEffects();
+    // Sanity probe — per-cell graphemes actually landed so the selection
+    // slice we're about to ask for is meaningful.
+    expect(ref.current?.cellBuffer.getCell(0, 0)?.grapheme).toBe('a');
+    expect(ref.current?.cellBuffer.getCell(0, 4)?.grapheme).toBe('e');
     // Pre-seed a programmatic selection through the real SelectionManager.
     // SelectionManager mutations drive React state updates inside
     // TerminalCanvas (selection overlay), so wrap in act.
@@ -272,13 +388,39 @@ describe('full-stack UI pipeline (e2e)', () => {
       ref.current!.selection.begin({ row: 0, col: 0 }, 'char');
       ref.current!.selection.extend({ row: 0, col: 5 });
     });
+    // Confirm selection.copy() resolves to the expected substring BEFORE the
+    // key event so we can assert on the exact payload the production path
+    // forwards to the caller.
+    const expected = ref.current!.selection.copy();
+    expect(expected).toBe('abcde');
     const app = container.querySelector('[role="application"]') as HTMLElement;
     // Linux platform → Ctrl+C is the copy modifier.
     act(() => {
       fireEvent.keyDown(app, { key: 'c', ctrlKey: true });
     });
     expect(onCopyRequest).toHaveBeenCalledTimes(1);
-    expect(onCopyRequest).toHaveBeenCalledWith(expect.stringContaining('abcd'));
+    // The callback receives exactly what `selection.copy()` produced — not a
+    // substring, not a stringified "something containing 'abcd'", but the
+    // real UTF-8 payload the caller would put on the clipboard.
+    expect(onCopyRequest).toHaveBeenCalledWith('abcde');
+  });
+
+  it('Ctrl+C on an EMPTY selection is a no-op (onCopyRequest is not called)', async () => {
+    const onCopyRequest = vi.fn();
+    const { container } = mountCanvas({
+      rows: 4,
+      cols: 16,
+      contents: ['abcdefghij'],
+      onCopyRequest,
+    });
+    await flushEffects();
+    // No selection seeded — the platform key handler must recognise there is
+    // nothing to copy and leave the clipboard alone.
+    const app = container.querySelector('[role="application"]') as HTMLElement;
+    act(() => {
+      fireEvent.keyDown(app, { key: 'c', ctrlKey: true });
+    });
+    expect(onCopyRequest).not.toHaveBeenCalled();
   });
 
   it('hit-test → screenToCell maps pointer coords to cell grid coords', async () => {

@@ -25,12 +25,17 @@
  *     On final byte `m` → apply SGR, return to Ground.
  *     On any other final byte (A-Z, a-z, @, `) → ignore (cursor, erase),
  *                                                 return to Ground.
- *     Private-mode `?1049h/l`, `?1047h/l`, `?47h/l` (alt-screen) does not
- *     affect the span output, but IS reported through the optional
- *     `onMode` side-channel callback so the Phase 3 TUI feature slice can
- *     flip the page layout between BlockList and xterm. When `onMode` is
- *     unset the CSI is still silently dropped, matching pre-Phase-3
- *     behaviour.
+ *     Private-mode `?1049h/l`, `?1047h/l`, `?47h/l` (alt-screen) and a
+ *     broader Phase-4 set (cursor visibility `?25`, bracketed paste
+ *     `?2004`, mouse tracking `?1000/?1002/?1003`, mouse encoding
+ *     `?1005/?1006/?1015`, focus reporting `?1004`, cursor blink `?12`,
+ *     origin mode `?6`) do not affect the span output, but ARE reported
+ *     through the optional `onMode` side-channel callback. The Phase 3 TUI
+ *     feature uses this to flip the page layout between BlockList and
+ *     xterm; other consumers (dev tools, side-by-side harness) use it to
+ *     reconstruct `TerminalModeSnapshot` state from the byte stream. When
+ *     `onMode` is unset the CSI is still silently dropped, matching
+ *     pre-Phase-3 behaviour.
  *   Osc              accumulate payload; terminator is either BEL or `ESC \`.
  *                    On terminator: if payload starts with `8;`, parse OSC 8.
  *   IgnoreUntilSt    consume bytes until `ESC \` (ST) or BEL; drop all.

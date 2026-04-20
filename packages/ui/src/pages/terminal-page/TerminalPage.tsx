@@ -66,7 +66,11 @@ import { openCompareFromBlock } from '../../features/compare/index.js';
 import { submitCommand } from '../../features/composer/submit.js';
 import { useCompareStore } from '../../entities/compare/index.js';
 import { ComparePanel } from '../../widgets/compare-panel/index.js';
-import { DegradedBanner, useDegradedMode } from '../../features/degraded-mode/index.js';
+import {
+  DegradedBanner,
+  bindDegradedGate,
+  useDegradedMode,
+} from '../../features/degraded-mode/index.js';
 import type { ConnectedSession } from '../../features/session/index.js';
 import {
   createSession,
@@ -407,6 +411,23 @@ function TerminalPageContent() {
   // event (EPIC-H §4.4) and exposes a `state` the banner reads.
   const bridge = tryGetHostBridge();
   const degraded = useDegradedMode({ bridge: bridge ?? null });
+
+  // RFC §20 / ADR 0010: while the engine is degraded, user input must not
+  // reach the PTY. We bind a narrow gate port that the production write
+  // paths (`features/command/execute.ts` and `ConnectedSession.write`)
+  // consult before hitting the bridge. A ref indirection keeps the bound
+  // closures pointing at fresh hook state without re-binding on every
+  // render.
+  const degradedRef = useRef(degraded);
+  degradedRef.current = degraded;
+  useEffect(() => {
+    const dispose = bindDegradedGate({
+      isDegraded: () => degradedRef.current.state === 'degraded',
+      reportDroppedInput: () => degradedRef.current.incrementDroppedInput(),
+    });
+    return dispose;
+  }, []);
+
   const handleRestart = useCallback(async () => {
     try {
       if (activeSessionId !== null) {

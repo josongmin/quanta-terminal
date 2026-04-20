@@ -13,10 +13,11 @@
 //!
 //! The engine (see `crates/quanta-vt/src/adapters/vte_processor.rs`) parses
 //! OSC 52 and emits [`TerminalEvent::ClipboardRequest`] with
-//! [`ClipboardPayload::Set { selection, data }`] or `Query { selection }`.
-//! Base64 decoding, clipboard integration, and payload-size policy are
-//! **out of scope for the VT engine** — they live in the session / host
-//! adapter layer. These tests pin the engine-side contract.
+//! [`ClipboardPayload::Set { selection, extra_selections, data }`] or
+//! `Query { selection, extra_selections }`. Base64 decoding, clipboard
+//! integration, and payload-size policy are **out of scope for the VT
+//! engine** — they live in the session / host adapter layer. These tests
+//! pin the engine-side contract.
 
 mod common;
 
@@ -48,6 +49,7 @@ fn osc_52_set_clipboard_st_terminated() {
         payloads,
         vec![ClipboardPayload::Set {
             selection: b'c',
+            extra_selections: Vec::new(),
             data: "aGVsbG8=".to_string(),
         }]
     );
@@ -65,6 +67,7 @@ fn osc_52_set_clipboard_bel_terminated() {
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'c',
+            extra_selections: Vec::new(),
             data: "aGVsbG8=".to_string(),
         }]
     );
@@ -85,6 +88,7 @@ fn osc_52_primary_selection() {
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'p',
+            extra_selections: Vec::new(),
             data: "Zm9v".to_string(),
         }]
     );
@@ -105,42 +109,76 @@ fn osc_52_select_secondary_cutbuffer() {
         payloads[0],
         ClipboardPayload::Set {
             selection: b's',
+            ref extra_selections,
             ref data
-        } if data == "YWFh"
+        } if data == "YWFh" && extra_selections.is_empty()
     ));
     assert!(matches!(
         payloads[1],
         ClipboardPayload::Set {
             selection: b'q',
+            ref extra_selections,
             ref data
-        } if data == "YmJi"
+        } if data == "YmJi" && extra_selections.is_empty()
     ));
     assert!(matches!(
         payloads[2],
         ClipboardPayload::Set {
             selection: b'0',
+            ref extra_selections,
             ref data
-        } if data == "Y2Nj"
+        } if data == "Y2Nj" && extra_selections.is_empty()
     ));
 }
 
 #[test]
-fn osc_52_multi_selection_prefix_pc_collapses_to_first_byte() {
+fn osc_52_multi_selection_prefix_pc_preserves_all_targets() {
     // xterm docs: the `Pc` field can be multiple chars, e.g. `pc` to
-    // target both primary and clipboard. The current engine takes only
-    // the first byte. This test pins that documented simplification so
-    // a future expansion (splitting into a `HashSet<u8>`) shows up as a
-    // deliberate contract change. (Production gap: multi-selection
-    // intent is lost — only `p` is honoured here.)
+    // target both primary and clipboard. The engine surfaces the first
+    // char as `selection` (primary target, ergonomic for consumers that
+    // only care about one) and the remainder via `extra_selections` so
+    // host adapters can broadcast the write to every requested target.
     let mut g = grid(3, 10);
     let events = g.feed(b"\x1b]52;pc;YWJj\x07");
     assert_eq!(
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'p',
+            extra_selections: vec![b'c'],
             data: "YWJj".to_string(),
         }],
-        "engine currently collapses multi-char selection to the first byte"
+        "multi-char selection must expose all targets"
+    );
+}
+
+#[test]
+fn osc_52_multi_selection_prefix_multiple_extras_preserved() {
+    // Three-char selection (primary + clipboard + secondary) should
+    // keep every target.
+    let mut g = grid(3, 10);
+    let events = g.feed(b"\x1b]52;pcq;YWJj\x07");
+    assert_eq!(
+        clipboard_payloads(&events),
+        vec![ClipboardPayload::Set {
+            selection: b'p',
+            extra_selections: vec![b'c', b'q'],
+            data: "YWJj".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn osc_52_multi_selection_query_preserves_all_targets() {
+    // Multi-selection query must also keep every target so the host
+    // adapter can respond to the right selection set.
+    let mut g = grid(3, 10);
+    let events = g.feed(b"\x1b]52;pc;?\x07");
+    assert_eq!(
+        clipboard_payloads(&events),
+        vec![ClipboardPayload::Query {
+            selection: b'p',
+            extra_selections: vec![b'c'],
+        }]
     );
 }
 
@@ -155,6 +193,7 @@ fn osc_52_empty_selection_defaults_to_c() {
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'c',
+            extra_selections: Vec::new(),
             data: "aGVsbG8=".to_string(),
         }],
         "missing selection defaults to 'c'"
@@ -171,7 +210,10 @@ fn osc_52_query_clipboard() {
     let events = g.feed(b"\x1b]52;c;?\x07");
     assert_eq!(
         clipboard_payloads(&events),
-        vec![ClipboardPayload::Query { selection: b'c' }]
+        vec![ClipboardPayload::Query {
+            selection: b'c',
+            extra_selections: Vec::new(),
+        }]
     );
 }
 
@@ -181,7 +223,10 @@ fn osc_52_query_primary_selection() {
     let events = g.feed(b"\x1b]52;p;?\x1b\\");
     assert_eq!(
         clipboard_payloads(&events),
-        vec![ClipboardPayload::Query { selection: b'p' }]
+        vec![ClipboardPayload::Query {
+            selection: b'p',
+            extra_selections: Vec::new(),
+        }]
     );
 }
 
@@ -201,6 +246,7 @@ fn osc_52_malformed_base64_still_dispatched() {
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'c',
+            extra_selections: Vec::new(),
             data: "!@#not-base64!@#".to_string(),
         }]
     );
@@ -217,6 +263,7 @@ fn osc_52_missing_payload_is_empty_set() {
         clipboard_payloads(&events),
         vec![ClipboardPayload::Set {
             selection: b'c',
+            extra_selections: Vec::new(),
             data: String::new(),
         }]
     );
@@ -254,8 +301,16 @@ fn osc_52_64k_payload_truncated_at_vte_buffer_cap() {
     let payloads = clipboard_payloads(&events);
     assert_eq!(payloads.len(), 1, "one clipboard event is still emitted");
     match &payloads[0] {
-        ClipboardPayload::Set { selection, data } => {
+        ClipboardPayload::Set {
+            selection,
+            extra_selections,
+            data,
+        } => {
             assert_eq!(*selection, b'c');
+            assert!(
+                extra_selections.is_empty(),
+                "single-char selection should not populate extras"
+            );
             assert!(
                 data.len() <= payload_len,
                 "truncated payload must not exceed input length"
@@ -299,14 +354,25 @@ fn osc_52_batched_back_to_back_all_emit() {
     assert_eq!(payloads.len(), 3);
     assert!(matches!(
         payloads[0],
-        ClipboardPayload::Set { selection: b'c', ref data } if data == "YQ=="
+        ClipboardPayload::Set {
+            selection: b'c',
+            ref extra_selections,
+            ref data
+        } if data == "YQ==" && extra_selections.is_empty()
     ));
     assert!(matches!(
         payloads[1],
-        ClipboardPayload::Set { selection: b'p', ref data } if data == "Yg=="
+        ClipboardPayload::Set {
+            selection: b'p',
+            ref extra_selections,
+            ref data
+        } if data == "Yg==" && extra_selections.is_empty()
     ));
     assert!(matches!(
         payloads[2],
-        ClipboardPayload::Query { selection: b'c' }
+        ClipboardPayload::Query {
+            selection: b'c',
+            ref extra_selections,
+        } if extra_selections.is_empty()
     ));
 }

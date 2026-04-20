@@ -303,6 +303,24 @@ export class GridMirror {
     if (gate) return gate;
     const dirty = new Set<number>();
     let anyMismatch = false;
+    // Scrolls land BEFORE row deltas per `ScrollDeltaWire` docstring
+    // (quanta-proto::events_grid). The engine already bumps row revisions
+    // and emits matching row_deltas for every in-region row when it scrolls
+    // (`scroll_up_region` marks each touched row in `self.damage` — see
+    // crates/quanta-vt/src/domain/grid.rs §scroll_up_region). We therefore
+    // treat `scrolls` as a *signal* only: mark the covered row range dirty
+    // so a downstream consumer that observes the dirty set still re-renders
+    // the shifted region even if row_deltas coverage is sparse. Actual cell
+    // movement is NOT performed here — the authoritative content arrives via
+    // row_deltas in the same envelope.
+    const scrolls = env.payload.scrolls ?? [];
+    for (const sd of scrolls) {
+      if (this.rowCount === 0) continue;
+      const top = Math.max(0, sd.top | 0);
+      const bottom = Math.min(this.rowCount - 1, sd.bottom | 0);
+      if (top > bottom) continue;
+      for (let r = top; r <= bottom; r += 1) dirty.add(r);
+    }
     for (const rd of env.payload.row_deltas) {
       if (rd.row >= this.rowCount) {
         // Out-of-range row (we're waiting for a resize snapshot); treat as
@@ -319,6 +337,14 @@ export class GridMirror {
       }
       this.writeRow(rd);
       dirty.add(rd.row);
+    }
+    // `scrollback_appended` is main-buffer-only per the wire spec. Accumulate
+    // unconditionally — alt-buffer envelopes carry zero because the engine
+    // only bumps it in the full-viewport main-buffer branch of
+    // `scroll_up_region`.
+    const appended = env.payload.scrollback_appended ?? 0;
+    if (appended > 0) {
+      this.scrollbackAppendedTotal += appended;
     }
     this.appliedSequence = env.sequence_no;
     if (dirty.size > 0) {

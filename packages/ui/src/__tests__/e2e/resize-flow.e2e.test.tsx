@@ -422,12 +422,11 @@ describe('resize full-loop (e2e)', () => {
     expect(result).toEqual({ outcome: 'discarded', reason: 'stale_resize_generation' });
   });
 
-  it('shrink — snapshot with smaller row count → CellBuffer downsizes rows, old rows dropped', async () => {
-    // Note on production quirk: `CellBuffer.writeSnapshot` grows cols
-    // (`Math.max(this.cols_, next)`) but only truly resizes rows. Column
-    // shrink is handled by a subsequent explicit `resize()` call in the
-    // production path (engine side) — we test row-shrink here, and assert
-    // the mirror carries the authoritative new dims.
+  it('shrink — snapshot with smaller row count AND cols → CellBuffer downsizes both axes', async () => {
+    // `CellBuffer.writeSnapshot` derives cols from the first row's
+    // `cells.length` and resizes the packed buffer accordingly. A snapshot
+    // that narrows the grid must take effect in both axes so the buffer
+    // stays in lock-step with the authoritative `GridMirror` dims.
     const m = mountCanvas({ rows: 12, cols: 40, contents: ['tall grid row 0'] });
     await flushEffects();
     expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 12, cols: 40 });
@@ -435,7 +434,7 @@ describe('resize full-loop (e2e)', () => {
     m.mirror.applySnapshot(
       snapshotEnv({
         rows: 3,
-        cols: 40,
+        cols: 16,
         contents: ['tiny'],
         gridEpoch: 1,
         sequenceNo: 3,
@@ -446,12 +445,12 @@ describe('resize full-loop (e2e)', () => {
     await flushEffects();
 
     // Mirror is the authority on dims.
-    expect(m.mirror.getDimensions()).toEqual({ rows: 3, cols: 40 });
-    // CellBuffer shrinks rows.
-    expect(m.ref.current?.cellBuffer.dimensions().rows).toBe(3);
-    // Out-of-range cells are clipped: getCell at the old (row=10, col=30)
-    // position must not return a live cell.
+    expect(m.mirror.getDimensions()).toEqual({ rows: 3, cols: 16 });
+    // CellBuffer shrinks on BOTH axes to match the mirror.
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 3, cols: 16 });
+    // Out-of-range cells are clipped on both axes.
     expect(m.ref.current?.cellBuffer.getCell(10, 30)).toBeNull();
+    expect(m.ref.current?.cellBuffer.getCell(0, 30)).toBeNull();
     // Surviving row carries the new content.
     expect(m.ref.current?.cellBuffer.getCell(0, 0)?.grapheme).toBe('tiny');
   });
@@ -473,11 +472,8 @@ describe('resize full-loop (e2e)', () => {
 
     // Part B: practical minimum — a 1×N snapshot is the smallest row-count
     // the widget will represent. A real engine never emits rows=0 (it emits
-    // the previous dim if the host reports a zero window).
-    // Note: `CellBuffer.writeSnapshot` grows cols via Math.max, so after a
-    // 1-row snapshot the mirror authoritatively holds the new cols but the
-    // buffer retains the max-of-(old, new) column count. We assert the
-    // mirror and the row-shrink on the buffer.
+    // the previous dim if the host reports a zero window). Mirror and
+    // CellBuffer must both follow the new dims authoritatively.
     const m = mountCanvas({ rows: 4, cols: 16 });
     await flushEffects();
     m.mirror.applySnapshot(
@@ -492,7 +488,7 @@ describe('resize full-loop (e2e)', () => {
     driveSnapshotIntoWidget(m);
     await flushEffects();
     expect(m.mirror.getDimensions()).toEqual({ rows: 1, cols: 16 });
-    expect(m.ref.current?.cellBuffer.dimensions().rows).toBe(1);
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 1, cols: 16 });
   });
 
   it('rapid successive resize snapshots — last snapshot wins, no intermediate residue', async () => {
@@ -520,10 +516,9 @@ describe('resize full-loop (e2e)', () => {
     await flushEffects();
 
     expect(m.mirror.getDimensions()).toEqual({ rows: 10, cols: 30 });
-    // Last-snapshot-wins on rows. Cols grows monotonically through
-    // writeSnapshot — ending at the max observed.
-    expect(m.ref.current?.cellBuffer.dimensions().rows).toBe(10);
-    expect(m.ref.current?.cellBuffer.dimensions().cols).toBeGreaterThanOrEqual(30);
+    // Last-snapshot-wins on both axes — the CellBuffer follows the final
+    // authoritative dims from the mirror, not the monotonic max.
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 10, cols: 30 });
   });
 
   it('selection across a resize — extend-beyond-new-bounds stays in SelectionManager, copy clips to new dims', async () => {
@@ -545,8 +540,7 @@ describe('resize full-loop (e2e)', () => {
     });
     expect(m.ref.current?.selection.get()).not.toBeNull();
 
-    // Shrink (rows-only, cols held at 16 due to CellBuffer.writeSnapshot
-    // col-max quirk documented in the shrink test above).
+    // Shrink the grid. CellBuffer follows the mirror on both axes.
     m.mirror.applySnapshot(
       snapshotEnv({
         rows: 2,
@@ -565,17 +559,120 @@ describe('resize full-loop (e2e)', () => {
     expect(m.ref.current?.cellBuffer.dimensions().rows).toBe(2);
     // SelectionManager still holds the stale anchor (per production
     // policy — no invalidation), but the user-visible `copy()` output
-    // must not reference rows beyond the new grid. At worst copy
-    // returns empty text for the out-of-range slice.
-    // We cannot assert on exact copy contents (trailing whitespace trim
-    // behavior), but we CAN assert that calling copy doesn't throw and
-    // does not return a string containing the old content.
+    // must not reference rows beyond the new grid.
     let copied = '';
     expect(() => {
       copied = m.ref.current!.selection.copy();
     }).not.toThrow();
+    // Must NOT leak the vanished pre-resize content.
     expect(copied).not.toContain('hello world');
     expect(copied).not.toContain('second line');
+    // Positive assertion: the surviving rows ('hi' and 'ok') are what a
+    // copy of a grid-wide selection on the POST-resize buffer should
+    // produce. This pins the "clip to new dims" behavior concretely — if
+    // the selection path accidentally returns empty text on a stale
+    // out-of-range end anchor, the positive assertion fails.
+    expect(copied).toContain('hi');
+    expect(copied).toContain('ok');
+  });
+
+  it('full loop — bridge.resize + mirror snapshot at the new dims together drive the widget to the new geometry', async () => {
+    // The other tests cover the two halves in isolation:
+    //   - "ConnectedSession.resize forwards ..." covers feature → bridge.
+    //   - "new snapshot with bumped resize_generation ..." covers mirror →
+    //     CellBuffer.
+    // This test composes them in one flow so a regression that wires the
+    // bridge call to the wrong session, or silently drops the post-resize
+    // snapshot at the widget seam, is caught at the e2e boundary.
+    const bridge = makeBridge();
+    const session = await connectSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: () => undefined,
+    });
+    // Host-side would normally emit a new snapshot in response to resize.
+    // We simulate that in the same act so both halves participate.
+    const m = mountCanvas({ rows: 24, cols: 80, contents: ['before'] });
+    await flushEffects();
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 24, cols: 80 });
+
+    await session.resize(100, 30);
+    expect(bridge.resize).toHaveBeenCalledWith(SESSION_ID, 100, 30);
+
+    // The engine now fires a fresh snapshot at the matching dims.
+    m.mirror.applySnapshot(
+      snapshotEnv({
+        rows: 30,
+        cols: 100,
+        contents: ['after'],
+        gridEpoch: 1,
+        sequenceNo: 20,
+        resizeGeneration: 1,
+      }),
+    );
+    driveSnapshotIntoWidget(m);
+    await flushEffects();
+    expect(m.mirror.getDimensions()).toEqual({ rows: 30, cols: 100 });
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 30, cols: 100 });
+    // Content of the new row 0 is visible through the buffer.
+    expect(m.ref.current?.cellBuffer.getCell(0, 0)?.grapheme).toBe('after');
+    await session.close();
+  });
+
+  it('shrink ONLY cols (rows unchanged) — CellBuffer narrows the column axis independently', async () => {
+    // Orthogonal axis check: a column-only shrink must not accidentally be
+    // clamped against the previous column count. Previously `writeSnapshot`
+    // only resized when both axes changed (RFC §22 #13); the recent fix makes
+    // either axis trigger a re-dimension. Pin the column-only path.
+    const m = mountCanvas({ rows: 6, cols: 40, contents: ['abcdefghij'] });
+    await flushEffects();
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 6, cols: 40 });
+
+    m.mirror.applySnapshot(
+      snapshotEnv({
+        rows: 6,
+        cols: 12,
+        contents: ['shrunk'],
+        gridEpoch: 1,
+        sequenceNo: 4,
+        resizeGeneration: 1,
+      }),
+    );
+    driveSnapshotIntoWidget(m);
+    await flushEffects();
+
+    expect(m.mirror.getDimensions()).toEqual({ rows: 6, cols: 12 });
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 6, cols: 12 });
+    // Cells beyond the new column count are clipped.
+    expect(m.ref.current?.cellBuffer.getCell(0, 12)).toBeNull();
+    expect(m.ref.current?.cellBuffer.getCell(0, 11)).not.toBeNull();
+  });
+
+  it('shrink ONLY rows (cols unchanged) — CellBuffer drops excess rows and out-of-range row reads clip', async () => {
+    // Symmetric orthogonal check for the row axis.
+    const m = mountCanvas({ rows: 20, cols: 24, contents: ['top'] });
+    await flushEffects();
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 20, cols: 24 });
+
+    m.mirror.applySnapshot(
+      snapshotEnv({
+        rows: 5,
+        cols: 24,
+        contents: ['after'],
+        gridEpoch: 1,
+        sequenceNo: 4,
+        resizeGeneration: 1,
+      }),
+    );
+    driveSnapshotIntoWidget(m);
+    await flushEffects();
+
+    expect(m.ref.current?.cellBuffer.dimensions()).toEqual({ rows: 5, cols: 24 });
+    // Rows beyond the new count are clipped.
+    expect(m.ref.current?.cellBuffer.getCell(5, 0)).toBeNull();
+    expect(m.ref.current?.cellBuffer.getCell(19, 0)).toBeNull();
+    expect(m.ref.current?.cellBuffer.getCell(4, 0)).not.toBeNull();
   });
 
   it('after resize, new delta at the new generation applies cleanly', async () => {

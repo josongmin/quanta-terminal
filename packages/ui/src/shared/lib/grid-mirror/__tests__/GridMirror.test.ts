@@ -8,8 +8,8 @@
  * previously untouched: the `apply()` router dispatch, getter exhaustion,
  * `dispose()`, the `meta` family (title / bell / clipboard), the
  * `onEpochMismatch` hook, the `applyResyncRowResponse` invariant gates,
- * and the documented-but-unprocessed `scrolls` / `scrollback_appended`
- * fields.
+ * and the `scrolls` / `scrollback_appended` delta extras (dirty-mark +
+ * counter accumulation).
  *
  * Related design:
  *   - ADR 0017 §2 — envelope-ordering invariants.
@@ -17,9 +17,6 @@
  *     §4 (reducer), §4.3 (apply-rest-on-mismatch), §5 (row-resync protocol),
  *     §13.7 (DECSET 2026 150 ms force-flush).
  *   - RFC 0001 §13 — synchronized-update timing budget.
- *
- * NOTE: per the mission brief, no production code is touched. Any suspected
- * bug is left as an `it.skip` with a comment rather than a silent workaround.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -330,18 +327,116 @@ describe('GridMirror.applyDelta — additional payload fields', () => {
     expect(m.getAppliedSequence()).toBe(1n);
   });
 
-  it('scrolls field is accepted but currently ignored by the mirror state', () => {
-    // Documented gap: EPIC-C mirror does not yet translate ScrollDelta into
-    // row rewrites. The event is accepted (no throw, envelope advances seq)
-    // but no grid mutation occurs from the scroll op alone.
-    const m = new GridMirror();
-    m.applySnapshot(blankSnapshot(3, 4, 0, 1));
-    const scroll: ScrollDelta = { top: 0, bottom: 2, lines: 1 };
+  it('scrolls field marks every row in the affected range dirty', () => {
+    // The mirror does not translate ScrollDelta into row rewrites (that
+    // authoritative content arrives via row_deltas in the same envelope).
+    // But per the engine contract, the covered range MUST surface in the
+    // dirty set so downstream renderers don't miss a scroll-only paint.
+    const onChange = vi.fn();
+    const m = new GridMirror({ onChange });
+    m.applySnapshot(blankSnapshot(5, 4, 0, 1));
+    onChange.mockClear();
+    const scroll: ScrollDelta = { top: 1, bottom: 3, lines: 1 };
     const r = m.applyDelta(deltaEnv([], { seq: 1, scrolls: [scroll] }));
     expect(r.outcome).toBe('applied');
-    // Row 0 and row 1 remain blank (no shift performed).
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const dirty = onChange.mock.calls[0]?.[0] as ReadonlySet<number>;
+    expect(new Set(dirty)).toEqual(new Set([1, 2, 3]));
+    // Row contents remain blank — no authoritative shift from the scroll
+    // signal alone.
     expect(m.getRow(0)?.cells[0]?.grapheme).toBe('');
-    expect(m.getRow(1)?.cells[0]?.grapheme).toBe('');
+    expect(m.getRow(4)?.cells[0]?.grapheme).toBe('');
+  });
+
+  it('multiple scroll regions dirty-mark their union', () => {
+    const onChange = vi.fn();
+    const m = new GridMirror({ onChange });
+    m.applySnapshot(blankSnapshot(6, 4, 0, 1));
+    onChange.mockClear();
+    const scrolls: ScrollDelta[] = [
+      { top: 0, bottom: 1, lines: 1 },
+      { top: 4, bottom: 5, lines: -1 },
+    ];
+    m.applyDelta(deltaEnv([], { seq: 1, scrolls }));
+    const dirty = onChange.mock.calls[0]?.[0] as ReadonlySet<number>;
+    expect(new Set(dirty)).toEqual(new Set([0, 1, 4, 5]));
+  });
+
+  it('scrolls clamp bottom to the current rowCount without throwing', () => {
+    // A scroll arriving mid-resize (bottom > rowCount-1) must not leak
+    // out-of-range indices into the dirty set. This is a defensive guard
+    // for a reducer/resize-race; the engine itself never emits out-of-range
+    // `bottom` in steady state.
+    const onChange = vi.fn();
+    const m = new GridMirror({ onChange });
+    m.applySnapshot(blankSnapshot(3, 4, 0, 1));
+    onChange.mockClear();
+    const scroll: ScrollDelta = { top: 0, bottom: 99, lines: 1 };
+    m.applyDelta(deltaEnv([], { seq: 1, scrolls: [scroll] }));
+    const dirty = onChange.mock.calls[0]?.[0] as ReadonlySet<number>;
+    expect(new Set(dirty)).toEqual(new Set([0, 1, 2]));
+  });
+
+  it('scroll dirty set unions with row_deltas in the same envelope', () => {
+    const onChange = vi.fn();
+    const m = new GridMirror({ onChange });
+    m.applySnapshot(blankSnapshot(4, 4, 0, 1));
+    onChange.mockClear();
+    m.applyDelta(
+      deltaEnv(
+        [singleRow(2, 1, 2, 'XXXX', 4)],
+        { seq: 1, scrolls: [{ top: 0, bottom: 1, lines: 1 }] },
+      ),
+    );
+    const dirty = onChange.mock.calls[0]?.[0] as ReadonlySet<number>;
+    expect(new Set(dirty)).toEqual(new Set([0, 1, 2]));
+    expect(m.getRow(2)?.cells[0]?.grapheme).toBe('XXXX');
+  });
+
+  it('scrolls with rowCount == 0 (mirror unseeded or cleared) are a no-op', () => {
+    // Defensive: receiving a delta with scrolls when the mirror has no rows
+    // is rare but must not index into an empty state.
+    const m = new GridMirror();
+    // Force a valid epoch but zero-sized grid.
+    m.applySnapshot(blankSnapshot(0, 0, 0, 1));
+    const r = m.applyDelta(
+      deltaEnv([], { seq: 1, scrolls: [{ top: 0, bottom: 5, lines: 1 }] }),
+    );
+    expect(r.outcome).toBe('applied');
+  });
+
+  it('scrollback_appended accumulates via the public getter and resets on snapshot', () => {
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(3, 4, 0, 1));
+    expect(m.getScrollbackAppendedTotal()).toBe(0);
+    m.applyDelta(deltaEnv([], { seq: 1, scrollback_appended: 2 }));
+    expect(m.getScrollbackAppendedTotal()).toBe(2);
+    m.applyDelta(deltaEnv([], { seq: 2, scrollback_appended: 5 }));
+    expect(m.getScrollbackAppendedTotal()).toBe(7);
+    // Snapshot reseeds — counter resets to 0.
+    m.applySnapshot(blankSnapshot(3, 4, 3, 1));
+    expect(m.getScrollbackAppendedTotal()).toBe(0);
+  });
+
+  it('scrollback_appended = 0 / missing is a no-op on the counter', () => {
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(3, 4, 0, 1));
+    m.applyDelta(deltaEnv([], { seq: 1, scrollback_appended: 0 }));
+    expect(m.getScrollbackAppendedTotal()).toBe(0);
+    // No scrollback_appended field at all (undefined default on the wire).
+    m.applyDelta(deltaEnv([], { seq: 2 }));
+    expect(m.getScrollbackAppendedTotal()).toBe(0);
+  });
+
+  it('stale-gated deltas do NOT accumulate scrollback_appended', () => {
+    const m = new GridMirror();
+    m.applySnapshot(blankSnapshot(3, 4, 0, 2)); // epoch=2
+    // Older-epoch delta is dropped by the gate.
+    const r = m.applyDelta(
+      deltaEnv([], { seq: 1, epoch: 1, scrollback_appended: 7 }),
+    );
+    expect(r.outcome).toBe('discarded');
+    expect(m.getScrollbackAppendedTotal()).toBe(0);
   });
 
   it('out-of-range row in a delta triggers row-resync and leaves sequence advanced', () => {

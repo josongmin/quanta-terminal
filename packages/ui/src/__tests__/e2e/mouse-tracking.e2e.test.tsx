@@ -36,6 +36,8 @@ import {
   ModeSnapshot,
 } from '../../features/input/ModeSnapshot.js';
 import { mount } from '../../features/input/input-host.js';
+import { AnsiParser } from '../../shared/lib/ansi-parser/parser.js';
+import type { AnsiModeEvent } from '../../shared/lib/ansi-parser/types.js';
 
 const CELL_W = 10;
 const CELL_H = 20;
@@ -481,6 +483,197 @@ describe('mouse tracking e2e', () => {
       harness.container.dispatchEvent(wheelEv);
       expect(harness.bytesOut).toHaveLength(0);
       expect(wheelEv.defaultPrevented).toBe(false);
+    });
+  });
+
+  // --------------------------------------------------- parser → mirror wire
+  describe('AnsiParser DEC private-mode events → encoder wire effect', () => {
+    /**
+     * Real byte-level round trip: a TUI emits `ESC[?1006h` (enable SGR 1006)
+     * followed by `ESC[?1000h` (enable button-event tracking). The parser's
+     * side-channel mode events are fed straight into the stub mirror exactly
+     * as EPIC-C's production mirror applies them — and a subsequent DOM click
+     * must emit an SGR-encoded byte stream. Before the parser grew these
+     * events, tests could only cover this via manual `applyMode` calls and
+     * the wire couldn't be driven from bytes.
+     */
+    it('?1006h + ?1000h bytes enable SGR encoding + button_event tracking end-to-end', () => {
+      harness = makeHarness({ mouseTracking: 'off', mouseEncoding: 'default' });
+
+      // Parse the raw CSI bytes using the real parser, then fan out the
+      // mode events to the mirror (this is what EPIC-C's mirror does on its
+      // ModeChanged path — we shortcut through the stub for the test harness).
+      const parser = new AnsiParser();
+      const events: AnsiModeEvent[] = [];
+      parser.onMode = (e) => events.push(e);
+      parser.feed(new TextEncoder().encode('\x1b[?1006h\x1b[?1000h'));
+      parser.flush();
+      expect(events).toEqual([
+        { kind: 'mouse_encoding_set', encoding: 'sgr' },
+        { kind: 'mouse_tracking_set', mode: 'button_event' },
+      ]);
+      for (const ev of events) {
+        if (ev.kind === 'mouse_encoding_set') {
+          harness.mirror.applyMode({ mouseEncoding: ev.encoding });
+        } else if (ev.kind === 'mouse_tracking_set') {
+          harness.mirror.applyMode({ mouseTracking: ev.mode });
+        }
+      }
+
+      dispatchPointer(harness.container, 'pointerdown', {
+        clientX: 20,
+        clientY: 20,
+        button: 0,
+      });
+      expect(harness.bytesOut).toHaveLength(1);
+      expect(asText(harness.bytesOut)).toBe('\u001b[<0;3;2M');
+    });
+
+    it('?1003h enables any_event so hover emits Cb=35; ?1003l returns to off', () => {
+      harness = makeHarness({ mouseEncoding: 'sgr' });
+      const parser = new AnsiParser();
+      const events: AnsiModeEvent[] = [];
+      parser.onMode = (e) => events.push(e);
+      parser.feed(new TextEncoder().encode('\x1b[?1003h'));
+      parser.flush();
+      expect(events).toEqual([{ kind: 'mouse_tracking_set', mode: 'any_event' }]);
+      harness.mirror.applyMode({ mouseTracking: 'any_event' });
+
+      dispatchPointer(harness.container, 'pointermove', {
+        clientX: 10,
+        clientY: 10,
+        button: -1,
+        buttons: 0,
+      });
+      expect(asText(harness.bytesOut)).toBe('\u001b[<35;2;1M');
+
+      // Parser emits the 'off' kind on ?1003l (mission-critical for TUIs
+      // that toggle any-event during e.g. a dropdown open/close).
+      events.length = 0;
+      harness.bytesOut.length = 0;
+      parser.feed(new TextEncoder().encode('\x1b[?1003l'));
+      parser.flush();
+      expect(events).toEqual([{ kind: 'mouse_tracking_set', mode: 'off' }]);
+      harness.mirror.applyMode({ mouseTracking: 'off' });
+      dispatchPointer(harness.container, 'pointermove', {
+        clientX: 10,
+        clientY: 10,
+        button: -1,
+        buttons: 0,
+      });
+      expect(harness.bytesOut).toHaveLength(0);
+    });
+
+    it('batched CSI ?1006;1000h yields two mode events in source order', () => {
+      // Pinning the "dispatch per param, source order" contract of the
+      // parser so a future refactor can't silently drop one mode when a
+      // batched CSI carries multiple private modes.
+      harness = makeHarness();
+      const parser = new AnsiParser();
+      const events: AnsiModeEvent[] = [];
+      parser.onMode = (e) => events.push(e);
+      parser.feed(new TextEncoder().encode('\x1b[?1006;1000h'));
+      parser.flush();
+      expect(events).toEqual([
+        { kind: 'mouse_encoding_set', encoding: 'sgr' },
+        { kind: 'mouse_tracking_set', mode: 'button_event' },
+      ]);
+    });
+  });
+
+  // ---------------------------------------------------- drag continuity
+  describe('drag continuity + per-encode snapshot', () => {
+    it('drag after press: base button 0 → Cb=32 on every pointermove until release', () => {
+      // A tmux drag (window selection) or a vim visual drag sends a press,
+      // many drag moves, and a release. Each drag move must include +32.
+      harness = makeHarness({
+        mouseTracking: 'button_event',
+        mouseEncoding: 'sgr',
+      });
+      dispatchPointer(harness.container, 'pointerdown', {
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+        buttons: 1,
+      });
+      dispatchPointer(harness.container, 'pointermove', {
+        clientX: 10,
+        clientY: 0,
+        button: 0,
+        buttons: 1,
+      });
+      dispatchPointer(harness.container, 'pointermove', {
+        clientX: 20,
+        clientY: 0,
+        button: 0,
+        buttons: 1,
+      });
+      dispatchPointer(harness.container, 'pointerup', {
+        clientX: 20,
+        clientY: 0,
+        button: 0,
+        buttons: 0,
+      });
+      expect(harness.bytesOut).toHaveLength(4);
+      expect(asText([harness.bytesOut[0]!])).toBe('\u001b[<0;1;1M'); // press
+      expect(asText([harness.bytesOut[1]!])).toBe('\u001b[<32;2;1M'); // drag
+      expect(asText([harness.bytesOut[2]!])).toBe('\u001b[<32;3;1M'); // drag
+      expect(asText([harness.bytesOut[3]!])).toBe('\u001b[<0;3;1m'); // release
+    });
+
+    it('mid-drag mode flip to off suppresses the next drag move (per-encode snapshot)', () => {
+      harness = makeHarness({
+        mouseTracking: 'button_event',
+        mouseEncoding: 'sgr',
+      });
+      dispatchPointer(harness.container, 'pointerdown', {
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+        buttons: 1,
+      });
+      expect(harness.bytesOut).toHaveLength(1);
+      harness.mirror.applyMode({ mouseTracking: 'off' });
+      dispatchPointer(harness.container, 'pointermove', {
+        clientX: 10,
+        clientY: 0,
+        button: 0,
+        buttons: 1,
+      });
+      expect(harness.bytesOut).toHaveLength(1); // still only the press
+    });
+  });
+
+  // ----------------------------------------------------- release terminator
+  describe('SGR 1006 terminator per event kind', () => {
+    it('release uses lowercase m; press/drag/wheel use uppercase M', () => {
+      // Spec check: the SGR 1006 spec uses `m` for release (u+006D) and
+      // `M` for press/drag/wheel (u+004D). Tests pin the byte literal so a
+      // future refactor can't invert them silently.
+      harness = makeHarness({
+        mouseTracking: 'button_event',
+        mouseEncoding: 'sgr',
+      });
+      dispatchPointer(harness.container, 'pointerdown', {
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      dispatchPointer(harness.container, 'pointerup', {
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      dispatchWheel(harness.container, {
+        clientX: 0,
+        clientY: 0,
+        deltaY: -1,
+      });
+      expect(harness.bytesOut).toHaveLength(3);
+      // Last byte of each chunk: 0x4d for press, 0x6d for release, 0x4d for wheel.
+      expect(harness.bytesOut[0]![harness.bytesOut[0]!.length - 1]).toBe(0x4d);
+      expect(harness.bytesOut[1]![harness.bytesOut[1]!.length - 1]).toBe(0x6d);
+      expect(harness.bytesOut[2]![harness.bytesOut[2]!.length - 1]).toBe(0x4d);
     });
   });
 });

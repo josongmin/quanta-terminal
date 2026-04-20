@@ -73,17 +73,23 @@ describe('AnsiParser.onMode (alt-screen side-channel)', () => {
     ]);
   });
 
-  it('single CSI with batched params like ?1049;25h emits one enter', () => {
+  it('single CSI with batched params like ?1049;25h emits alt_screen_enter + cursor_visible_set', () => {
     // xterm batches multiple DEC private-modes with `;`. Show-cursor (?25)
-    // is a common companion to alt-screen-enter. Emit one event, not two.
+    // is a common companion to alt-screen-enter. Phase 4: each recognized
+    // mode fires in source order, and alt-screen stays coalesced to one
+    // event across the three alt-screen codes (1049/1047/47).
     const { events } = driveWithEvents('\x1b[?1049;25h');
-    expect(events).toEqual([{ kind: 'alt_screen_enter' }]);
+    expect(events).toEqual([
+      { kind: 'alt_screen_enter' },
+      { kind: 'cursor_visible_set', value: true },
+    ]);
   });
 
-  it('batched CSI with only unrelated modes emits nothing', () => {
-    // Show-cursor alone: no alt-screen involvement.
+  it('batched CSI with only non-alt-screen modes still emits their Phase-4 events', () => {
+    // Phase 4: show-cursor (?25) now surfaces as `cursor_visible_set` even
+    // when no alt-screen code is present. Spans are unaffected.
     const { events, text } = driveWithEvents('\x1b[?25htext');
-    expect(events).toEqual([]);
+    expect(events).toEqual([{ kind: 'cursor_visible_set', value: true }]);
     expect(text).toBe('text');
   });
 
@@ -116,5 +122,189 @@ describe('AnsiParser.onMode (alt-screen side-channel)', () => {
     p.feed(enc.encode('\x1b[?10'));
     p.feed(enc.encode('49h'));
     expect(events).toEqual([{ kind: 'alt_screen_enter' }]);
+  });
+});
+
+/**
+ * Phase 4 extension — non-alt-screen private modes surface through the same
+ * `onMode` side-channel. The vocabulary mirrors `TerminalModeSnapshot`
+ * (EPIC-E), so consumers can apply events to the mirror without translation.
+ */
+describe('AnsiParser.onMode (Phase 4 non-alt-screen modes)', () => {
+  function drive(input: string): AnsiModeEvent[] {
+    const events: AnsiModeEvent[] = [];
+    const p = new AnsiParser();
+    p.onMode = (ev) => events.push(ev);
+    p.feed(enc.encode(input));
+    p.flush();
+    return events;
+  }
+
+  it('?25h fires cursor_visible_set=true', () => {
+    expect(drive('\x1b[?25h')).toEqual([
+      { kind: 'cursor_visible_set', value: true },
+    ]);
+  });
+
+  it('?25l fires cursor_visible_set=false', () => {
+    expect(drive('\x1b[?25l')).toEqual([
+      { kind: 'cursor_visible_set', value: false },
+    ]);
+  });
+
+  it('?2004h fires bracketed_paste_set=true', () => {
+    expect(drive('\x1b[?2004h')).toEqual([
+      { kind: 'bracketed_paste_set', value: true },
+    ]);
+  });
+
+  it('?2004l fires bracketed_paste_set=false', () => {
+    expect(drive('\x1b[?2004l')).toEqual([
+      { kind: 'bracketed_paste_set', value: false },
+    ]);
+  });
+
+  it('?1000h fires mouse_tracking_set=button_event (VT200 button reporting)', () => {
+    expect(drive('\x1b[?1000h')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'button_event' },
+    ]);
+  });
+
+  it('?1000l fires mouse_tracking_set=off', () => {
+    expect(drive('\x1b[?1000l')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'off' },
+    ]);
+  });
+
+  it('?1002h fires mouse_tracking_set=button_event (button + drag, same bucket)', () => {
+    expect(drive('\x1b[?1002h')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'button_event' },
+    ]);
+  });
+
+  it('?1003h fires mouse_tracking_set=any_event', () => {
+    expect(drive('\x1b[?1003h')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'any_event' },
+    ]);
+  });
+
+  it('?1003l fires mouse_tracking_set=off', () => {
+    expect(drive('\x1b[?1003l')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'off' },
+    ]);
+  });
+
+  it('?9h fires mouse_tracking_set=x10 (legacy pre-VT200)', () => {
+    expect(drive('\x1b[?9h')).toEqual([
+      { kind: 'mouse_tracking_set', mode: 'x10' },
+    ]);
+  });
+
+  it('?1006h fires mouse_encoding_set=sgr', () => {
+    expect(drive('\x1b[?1006h')).toEqual([
+      { kind: 'mouse_encoding_set', encoding: 'sgr' },
+    ]);
+  });
+
+  it('?1006l fires mouse_encoding_set=default', () => {
+    expect(drive('\x1b[?1006l')).toEqual([
+      { kind: 'mouse_encoding_set', encoding: 'default' },
+    ]);
+  });
+
+  it('?1005h fires mouse_encoding_set=utf8', () => {
+    expect(drive('\x1b[?1005h')).toEqual([
+      { kind: 'mouse_encoding_set', encoding: 'utf8' },
+    ]);
+  });
+
+  it('?1015h fires mouse_encoding_set=url_xterm', () => {
+    expect(drive('\x1b[?1015h')).toEqual([
+      { kind: 'mouse_encoding_set', encoding: 'url_xterm' },
+    ]);
+  });
+
+  it('?1004h fires focus_reporting_set=true', () => {
+    expect(drive('\x1b[?1004h')).toEqual([
+      { kind: 'focus_reporting_set', value: true },
+    ]);
+  });
+
+  it('?1004l fires focus_reporting_set=false', () => {
+    expect(drive('\x1b[?1004l')).toEqual([
+      { kind: 'focus_reporting_set', value: false },
+    ]);
+  });
+
+  it('?12h fires cursor_blinking_set=true', () => {
+    expect(drive('\x1b[?12h')).toEqual([
+      { kind: 'cursor_blinking_set', value: true },
+    ]);
+  });
+
+  it('?12l fires cursor_blinking_set=false', () => {
+    expect(drive('\x1b[?12l')).toEqual([
+      { kind: 'cursor_blinking_set', value: false },
+    ]);
+  });
+
+  it('?6h fires origin_mode_set=true', () => {
+    expect(drive('\x1b[?6h')).toEqual([
+      { kind: 'origin_mode_set', value: true },
+    ]);
+  });
+
+  it('?6l fires origin_mode_set=false', () => {
+    expect(drive('\x1b[?6l')).toEqual([
+      { kind: 'origin_mode_set', value: false },
+    ]);
+  });
+
+  it('batched multi-mode CSI emits each event in source order', () => {
+    // `?25;2004h` — cursor visible + bracketed paste, in that order. Both
+    // events fire in the order they appear in the parameter list.
+    expect(drive('\x1b[?25;2004h')).toEqual([
+      { kind: 'cursor_visible_set', value: true },
+      { kind: 'bracketed_paste_set', value: true },
+    ]);
+  });
+
+  it('batched CSI mixing alt-screen with other modes preserves order + coalescing', () => {
+    // `?1049;25;2004h` — alt-screen enter fires once, followed by cursor
+    // and bracketed-paste events in order.
+    expect(drive('\x1b[?1049;25;2004h')).toEqual([
+      { kind: 'alt_screen_enter' },
+      { kind: 'cursor_visible_set', value: true },
+      { kind: 'bracketed_paste_set', value: true },
+    ]);
+  });
+
+  it('batched CSI with two alt-screen codes still coalesces to one event', () => {
+    // Pathological but harmless: `?1049;1047h` — both are alt-screen enter.
+    // Phase-4 preserves the pre-existing contract of a single event per CSI.
+    expect(drive('\x1b[?1049;1047h')).toEqual([
+      { kind: 'alt_screen_enter' },
+    ]);
+  });
+
+  it('unknown private mode (?9999) is consumed silently', () => {
+    expect(drive('\x1b[?9999h')).toEqual([]);
+  });
+
+  it('mixed known + unknown modes only fires events for known ones', () => {
+    // `?9999;25h` — unknown then known; only `cursor_visible_set` fires.
+    expect(drive('\x1b[?9999;25h')).toEqual([
+      { kind: 'cursor_visible_set', value: true },
+    ]);
+  });
+
+  it('without onMode attached, Phase-4 modes are still dropped silently', () => {
+    // Backward-compat guardrail: the extended vocabulary must NOT introduce
+    // any span-level side effects when no consumer subscribes.
+    const p = new AnsiParser();
+    const spans = p.feed(enc.encode('pre\x1b[?25hmid\x1b[?2004hpost'));
+    const tail = p.flush();
+    const text = [...spans, ...tail].map((s) => s.text).join('');
+    expect(text).toBe('premidpost');
   });
 });

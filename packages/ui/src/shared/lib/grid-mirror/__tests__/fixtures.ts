@@ -125,6 +125,7 @@ export function deltaEnv(
     resize_generation?: number;
     buffer_kind?: BufferKind;
     scrolls?: ScrollDelta[];
+    scrollback_appended?: number;
   },
 ): GridEventEnvelope<GridDeltaPayload> {
   return makeEnv(
@@ -132,7 +133,7 @@ export function deltaEnv(
       kind: 'grid_delta',
       row_deltas: rows,
       scrolls: opts.scrolls ?? [],
-      scrollback_appended: 0,
+      scrollback_appended: opts.scrollback_appended ?? 0,
     },
     {
       grid_epoch: opts.epoch ?? 1,

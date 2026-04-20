@@ -125,6 +125,13 @@ export function Composer(props: ComposerProps) {
       // Silent — the early-return guard above usually catches this path.
       return;
     }
+    if (result.reason === 'degraded') {
+      // Session is in RFC §20 degraded state; the banner already tells the
+      // user what happened. No inline error — the drop is visible through
+      // the `droppedInputs` telemetry counter and the banner.
+      log.debug('submit dropped: engine degraded');
+      return;
+    }
     const detail = result.error?.message ?? 'unknown failure';
     setSubmitError(t('composer.error.writeRejected', { detail }));
     log.warn('bridge.write rejected during composer submit', result.error);

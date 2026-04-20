@@ -359,7 +359,19 @@ async function flushEffects(): Promise<void> {
   });
 }
 
-/** Dispatch a pointerdown at cell (row, col) with optional modifier flags. */
+/**
+ * Dispatch a pointerdown at cell (row, col) with optional modifier flags.
+ *
+ * We construct a custom Event subclass because jsdom's PointerEvent shim
+ * loses `ctrlKey`/`metaKey` when passed via testing-library's fireEvent in
+ * this package's environment. The subclass sets every property React's
+ * synthetic event reads off the native event, so the modifier-click code
+ * path on `TerminalCanvas` sees the same fields it would see from a real
+ * DOM pointerdown. The dispatch is wrapped in `act(...)` so that any React
+ * state update triggered by the handler (hover callback, selection start)
+ * is flushed before we assert — matches the production path and eliminates
+ * the "update inside test was not wrapped in act" warning.
+ */
 function clickCell(
   container: HTMLElement,
   row: number,
@@ -382,7 +394,9 @@ function clickCell(
     detail = 1;
     pointerType = 'mouse';
   })('pointerdown', { bubbles: true, cancelable: true });
-  app.dispatchEvent(native);
+  act(() => {
+    app.dispatchEvent(native);
+  });
 }
 
 // ---------------------------------------------------------------------------

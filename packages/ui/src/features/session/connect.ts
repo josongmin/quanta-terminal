@@ -48,6 +48,11 @@ import {
   finalizeActiveBlock,
   installCommandRouter,
 } from '../command/route-output.js'; // FIXME(fsd-layer-skip): session hands pty bytes + exit to command router per documented cross-slice handoff; see also the integration test comment for the inverse direction.
+// FIXME(fsd-layer-skip): the session feature consults the degraded gate so
+// the `ConnectedSession.write` wrapper honors RFC §20 ("input disabled
+// during degraded state") for every caller — command/submit today, and
+// input-host keystrokes once EPIC-F wires them through this seam.
+import { tryGetDegradedGate } from '../degraded-mode/degraded-gate.js';
 
 const log = createLogger('session.connect');
 
@@ -143,6 +148,17 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     sessionId,
     subscription,
     async write(text) {
+      // RFC §20 / ADR 0010: in degraded state the wrapper drops the bytes
+      // and increments the telemetry counter. Skipping the bridge call is
+      // conservative — any future capability-checked redirect (§20 "input
+      // is either disabled OR explicitly redirected only after capability
+      // check") would land here.
+      const gate = tryGetDegradedGate();
+      if (gate?.isDegraded()) {
+        gate.reportDroppedInput();
+        log.debug('write dropped: session is degraded', sessionId);
+        return;
+      }
       await bridge.write(sessionId, text);
     },
     async resize(nextCols, nextRows) {

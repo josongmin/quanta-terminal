@@ -195,3 +195,62 @@ describe('CellBuffer — getRowCells / isContinuation', () => {
     buffer.dispose();
   });
 });
+
+describe('CellBuffer — writeSnapshot dimensions', () => {
+  it('grows both rows and cols when the snapshot is larger', () => {
+    const source = new MirrorSource();
+    const buffer = new CellBuffer(source, { rows: 2, cols: 4 });
+    buffer.writeSnapshot([asciiRow('hello', 8), asciiRow('world', 8), asciiRow('!!!', 8)]);
+    expect(buffer.dimensions()).toEqual({ rows: 3, cols: 8 });
+    expect(buffer.getCell(0, 0)?.grapheme).toBe('h');
+    expect(buffer.getCell(2, 0)?.grapheme).toBe('!');
+    buffer.dispose();
+  });
+
+  it('shrinks rows AND cols when the snapshot is smaller (authoritative dims)', () => {
+    const source = new MirrorSource();
+    const buffer = new CellBuffer(source, { rows: 6, cols: 20 });
+    // Snapshot at 3×8 — both axes must shrink.
+    buffer.writeSnapshot([
+      asciiRow('abc', 8),
+      asciiRow('def', 8),
+      asciiRow('ghi', 8),
+    ]);
+    expect(buffer.dimensions()).toEqual({ rows: 3, cols: 8 });
+    // Out-of-range read past the shrunk cols yields null, not a residue cell.
+    expect(buffer.getCell(0, 10)).toBeNull();
+    expect(buffer.getCell(5, 0)).toBeNull();
+    expect(buffer.getCell(0, 0)?.grapheme).toBe('a');
+    buffer.dispose();
+  });
+
+  it('keeps existing cols when the snapshot has zero rows (no-op width)', () => {
+    // Guard: a stray 0-row snapshot must not wipe the buffer's cols to 0 (which
+    // would blow up renderer indexing). rows go to 0, cols hold.
+    const source = new MirrorSource();
+    const buffer = new CellBuffer(source, { rows: 3, cols: 12 });
+    buffer.writeSnapshot([]);
+    expect(buffer.dimensions()).toEqual({ rows: 0, cols: 12 });
+    buffer.dispose();
+  });
+
+  it('row-count mismatch alone still triggers a resize (even when cols stays the same)', () => {
+    const source = new MirrorSource();
+    const buffer = new CellBuffer(source, { rows: 4, cols: 8 });
+    buffer.writeSnapshot([asciiRow('a', 8)]);
+    expect(buffer.dimensions()).toEqual({ rows: 1, cols: 8 });
+    buffer.dispose();
+  });
+
+  it('cols-only shrink at the same row count propagates (mirror-authority parity)', () => {
+    const source = new MirrorSource();
+    const buffer = new CellBuffer(source, { rows: 2, cols: 16 });
+    // Row count unchanged but cols drops — buffer must follow.
+    buffer.writeSnapshot([asciiRow('xy', 4), asciiRow('zw', 4)]);
+    expect(buffer.dimensions()).toEqual({ rows: 2, cols: 4 });
+    // Out-of-range read on the old-cols index must be null.
+    expect(buffer.getCell(0, 10)).toBeNull();
+    expect(buffer.getCell(0, 0)?.grapheme).toBe('x');
+    buffer.dispose();
+  });
+});

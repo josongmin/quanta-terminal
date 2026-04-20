@@ -355,10 +355,24 @@ export class CellBuffer {
     this.damage.addRow(row);
   }
 
-  /** Apply a full row array (snapshot). */
+  /** Apply a full row array (snapshot).
+   *
+   * The snapshot is authoritative for both dimensions: a shrink in either
+   * axis must take effect so the buffer and the upstream `GridMirror` stay
+   * in lock-step (otherwise `getCell` out-of-bounds guards diverge and the
+   * renderer can paint residue beyond the new cols). Column count is
+   * derived from the first row's `cells.length`; if that is `0` (a stray
+   * empty row carried by a corner-case snapshot) we fall back to the
+   * existing column count to avoid wiping the buffer. */
   writeSnapshot(rows: readonly Row[]): void {
-    if (rows.length !== this.rows_) {
-      this.resize(rows.length, Math.max(this.cols_, rows[0]?.cells.length ?? 0));
+    const nextRows = rows.length;
+    const observedCols = rows[0]?.cells.length ?? 0;
+    // If rows is non-empty, trust the row's own cols as the authoritative
+    // column count (including shrinks). If rows is empty, keep the existing
+    // cols so we don't blow away the width on a no-op snapshot.
+    const nextCols = nextRows > 0 ? observedCols : this.cols_;
+    if (nextRows !== this.rows_ || nextCols !== this.cols_) {
+      this.resize(nextRows, nextCols);
     }
     for (let r = 0; r < rows.length; r += 1) {
       const row = rows[r];

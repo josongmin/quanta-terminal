@@ -7,3 +7,9 @@ export type {
   DegradedHandle,
   UseDegradedModeOptions,
 } from './useDegradedMode.js';
+export {
+  bindDegradedGate,
+  tryGetDegradedGate,
+  __resetDegradedGateForTests,
+} from './degraded-gate.js';
+export type { DegradedGate } from './degraded-gate.js';
