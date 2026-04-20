@@ -36,6 +36,7 @@ import type {
   MirrorCounterName,
   MirrorTelemetry,
   ModeChange,
+  PromptMarkPayload,
   ResyncRowRequest,
   Row,
   RowDelta,
@@ -113,6 +114,23 @@ export class GridMirror {
   private meta: GridMeta = {};
   private bufferKind: BufferKind = 'main';
   private hyperlinks = new Map<number, { uri: string; params: string | null; refcount: number }>();
+  /**
+   * Most recent OSC 133 marker observed by the mirror, or `null` before any
+   * mark has been applied. The payload is stored verbatim (same shape as the
+   * wire envelope's `payload`) so a consumer can branch on `mark` / inspect
+   * `exit_code` without re-deriving fields. Reset by `grid_snapshot`.
+   */
+  private lastPromptMark: PromptMarkPayload | null = null;
+  /**
+   * Running pair of [prompt-start(A), prompt-end(B)] positions, captured from
+   * successive `prompt_mark` envelopes. `promptStart` is set by 'A' and
+   * cleared when a 'C' arrives (command started — the prompt range is
+   * historical at that point) or by a new 'A' (defensive reset: a second 'A'
+   * without an intervening D is a shell resubmitting its prompt). `promptEnd`
+   * is set by 'B' relative to the most recent 'A'.
+   */
+  private promptStart: { row: number; col: number } | null = null;
+  private promptEnd: { row: number; col: number } | null = null;
   /** Sliding window of mismatch timestamps (ms). */
   private mismatchLog: number[] = [];
   private awaitingSnapshot = false;
@@ -174,6 +192,34 @@ export class GridMirror {
     return this.meta;
   }
 
+  /**
+   * Most recent OSC 133 marker, or `null` if none has been applied since the
+   * last snapshot. Consumers include:
+   *
+   *   - Block router: open a block on `C`, close with `exit_code` on `D`.
+   *   - Selection UI: highlight the prompt range using the A→B pair (see
+   *     `getPromptRange()`).
+   *
+   * Returned payload is the raw wire shape — `kind === 'prompt_mark'`, plus
+   * `mark`, optional `row`/`col`/`exit_code`/`aid`. Callers should not mutate.
+   */
+  getLastPromptMark(): Readonly<PromptMarkPayload> | null {
+    return this.lastPromptMark;
+  }
+
+  /**
+   * The current prompt range captured from an A → B pair, or `null` if no
+   * complete range is active. Cleared on `C` (command started) and on a new
+   * `A` (defensive: prompt restart before the previous command finished).
+   */
+  getPromptRange(): {
+    readonly start: { readonly row: number; readonly col: number };
+    readonly end: { readonly row: number; readonly col: number };
+  } | null {
+    if (this.promptStart === null || this.promptEnd === null) return null;
+    return { start: this.promptStart, end: this.promptEnd };
+  }
+
   getDimensions(): { rows: number; cols: number } {
     return { rows: this.rowCount, cols: this.colCount };
   }
@@ -231,6 +277,7 @@ export class GridMirror {
       case 'hyperlink_removed':
       case 'clipboard_request':
       case 'synchronized_update':
+      case 'prompt_mark':
         return this.applyMeta(env as GridEventEnvelope<GridPayload>);
       /* c8 ignore next 3 — unreachable once schema parity holds. */
       default:
@@ -287,6 +334,12 @@ export class GridMirror {
     // each row_delta, and the engine will re-emit `hyperlink_added` for any
     // URI that survives the reseed, so clearing here is safe.
     this.hyperlinks.clear();
+    // OSC 133 state is grid-scoped — a reseed wipes the row indexing that
+    // `promptStart` / `promptEnd` reference, so the captured range and the
+    // `lastPromptMark` become meaningless across the reseed boundary.
+    this.lastPromptMark = null;
+    this.promptStart = null;
+    this.promptEnd = null;
     // Clear mismatch / resync gating — the mirror is fresh.
     this.mismatchLog = [];
     this.awaitingSnapshot = false;
@@ -459,6 +512,64 @@ export class GridMirror {
           this.syncWindow.begin();
         } else {
           this.syncWindow.end();
+        }
+        this.appliedSequence = env.sequence_no;
+        return { outcome: 'applied' };
+      }
+      case 'prompt_mark': {
+        // Sequence gate protects against replayed or stale OSC 133 markers —
+        // a spoofed older-sequence mark cannot overwrite the current state.
+        const gate = this.gate(env, 'prompt_mark');
+        if (gate) return gate;
+        // Store the payload verbatim. We freeze via a defensive clone so
+        // consumers treating the returned reference as read-only stay safe
+        // even if a future mirror path mutates in place.
+        this.lastPromptMark = { ...payload };
+        switch (payload.mark) {
+          case 'A': {
+            // 'A' defines the start of a new prompt. A second 'A' without an
+            // intervening 'D' indicates the shell restarted its prompt (common
+            // after a Ctrl-C that the engine didn't surface as D); discard the
+            // stale range and begin fresh rather than carrying a half-range.
+            this.promptStart =
+              typeof payload.row === 'number' && typeof payload.col === 'number'
+                ? { row: payload.row, col: payload.col }
+                : null;
+            this.promptEnd = null;
+            break;
+          }
+          case 'B': {
+            // 'B' is only meaningful when paired with a prior 'A'. If 'A' was
+            // never seen (truncated replay, engine mid-stream), keep the end
+            // nulled so `getPromptRange()` does not expose a half-range.
+            if (this.promptStart !== null) {
+              this.promptEnd =
+                typeof payload.row === 'number' && typeof payload.col === 'number'
+                  ? { row: payload.row, col: payload.col }
+                  : null;
+            }
+            break;
+          }
+          case 'C': {
+            // 'C' — command execution has started; the prompt range is now
+            // historical. Clearing here keeps `getPromptRange()` reflective of
+            // only the *currently active* prompt, so a block router that
+            // polls it during command execution does not re-highlight the
+            // stale range.
+            this.promptStart = null;
+            this.promptEnd = null;
+            break;
+          }
+          case 'D': {
+            // 'D' carries optional `exit_code`. No range state to update;
+            // `lastPromptMark.exit_code` is the surface a block router
+            // consumes to close the active block with its exit code.
+            break;
+          }
+          /* c8 ignore next 3 — `mark` is a closed literal union; this branch
+             exists only to keep exhaustiveness checks honest. */
+          default:
+            break;
         }
         this.appliedSequence = env.sequence_no;
         return { outcome: 'applied' };

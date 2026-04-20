@@ -7,7 +7,7 @@
  * mounts without spawning a real bridge.
  */
 
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../widgets/terminal-shell/index.js', async () => {
@@ -172,29 +172,50 @@ describe('TerminalPage zoom keybindings', () => {
     useZoomStore.getState().reset();
   });
 
-  it('Cmd+= zooms in', () => {
-    render(<TerminalPage />);
-    triggerKey('=', { meta: true });
+  // Render the page, then await a pair of microtasks inside act() so the
+  // async boot effects (idb hydrate + spawn) land their state updates while
+  // React is still tracking them.
+  async function renderPage(): Promise<void> {
+    await act(async () => {
+      render(<TerminalPage />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it('Cmd+= zooms in', async () => {
+    await renderPage();
+    act(() => {
+      triggerKey('=', { meta: true });
+    });
     expect(useZoomStore.getState().zoomLevel).toBeCloseTo(ZOOM_DEFAULT + ZOOM_STEP, 2);
   });
 
-  it('Cmd+- zooms out', () => {
-    render(<TerminalPage />);
-    triggerKey('-', { meta: true });
+  it('Cmd+- zooms out', async () => {
+    await renderPage();
+    act(() => {
+      triggerKey('-', { meta: true });
+    });
     expect(useZoomStore.getState().zoomLevel).toBeCloseTo(ZOOM_DEFAULT - ZOOM_STEP, 2);
   });
 
-  it('Cmd+0 resets zoom', () => {
-    render(<TerminalPage />);
-    useZoomStore.getState().zoomIn();
-    useZoomStore.getState().zoomIn();
-    triggerKey('0', { meta: true });
+  it('Cmd+0 resets zoom', async () => {
+    await renderPage();
+    act(() => {
+      useZoomStore.getState().zoomIn();
+      useZoomStore.getState().zoomIn();
+    });
+    act(() => {
+      triggerKey('0', { meta: true });
+    });
     expect(useZoomStore.getState().zoomLevel).toBe(ZOOM_DEFAULT);
   });
 
-  it('applies the zoom level as a CSS variable on <html>', () => {
-    render(<TerminalPage />);
-    triggerKey('=', { meta: true });
+  it('applies the zoom level as a CSS variable on <html>', async () => {
+    await renderPage();
+    act(() => {
+      triggerKey('=', { meta: true });
+    });
     expect(document.documentElement.style.getPropertyValue('--q-zoom')).toBe(
       String(useZoomStore.getState().zoomLevel),
     );

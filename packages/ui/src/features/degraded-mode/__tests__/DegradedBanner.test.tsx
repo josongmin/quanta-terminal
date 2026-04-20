@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { DegradedBanner } from '../DegradedBanner.js';
 
 afterEach(() => {
@@ -30,11 +30,16 @@ describe('<DegradedBanner />', () => {
     expect(banner.getAttribute('aria-live')).toBe('assertive');
   });
 
-  it('fires onRestart when the button is clicked', () => {
+  it('fires onRestart when the button is clicked', async () => {
     const onRestart = vi.fn();
     render(<DegradedBanner onRestart={onRestart} />);
     const btn = screen.getByTestId('degraded-banner-restart');
-    fireEvent.click(btn);
+    await act(async () => {
+      fireEvent.click(btn);
+      // Flush the `queueMicrotask(() => setRestarting(false))` scheduled by
+      // the sync-restart branch so its state update happens inside act().
+      await Promise.resolve();
+    });
     expect(onRestart).toHaveBeenCalledTimes(1);
   });
 
@@ -48,15 +53,22 @@ describe('<DegradedBanner />', () => {
     });
     render(<DegradedBanner onRestart={onRestart} />);
     const btn = screen.getByTestId('degraded-banner-restart') as HTMLButtonElement;
-    fireEvent.click(btn);
+    await act(async () => {
+      fireEvent.click(btn);
+    });
     expect(btn.disabled).toBe(true);
-    fireEvent.click(btn);
+    await act(async () => {
+      fireEvent.click(btn);
+    });
     // The second click must be a no-op — onRestart was only invoked once.
     expect(onRestart).toHaveBeenCalledTimes(1);
-    resolve();
-    await pending;
-    // Let the microtask queue flush so state resets.
-    await new Promise((r) => setTimeout(r, 0));
+    await act(async () => {
+      resolve();
+      await pending;
+      // Let the microtask queue flush so the `.finally(setRestarting(false))`
+      // state update is committed inside act().
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(btn.disabled).toBe(false);
   });
 

@@ -188,31 +188,51 @@ beforeEach(() => {
   ensureLocalStorage().removeItem('quanta.experimental.side-by-side');
 });
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  // Unmount inside `act` so TerminalPage's post-unmount effects
+  // (session teardown, banner detector dispose, etc.) don't fire outside
+  // React's scope.
+  await act(async () => {
+    cleanup();
+    await Promise.resolve();
+  });
   ensureLocalStorage().removeItem('quanta.experimental.side-by-side');
 });
 
-describe('side-by-side dev flag', () => {
-  it('default — harness is NOT mounted', () => {
-    seedActiveSession();
+/**
+ * Mount `TerminalPage` inside `act` and flush the mount-phase effects
+ * (auto-boot `createSession`, banner detectors, session tabs). Two
+ * microtask ticks cover the chained promise-then + passive effect
+ * commit that the production boot path schedules.
+ */
+async function renderPage(): Promise<void> {
+  await act(async () => {
     render(<TerminalPage />);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+describe('side-by-side dev flag', () => {
+  it('default — harness is NOT mounted', async () => {
+    seedActiveSession();
+    await renderPage();
     expect(screen.queryByTestId('side-by-side-harness')).toBeNull();
   });
 
-  it('mounts when the localStorage flag flips to true', () => {
+  it('mounts when the localStorage flag flips to true', async () => {
     seedActiveSession();
     ensureLocalStorage().setItem('quanta.experimental.side-by-side', 'true');
-    render(<TerminalPage />);
+    await renderPage();
     expect(screen.getByTestId('side-by-side-harness')).toBeInTheDocument();
   });
 
-  it('unmounts when the flag flips back to false via storage event', () => {
+  it('unmounts when the flag flips back to false via storage event', async () => {
     seedActiveSession();
     ensureLocalStorage().setItem('quanta.experimental.side-by-side', 'true');
-    render(<TerminalPage />);
+    await renderPage();
     expect(screen.getByTestId('side-by-side-harness')).toBeInTheDocument();
-    act(() => {
+    await act(async () => {
       ensureLocalStorage().setItem('quanta.experimental.side-by-side', 'false');
       window.dispatchEvent(
         new StorageEvent('storage', {
@@ -220,6 +240,7 @@ describe('side-by-side dev flag', () => {
           newValue: 'false',
         }),
       );
+      await Promise.resolve();
     });
     expect(screen.queryByTestId('side-by-side-harness')).toBeNull();
   });

@@ -171,27 +171,39 @@ describe('<TerminalPage />', () => {
     cleanup();
   });
 
-  it('calls createSession on mount (Phase-4 auto-boot)', () => {
-    render(<TerminalPage />);
+  // Render the page, then await a pair of microtasks inside act() so the
+  // async boot effects (idb hydrate + spawn) land their state updates while
+  // React is still tracking them. Without this, `setHydrating(false)` and
+  // connection plumbing set state outside act() and emit warnings.
+  async function renderPage(): Promise<void> {
+    await act(async () => {
+      render(<TerminalPage />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it('calls createSession on mount (Phase-4 auto-boot)', async () => {
+    await renderPage();
     expect(createSessionSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('renders <LoadingState /> while booting with no session id', () => {
-    render(<TerminalPage />);
+  it('renders <LoadingState /> while booting with no session id', async () => {
+    await renderPage();
     expect(screen.getByTestId('loading-state')).toBeInTheDocument();
   });
 
-  it('renders <ErrorState /> with retry when health=error and no session id', () => {
+  it('renders <ErrorState /> with retry when health=error and no session id', async () => {
     act(() => {
       useSessionStore.getState().setSession({ health: 'error' });
     });
-    render(<TerminalPage />);
+    await renderPage();
     const alerts = screen.getAllByRole('alert');
     expect(alerts.some((a) => /failed to start/iu.test(a.textContent ?? ''))).toBe(true);
     expect(screen.getByRole('button', { name: /try again/iu })).toBeInTheDocument();
   });
 
-  it('ErrorState retry resets the session to booting', () => {
+  it('ErrorState retry resets the session to booting', async () => {
     act(() => {
       useSessionStore.getState().setSession({ health: 'error' });
     });
@@ -202,10 +214,11 @@ describe('<TerminalPage />', () => {
       writable: true,
     });
     try {
-      render(<TerminalPage />);
+      await renderPage();
       const retry = screen.getByRole('button', { name: /try again/iu });
-      act(() => {
+      await act(async () => {
         fireEvent.click(retry);
+        await Promise.resolve();
       });
       expect(useSessionStore.getState().health).toBe('booting');
       expect(useSessionStore.getState().id).toBeNull();
@@ -218,18 +231,18 @@ describe('<TerminalPage />', () => {
     }
   });
 
-  it('renders the BlockList host when a session id is present', () => {
+  it('renders the BlockList host when a session id is present', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     const main = screen.getByRole('main');
     expect(main.dataset['altScreenActive']).toBe('false');
   });
 
-  it('Escape dismisses the top banner when no other surface is open', () => {
+  it('Escape dismisses the top banner when no other surface is open', async () => {
     act(() => {
       useBannerStore.getState().raise('shell_integration');
     });
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     });
@@ -237,9 +250,9 @@ describe('<TerminalPage />', () => {
     expect(bs.dismissed.has('shell_integration')).toBe(true);
   });
 
-  it('flips data-alt-screen-active when the tui store enters alt-screen', () => {
+  it('flips data-alt-screen-active when the tui store enters alt-screen', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     const main = screen.getByRole('main');
     expect(main.dataset['altScreenActive']).toBe('false');
     act(() => {
@@ -248,9 +261,9 @@ describe('<TerminalPage />', () => {
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('true');
   });
 
-  it('mounts the AltScreenStatusBar and shows the command label on alt-screen', () => {
+  it('mounts the AltScreenStatusBar and shows the command label on alt-screen', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
     });
@@ -259,9 +272,9 @@ describe('<TerminalPage />', () => {
     expect(bar.textContent).toMatch(/vim/);
   });
 
-  it('reverts alt-screen active when the tui store exits', () => {
+  it('reverts alt-screen active when the tui store exits', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
     });

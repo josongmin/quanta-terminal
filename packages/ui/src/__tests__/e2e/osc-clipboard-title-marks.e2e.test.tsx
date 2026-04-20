@@ -75,6 +75,7 @@ import type {
 import {
   blankSnapshot,
   makeEnv,
+  promptMarkEnv,
   titleEnv,
 } from '../../shared/lib/grid-mirror/__tests__/fixtures.js';
 
@@ -334,52 +335,136 @@ describe('Byte-level parser behaviour for OSC 0/2/52 — envelope-only contract'
 });
 
 describe('OSC 133 — prompt marks (A/B/C/D)', () => {
-  // ---- Production gap -------------------------------------------------
+  // ---- UI contract note -----------------------------------------------
   //
-  // The `GridPayload` union in `shared/lib/grid-mirror/types.ts` does NOT
-  // include any OSC-133 envelope kind today. Grep for `prompt_mark`,
-  // `PromptMark`, `osc_133`, or any A/B/C/D discriminator in `packages/ui`
-  // returns zero production-code hits. The only surface that reads any
-  // form of OSC 133 is `features/command/boundary-detector.ts`, which
-  // explicitly defers OSC 133 D detection to "real shells will replace
-  // this with an OSC 133 D detector" — i.e. Phase 2 uses a mock-prompt
-  // suffix as the block terminator, not OSC 133.
+  // `GridPayload` now includes a `prompt_mark` kind whose TS shape lives in
+  // `shared/lib/grid-mirror/types.ts` (mirrored on the wire-side in
+  // `@quanta/host-common::PromptMarkEvent`). The Rust VT engine does NOT
+  // yet emit this payload — envelope emission is a follow-up epic on the
+  // engine side — but the mirror accepts and applies it today so the
+  // downstream block-router has a typed surface to consume the moment the
+  // engine starts emitting. These tests lock the UI contract down:
   //
-  // The following tests are kept as `.skip` documentation of the contract
-  // we expect a future envelope to satisfy. When the Rust VT processor
-  // starts emitting `prompt_mark` payloads and the TS reducer grows
-  // matching apply logic, these tests can be un-skipped in a single
-  // commit and will immediately exercise the new code path.
+  //   - `GridMirror.getLastPromptMark()` returns the raw payload verbatim.
+  //   - A / B build up a `getPromptRange()` pair.
+  //   - C opens a block boundary (clears the range; marks command-active).
+  //   - D carries an optional `exit_code` (number, or null for "unknown").
 
-  it.skip('A — prompt start is recorded (production gap: no PromptMark envelope kind today)', () => {
-    // Expected shape, when it lands:
-    //   payload.kind === 'prompt_mark' && payload.mark === 'A'
-    // Expected behavior:
-    //   - GridMirror stores the row/col of the prompt-start marker so a
-    //     block detector can associate it with the next command.
-    expect.unreachable('OSC 133 A envelope not yet implemented');
+  it('A — prompt start is recorded on the mirror', () => {
+    const m = freshMirror();
+    const r = m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    expect(r.outcome).toBe('applied');
+    const last = m.getLastPromptMark();
+    expect(last?.kind).toBe('prompt_mark');
+    expect(last?.mark).toBe('A');
+    // row/col round-trip for block-detector association.
+    expect(last?.row).toBe(3);
+    expect(last?.col).toBe(0);
   });
 
-  it.skip('B — prompt end / command start pairs with the prior A (production gap)', () => {
-    // Expected shape: payload.mark === 'B'. Expected behavior: mirror exposes
-    // a `getMeta().prompt_range` (or similar) capturing [A_pos, B_pos] so
-    // selection can highlight just the prompt text.
-    expect.unreachable('OSC 133 B envelope not yet implemented');
+  it('B — prompt end pairs with the prior A into a complete range', () => {
+    const m = freshMirror();
+    m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    m.apply(promptMarkEnv('B', { seq: 2, row: 3, col: 12 }));
+    const range = m.getPromptRange();
+    expect(range).not.toBeNull();
+    expect(range?.start).toEqual({ row: 3, col: 0 });
+    expect(range?.end).toEqual({ row: 3, col: 12 });
+    // `lastPromptMark` still reflects the most recent envelope.
+    expect(m.getLastPromptMark()?.mark).toBe('B');
   });
 
-  it.skip('C — command execution marker triggers block-open (production gap)', () => {
-    // Expected shape: payload.mark === 'C'. Expected behavior: the block
-    // router opens a new `Block` as soon as C arrives; today the router
-    // opens blocks from the mock-prompt suffix in `boundary-detector.ts`.
-    expect.unreachable('OSC 133 C envelope not yet implemented');
+  it('C — command execution marker clears the prompt range (block boundary)', () => {
+    const m = freshMirror();
+    m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    m.apply(promptMarkEnv('B', { seq: 2, row: 3, col: 12 }));
+    expect(m.getPromptRange()).not.toBeNull();
+    m.apply(promptMarkEnv('C', { seq: 3 }));
+    // Range is historical once the command started; the mirror stops
+    // exposing it so downstream consumers don't paint a stale prompt
+    // highlight during command execution.
+    expect(m.getPromptRange()).toBeNull();
+    expect(m.getLastPromptMark()?.mark).toBe('C');
   });
 
-  it.skip('D — command finished, exit code reflected on the closing block (production gap)', () => {
-    // Expected shape:
-    //   payload.mark === 'D' && typeof payload.exit_code === 'number'
-    // Expected behavior: block-router consumes D to close the active
-    // block with `exitCode = payload.exit_code` (replacing the today's
-    // `null` fallback in `BoundaryFeedResult.exitCode`).
-    expect.unreachable('OSC 133 D envelope not yet implemented');
+  it('D — command finished with exit_code=0 is reflected on lastPromptMark', () => {
+    const m = freshMirror();
+    m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    m.apply(promptMarkEnv('B', { seq: 2, row: 3, col: 12 }));
+    m.apply(promptMarkEnv('C', { seq: 3 }));
+    const r = m.apply(promptMarkEnv('D', { seq: 4, exit_code: 0 }));
+    expect(r.outcome).toBe('applied');
+    const last = m.getLastPromptMark();
+    expect(last?.mark).toBe('D');
+    expect(last?.exit_code).toBe(0);
+  });
+
+  it('full A → B → C → D sequence rides the sequence gate in-order', () => {
+    const m = freshMirror();
+    expect(m.apply(promptMarkEnv('A', { seq: 1, row: 2, col: 0 })).outcome).toBe('applied');
+    expect(m.apply(promptMarkEnv('B', { seq: 2, row: 2, col: 6 })).outcome).toBe('applied');
+    expect(m.apply(promptMarkEnv('C', { seq: 3 })).outcome).toBe('applied');
+    expect(m.apply(promptMarkEnv('D', { seq: 4, exit_code: 127 })).outcome).toBe('applied');
+    expect(m.getAppliedSequence()).toBe(4n);
+    expect(m.getLastPromptMark()?.exit_code).toBe(127);
+  });
+
+  it('D with exit_code=null ("unknown") is admitted — shell did not report status', () => {
+    // Some shells (or OSC 133 producers truncated mid-stream) emit the D
+    // marker without an exit code. The mirror must accept the envelope and
+    // surface `null` so consumers can branch on "no exit code reported"
+    // instead of mis-reading a missing field as "success".
+    const m = freshMirror();
+    const r = m.apply(promptMarkEnv('D', { seq: 1, exit_code: null }));
+    expect(r.outcome).toBe('applied');
+    expect(m.getLastPromptMark()?.mark).toBe('D');
+    expect(m.getLastPromptMark()?.exit_code).toBeNull();
+  });
+
+  it('A after A (shell re-prompted without D) defensively resets the range', () => {
+    // Ctrl-C on some shells resubmits the prompt WITHOUT an intervening D.
+    // If the mirror kept the first A's start alongside the new prompt the
+    // captured range would span the cancelled + resumed prompt, confusing
+    // any downstream highlighter. Verify that a second A wipes the prior
+    // half-range before accumulating a new one.
+    const m = freshMirror();
+    m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    m.apply(promptMarkEnv('B', { seq: 2, row: 3, col: 12 }));
+    expect(m.getPromptRange()).not.toBeNull();
+    // Second A arrives — the prior B should no longer be reachable as a range.
+    m.apply(promptMarkEnv('A', { seq: 3, row: 5, col: 0 }));
+    expect(m.getPromptRange()).toBeNull();
+    expect(m.getLastPromptMark()?.mark).toBe('A');
+    expect(m.getLastPromptMark()?.row).toBe(5);
+  });
+
+  it('stale-sequence prompt_mark is discarded by the same gate as every other meta event', () => {
+    // ADR 0017 §2 — `sequence_no <= appliedSequence` → discard. A replayed
+    // prompt_mark (e.g. from a buggy engine re-emitting an envelope) must
+    // not overwrite a newer marker. We apply seq=5 first, then a stale
+    // seq=3, and expect the later state (seq=5) to survive.
+    const m = freshMirror();
+    m.apply(promptMarkEnv('C', { seq: 5 }));
+    const r = m.apply(promptMarkEnv('A', { seq: 3, row: 0, col: 0 }));
+    expect(r.outcome).toBe('discarded');
+    if (r.outcome === 'discarded') {
+      expect(r.reason).toBe('stale_sequence');
+    }
+    // The stale 'A' must not have overwritten the prior 'C'.
+    expect(m.getLastPromptMark()?.mark).toBe('C');
+  });
+
+  it('grid_snapshot clears prompt_mark state (range references are row-indexed)', () => {
+    // Snapshots authoritative-reseed the grid; row indices in a captured
+    // prompt range cease to be meaningful across the reseed boundary.
+    // The mirror must wipe the state, not carry forward a stale range.
+    const m = freshMirror();
+    m.apply(promptMarkEnv('A', { seq: 1, row: 3, col: 0 }));
+    m.apply(promptMarkEnv('B', { seq: 2, row: 3, col: 10 }));
+    expect(m.getPromptRange()).not.toBeNull();
+    // Fresh snapshot (same epoch, new sequence) — acts as a reseed.
+    m.applySnapshot(blankSnapshot(4, 8, 3, 1));
+    expect(m.getPromptRange()).toBeNull();
+    expect(m.getLastPromptMark()).toBeNull();
   });
 });

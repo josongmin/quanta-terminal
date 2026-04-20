@@ -136,10 +136,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('alt-screen transitions on TerminalPage', () => {
-  it('E2E-H1: enter flips data-alt-screen-active within a render', () => {
-    seedActiveSession();
+// Render the page, then await a pair of microtasks inside act() so the
+// async boot effects (idb hydrate + spawn) land their state updates while
+// React is still tracking them.
+async function renderPage(): Promise<void> {
+  await act(async () => {
     render(<TerminalPage />);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+describe('alt-screen transitions on TerminalPage', () => {
+  it('E2E-H1: enter flips data-alt-screen-active within a render', async () => {
+    seedActiveSession();
+    await renderPage();
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('false');
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
@@ -147,9 +158,9 @@ describe('alt-screen transitions on TerminalPage', () => {
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('true');
   });
 
-  it('E2E-H2: exit reverts data-alt-screen-active to false', () => {
+  it('E2E-H2: exit reverts data-alt-screen-active to false', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
     });
@@ -159,9 +170,9 @@ describe('alt-screen transitions on TerminalPage', () => {
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('false');
   });
 
-  it('E2E-H3: nested enter bumps depth without flipping active off', () => {
+  it('E2E-H3: nested enter bumps depth without flipping active off', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'tmux' });
     });
@@ -173,9 +184,9 @@ describe('alt-screen transitions on TerminalPage', () => {
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('true');
   });
 
-  it('E2E-H4: alt-screen crash shows "exited with signal" on the status bar', () => {
+  it('E2E-H4: alt-screen crash shows "exited with signal" on the status bar', async () => {
     seedActiveSession();
-    render(<TerminalPage />);
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
       useTuiStore.getState().reportCrash('signal 9');
@@ -188,7 +199,9 @@ describe('alt-screen transitions on TerminalPage', () => {
   it('E2E-H5: the transitioning flag clears within ~200 ms', async () => {
     vi.useFakeTimers();
     seedActiveSession();
-    render(<TerminalPage />);
+    // With fake timers installed the microtask flush in `renderPage` is
+    // still driven by the real microtask queue, so it's safe to reuse.
+    await renderPage();
     act(() => {
       useTuiStore.getState().enter({ command: 'vim' });
     });

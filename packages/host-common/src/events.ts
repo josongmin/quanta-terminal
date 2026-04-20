@@ -331,6 +331,46 @@ export interface SynchronizedUpdateEvent {
 }
 
 /**
+ * OSC 133 prompt/command marker kind.
+ *
+ *   'A' — prompt start (first byte of the prompt)
+ *   'B' — prompt end / command start (user is about to type; pairs with 'A')
+ *   'C' — command execution start (shell has accepted the command)
+ *   'D' — command finished (optionally carries the exit code)
+ *
+ * UI-CONTRACT-ONLY: this envelope kind is defined here so the `GridMirror`
+ * reducer has a typed wire-surface to apply, but the Rust VT engine does NOT
+ * yet emit it. A future emit-side change (`crates/quanta-vt`) will populate
+ * this payload from the OSC 133 parser; until then this type is produced
+ * only by tests.
+ */
+export type PromptMarkKind = 'A' | 'B' | 'C' | 'D';
+
+/**
+ * OSC 133 marker envelope.
+ *
+ * Field semantics:
+ *   - `mark`      — A/B/C/D (see `PromptMarkKind`).
+ *   - `row`/`col` — cursor position where the marker was observed by the
+ *                   engine. Optional because some emitters may not report
+ *                   it; when present the UI can pin the marker to a grid
+ *                   cell for selection / block-boundary detection.
+ *   - `exit_code` — only meaningful on `mark === 'D'`. Absent or `null`
+ *                   means "exit code not reported by the shell".
+ *   - `aid`       — optional application id (e.g. `fish`, `bash`) that the
+ *                   shell passed in the OSC 133 `k=` parameter; carried
+ *                   opaquely through the mirror for diagnostic display.
+ */
+export interface PromptMarkEvent {
+  readonly kind: 'prompt_mark';
+  readonly mark: PromptMarkKind;
+  readonly row?: number;
+  readonly col?: number;
+  readonly exit_code?: number | null;
+  readonly aid?: string | null;
+}
+
+/**
  * Union of events the Phase-1 host bridge may surface. The real engine adds
  * block/output/diagnostic families; those will be appended here as the
  * bridge-surface schema firms up. For now the UI consumes only this subset.
@@ -352,7 +392,8 @@ export type HostEvent =
   | HyperlinkAddedEvent
   | HyperlinkRemovedEvent
   | ClipboardRequestEvent
-  | SynchronizedUpdateEvent;
+  | SynchronizedUpdateEvent
+  | PromptMarkEvent;
 
 export type HostEventKind = HostEvent['kind'];
 

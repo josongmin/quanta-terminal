@@ -11,7 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { useBlockStore } from '../model.js';
 import {
   useActiveBlockId,
@@ -39,7 +39,9 @@ describe('useBlockIds', () => {
     const a = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockIds());
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(a, new Uint8Array([65]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(a, new Uint8Array([65]));
+    });
     rerender();
     expect(result.current).toBe(first);
   });
@@ -48,7 +50,9 @@ describe('useBlockIds', () => {
     useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockIds());
     const first = result.current;
-    useBlockStore.getState().createBlock('b', '/');
+    act(() => {
+      useBlockStore.getState().createBlock('b', '/');
+    });
     rerender();
     expect(result.current).not.toBe(first);
   });
@@ -65,7 +69,9 @@ describe('useBlock', () => {
     const id = useBlockStore.getState().createBlock('ls', '/');
     const { result, rerender } = renderHook(() => useBlock(id));
     expect(result.current).toBeDefined();
-    useBlockStore.getState().clearHistory();
+    act(() => {
+      useBlockStore.getState().clearHistory();
+    });
     rerender();
     expect(result.current).toBeUndefined();
   });
@@ -75,7 +81,9 @@ describe('useBlock', () => {
     const b = useBlockStore.getState().createBlock('b', '/');
     const { result, rerender } = renderHook(() => useBlock(a));
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(b, new Uint8Array([1]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(b, new Uint8Array([1]));
+    });
     rerender();
     expect(result.current).toBe(first);
   });
@@ -99,7 +107,9 @@ describe('useBlockHeader', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockHeader(id));
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(id, new Uint8Array([65]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(id, new Uint8Array([65]));
+    });
     rerender();
     expect(result.current).toBe(first);
   });
@@ -108,7 +118,9 @@ describe('useBlockHeader', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockHeader(id));
     const first = result.current;
-    useBlockStore.getState().toggleCollapse(id);
+    act(() => {
+      useBlockStore.getState().toggleCollapse(id);
+    });
     rerender();
     expect(result.current).not.toBe(first);
     expect(result.current?.collapsed).toBe(true);
@@ -117,7 +129,9 @@ describe('useBlockHeader', () => {
   it('updates when the block completes', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockHeader(id));
-    useBlockStore.getState().completeBlock(id, 0);
+    act(() => {
+      useBlockStore.getState().completeBlock(id, 0);
+    });
     rerender();
     expect(result.current?.status).toBe('completed');
     expect(result.current?.exitCode).toBe(0);
@@ -127,7 +141,9 @@ describe('useBlockHeader', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockHeader(id));
     expect(result.current).toBeDefined();
-    useBlockStore.getState().clearHistory();
+    act(() => {
+      useBlockStore.getState().clearHistory();
+    });
     rerender();
     expect(result.current).toBeUndefined();
   });
@@ -148,7 +164,9 @@ describe('useBlockOutputChunks', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockOutputChunks(id));
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(id, new Uint8Array([1]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(id, new Uint8Array([1]));
+    });
     rerender();
     expect(result.current).not.toBe(first);
     expect(result.current?.chunkCount).toBe(1);
@@ -158,9 +176,13 @@ describe('useBlockOutputChunks', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlockOutputChunks(id));
     const first = result.current;
-    useBlockStore.getState().toggleCollapse(id);
+    act(() => {
+      useBlockStore.getState().toggleCollapse(id);
+    });
     rerender();
-    useBlockStore.getState().togglePin(id);
+    act(() => {
+      useBlockStore.getState().togglePin(id);
+    });
     rerender();
     expect(result.current).toBe(first);
   });
@@ -172,7 +194,9 @@ describe('useBlock (shallow)', () => {
     const b = useBlockStore.getState().createBlock('b', '/');
     const { result, rerender } = renderHook(() => useBlock(a));
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(b, new Uint8Array([1]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(b, new Uint8Array([1]));
+    });
     rerender();
     expect(result.current).toBe(first);
   });
@@ -181,7 +205,9 @@ describe('useBlock (shallow)', () => {
     const id = useBlockStore.getState().createBlock('a', '/');
     const { result, rerender } = renderHook(() => useBlock(id));
     const first = result.current;
-    useBlockStore.getState().appendBlockOutput(id, new Uint8Array([1]));
+    act(() => {
+      useBlockStore.getState().appendBlockOutput(id, new Uint8Array([1]));
+    });
     rerender();
     expect(result.current).not.toBe(first);
   });
@@ -233,10 +259,14 @@ describe('useActiveBlockId', () => {
     const b = useBlockStore.getState().createBlock('b', '/');
     const { result, rerender } = renderHook(() => useActiveBlockId());
     expect(result.current).toBe(b);
-    useBlockStore.getState().completeBlock(b, 0);
+    act(() => {
+      useBlockStore.getState().completeBlock(b, 0);
+    });
     rerender();
     expect(result.current).toBe(a);
-    useBlockStore.getState().completeBlock(a, 0);
+    act(() => {
+      useBlockStore.getState().completeBlock(a, 0);
+    });
     rerender();
     expect(result.current).toBeNull();
   });

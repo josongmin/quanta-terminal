@@ -117,10 +117,10 @@ describe('useDegradedMode', () => {
     expect(result.current.droppedInputs).toBe(2);
   });
 
-  it('flips to degraded when the bridge emits sidecar_crash_recovered', () => {
+  it('flips to degraded when the bridge emits sidecar_crash_recovered for the active session', () => {
     const { bridge, emit } = fakeBridge();
     const { result } = renderHook(() =>
-      useDegradedMode({ bridge, disableTimers: true }),
+      useDegradedMode({ bridge, currentSessionId: 'x', disableTimers: true }),
     );
     expect(result.current.state).toBe('healthy');
     act(() => {
@@ -133,6 +133,91 @@ describe('useDegradedMode', () => {
     });
     expect(result.current.state).toBe('degraded');
     expect(result.current.reason).toBe('engine_crashed');
+  });
+
+  it('IGNORES sidecar_crash_recovered events for STALE sessions (prior-run marker replay)', () => {
+    // This is the exact production RCA: the Tauri startup path replays
+    // one `pty_exit { signal: sidecar_crash_recovered, sessionId: <old> }`
+    // per entry in the on-disk crash marker from a previous process run.
+    // The UI's active session is brand-new post-boot; the stale
+    // notification must not pin the banner on.
+    const { bridge, emit } = fakeBridge();
+    const { result } = renderHook(() =>
+      useDegradedMode({
+        bridge,
+        currentSessionId: 'new-session-id',
+        disableTimers: true,
+      }),
+    );
+    expect(result.current.state).toBe('healthy');
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'old-crashed-session-id',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    // Banner stays off — the event was about a different (dead) session.
+    expect(result.current.state).toBe('healthy');
+    expect(result.current.reason).toBeNull();
+  });
+
+  it('with currentSessionId as a getter — reads the latest value on every event', () => {
+    // TerminalPage wires `currentSessionId` as a getter so the subscribe
+    // effect does not re-register on every session change. The getter
+    // must be consulted at event time, not at subscribe time.
+    const { bridge, emit } = fakeBridge();
+    let active: string | null = 'a';
+    const { result } = renderHook(() =>
+      useDegradedMode({
+        bridge,
+        currentSessionId: () => active,
+        disableTimers: true,
+      }),
+    );
+    // Event for 'a' (the active one at dispatch time) → degraded.
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'a',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('degraded');
+    act(() => {
+      result.current.recover();
+    });
+    // Active flips to 'b'. An event for 'a' is now stale and must be
+    // ignored even though the subscribe effect set up the listener back
+    // when 'a' was active.
+    active = 'b';
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'a',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('healthy');
+  });
+
+  it('without currentSessionId — preserves legacy behavior (any event flips to degraded)', () => {
+    const { bridge, emit } = fakeBridge();
+    const { result } = renderHook(() =>
+      useDegradedMode({ bridge, disableTimers: true }),
+    );
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'anything',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('degraded');
   });
 
   it('treats any other bridge event as a liveness touch', () => {
@@ -154,5 +239,101 @@ describe('useDegradedMode', () => {
     });
     expect(result.current.lastSnapshotAt).toBeGreaterThanOrEqual(initialSnapshotAt);
     vi.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------
+  // Liveness-timer path (the one the real app exercises on boot). Every
+  // earlier test runs with `disableTimers: true`, so the interval below
+  // was never covered. This block pins:
+  //   1. Pre-first-event silence (slow sidecar boot) does NOT escalate.
+  //   2. Post-first-touch silence beyond `stalledAfterMs` flips to
+  //      `stalled`, and beyond `degradedAfterMs` escalates to `degraded`.
+  //   3. A later touch recovers `stalled` → `healthy`.
+  // -------------------------------------------------------------------
+  describe('liveness timer', () => {
+    it('DOES NOT escalate to degraded while waiting for the first event (slow-boot window)', () => {
+      vi.useFakeTimers();
+      let clock = 1_000;
+      const now = () => clock;
+      const { result } = renderHook(() =>
+        useDegradedMode({
+          now,
+          stalledAfterMs: 1_000,
+          degradedAfterMs: 5_000,
+        }),
+      );
+      // Simulate 30 s of absolutely no events (sidecar still compiling).
+      act(() => {
+        clock += 30_000;
+        vi.advanceTimersByTime(30_000);
+      });
+      // Bootstrap guard: no liveness signal observed yet → keep healthy.
+      expect(result.current.state).toBe('healthy');
+      expect(result.current.reason).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it('flips to stalled and then degraded once the stream has started and then goes silent', () => {
+      vi.useFakeTimers();
+      let clock = 1_000;
+      const now = () => clock;
+      const { bridge, emit } = fakeBridge();
+      const { result } = renderHook(() =>
+        useDegradedMode({
+          bridge,
+          now,
+          stalledAfterMs: 1_000,
+          degradedAfterMs: 5_000,
+        }),
+      );
+      // First event — liveness reference established.
+      act(() => {
+        emit({ kind: 'pty_data', sessionId: 'x', seq: 1, bytesB64: '' });
+      });
+      expect(result.current.state).toBe('healthy');
+      // 1.2 s silence → stalled (but NOT degraded yet).
+      act(() => {
+        clock += 1_200;
+        vi.advanceTimersByTime(1_200);
+      });
+      expect(result.current.state).toBe('stalled');
+      // 6 s cumulative silence → degraded with reason 'stream_silent'.
+      act(() => {
+        clock += 4_000;
+        vi.advanceTimersByTime(4_000);
+      });
+      expect(result.current.state).toBe('degraded');
+      expect(result.current.reason).toBe('stream_silent');
+      vi.useRealTimers();
+    });
+
+    it('a fresh touch while stalled returns the hook to healthy', () => {
+      vi.useFakeTimers();
+      let clock = 1_000;
+      const now = () => clock;
+      const { bridge, emit } = fakeBridge();
+      const { result } = renderHook(() =>
+        useDegradedMode({
+          bridge,
+          now,
+          stalledAfterMs: 1_000,
+          degradedAfterMs: 10_000,
+        }),
+      );
+      act(() => {
+        emit({ kind: 'pty_data', sessionId: 'x', seq: 1, bytesB64: '' });
+      });
+      act(() => {
+        clock += 1_500;
+        vi.advanceTimersByTime(1_500);
+      });
+      expect(result.current.state).toBe('stalled');
+      act(() => {
+        clock += 10;
+        emit({ kind: 'pty_data', sessionId: 'x', seq: 2, bytesB64: '' });
+      });
+      expect(result.current.state).toBe('healthy');
+      vi.useRealTimers();
+    });
   });
 });

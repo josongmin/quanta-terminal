@@ -14,7 +14,7 @@
  *   - a pure unit on the `shouldAutoscroll` helper covering the edge cases.
  */
 
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useBlockStore } from '../../../entities/block/index.js';
 import { BlockList, shouldAutoscroll } from '../BlockList.js';
@@ -60,7 +60,9 @@ describe('<BlockList />', () => {
     const b = useBlockStore.getState().createBlock('b', '/');
     useBlockStore.getState().togglePin(a);
     const { rerender } = render(<BlockList />);
-    useBlockStore.getState().clearHistory();
+    act(() => {
+      useBlockStore.getState().clearHistory();
+    });
     rerender(<BlockList />);
     expect(screen.getByTestId(`block-card-${a}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`block-card-${b}`)).toBeNull();

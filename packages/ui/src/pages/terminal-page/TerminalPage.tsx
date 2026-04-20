@@ -409,8 +409,18 @@ function TerminalPageContent() {
 
   // Degraded-mode hook. Subscribes to the host bridge's sidecar-recovered
   // event (EPIC-H §4.4) and exposes a `state` the banner reads.
+  //
+  // `currentSessionId` scopes the `sidecar_crash_recovered` trigger to
+  // the session the UI currently owns. The Tauri startup path replays
+  // one synthetic exit per session recorded in the prior-process crash
+  // marker; without this scope the UI would flag a brand-new post-boot
+  // session as crashed on every cold start where the previous run did
+  // not exit cleanly.
   const bridge = tryGetHostBridge();
-  const degraded = useDegradedMode({ bridge: bridge ?? null });
+  const degraded = useDegradedMode({
+    bridge: bridge ?? null,
+    currentSessionId: activeSessionId,
+  });
 
   // RFC §20 / ADR 0010: while the engine is degraded, user input must not
   // reach the PTY. We bind a narrow gate port that the production write

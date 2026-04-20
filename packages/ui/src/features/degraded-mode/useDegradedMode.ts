@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { HostBridge } from '@quanta/host-common';
+import type { HostBridge, SessionId } from '@quanta/host-common';
 import { createLogger } from '../../shared/lib/logger.js';
 
 const log = createLogger('degraded-mode');
@@ -53,6 +53,19 @@ export interface UseDegradedModeOptions {
   readonly now?: () => number;
   /** True → disable the internal timer (tests drive state directly). */
   readonly disableTimers?: boolean;
+  /**
+   * Id of the session the UI currently attributes truth to. When a
+   * `pty_exit { signal: 'sidecar_crash_recovered' }` event arrives, we only
+   * flip to `degraded` if the event's `sessionId` matches this id — the
+   * Tauri-side `process_crash_marker_on_startup` path emits one such event
+   * per affected session from the *previous* process run, and those stale
+   * notifications must not clobber a freshly-booted session.
+   *
+   * Pass the active session id (or a getter that returns the latest). Null
+   * means "no active session known" — we fall back to the legacy behavior
+   * of treating every `sidecar_crash_recovered` event as live.
+   */
+  readonly currentSessionId?: SessionId | null | (() => SessionId | null);
 }
 
 export interface DegradedHandle extends DegradedStatus {
@@ -78,7 +91,17 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
     degradedAfterMs = DEFAULT_DEGRADED_MS,
     now = () => Date.now(),
     disableTimers = false,
+    currentSessionId = null,
   } = options;
+
+  // Keep the latest session-id resolver in a ref so the subscribe effect
+  // does NOT re-run every time the id changes (which would re-subscribe
+  // to the bridge on every render of TerminalPage).
+  const currentSessionIdRef = useRef<() => SessionId | null>(() => null);
+  currentSessionIdRef.current =
+    typeof currentSessionId === 'function'
+      ? currentSessionId
+      : () => currentSessionId;
 
   const [status, setStatus] = useState<DegradedStatus>(() => ({
     state: 'healthy',
@@ -88,17 +111,22 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
     recoveries: 0,
   }));
 
-  const lastTouchRef = useRef<number>(now());
+  // `null` → stream has not produced its first event yet. Liveness
+  // escalation is suppressed while we are in this "pre-first-event" state
+  // so that a slow sidecar boot (e.g. 5 s+ compile window in dev) does not
+  // look like a crash. Flipped to a real timestamp on the first touch.
+  const lastTouchRef = useRef<number | null>(null);
   const stateRef = useRef<DegradedState>('healthy');
   stateRef.current = status.state;
 
   const touch = useCallback(() => {
-    lastTouchRef.current = now();
+    const t = now();
+    lastTouchRef.current = t;
     setStatus((prev) => {
       if (prev.state === 'stalled') {
-        return { ...prev, state: 'healthy', lastSnapshotAt: lastTouchRef.current };
+        return { ...prev, state: 'healthy', lastSnapshotAt: t };
       }
-      return { ...prev, lastSnapshotAt: lastTouchRef.current };
+      return { ...prev, lastSnapshotAt: t };
     });
   }, [now]);
 
@@ -132,13 +160,33 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
   }, []);
 
   // Subscribe to the host bridge: any event is a liveness touch. The
-  // `sidecar-recovered` synthetic exit event flips us to degraded.
+  // `sidecar-recovered` synthetic exit event flips us to degraded — but
+  // only when the event targets the currently-active session.
   useEffect(() => {
     if (!bridge) return;
     const sub = bridge.subscribe((event) => {
       // Sidecar-recovered arrives as a synthetic `pty_exit` with signal
       // `sidecar_crash_recovered` (packages/host-tauri/src-tauri/src/sidecar.rs).
+      //
+      // The Tauri startup path can emit one such event per
+      // `affected_sessions` entry recorded in the on-disk crash marker
+      // from a previous process run. Those notifications are about
+      // sessions the UI no longer owns — the user already has a fresh
+      // session up. Suppress the degraded flip in that case; it would
+      // otherwise wedge the banner on over a perfectly healthy new
+      // session (RFC §20: degraded must be a live failure signal).
       if (event.kind === 'pty_exit' && event.signal === 'sidecar_crash_recovered') {
+        const active = currentSessionIdRef.current();
+        if (active !== null && event.sessionId !== active) {
+          log.debug(
+            'degraded-mode: ignoring sidecar_crash_recovered for stale session',
+            { stale: event.sessionId, active },
+          );
+          // Still count this as liveness for the current active stream —
+          // the bridge is clearly responsive enough to forward events.
+          touch();
+          return;
+        }
         report('engine_crashed');
         return;
       }
@@ -150,12 +198,20 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
   // Liveness timer: if we haven't touched in `stalledAfterMs`, drop to
   // `stalled`; if silent longer than `degradedAfterMs`, escalate to
   // `degraded`.
+  //
+  // Bootstrap guard: `lastTouchRef.current === null` means we have not
+  // observed the stream's first event yet, so we cannot distinguish "slow
+  // boot" from "stream silent". Skip escalation until the first touch —
+  // RFC §20 requires that degraded represent a verified liveness failure,
+  // not a pre-connection wait window.
   useEffect(() => {
     if (disableTimers) return;
     const interval = setInterval(() => {
-      const silent = now() - lastTouchRef.current;
       const current = stateRef.current;
       if (current === 'degraded') return;
+      const lastTouch = lastTouchRef.current;
+      if (lastTouch === null) return; // pre-first-event — suppress escalation
+      const silent = now() - lastTouch;
       if (silent >= degradedAfterMs) {
         log.warn('degraded-mode: stream silent for', silent, 'ms; promoting to degraded');
         setStatus((prev) => ({ ...prev, state: 'degraded', reason: 'stream_silent' }));

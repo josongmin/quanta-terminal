@@ -15,6 +15,8 @@ import type {
   GridSnapshotPayload,
   ModeChange,
   ModeChangedPayload,
+  PromptMarkKind,
+  PromptMarkPayload,
   RowDelta,
   ScrollDelta,
   TerminalModeState,
@@ -183,4 +185,34 @@ export function titleEnv(
     { kind: 'title_changed', title, scope },
     { grid_epoch: opts.epoch ?? 1, sequence_no: opts.seq },
   );
+}
+
+/**
+ * Build an OSC 133 `prompt_mark` envelope. `row`/`col` default to undefined
+ * (engine can't always report them), `exit_code` likewise. Tests that need a
+ * D-with-code pass it explicitly.
+ */
+export function promptMarkEnv(
+  mark: PromptMarkKind,
+  opts: {
+    seq: number;
+    epoch?: number;
+    row?: number;
+    col?: number;
+    exit_code?: number | null;
+    aid?: string | null;
+  },
+): GridEventEnvelope<PromptMarkPayload> {
+  const payload: PromptMarkPayload = {
+    kind: 'prompt_mark',
+    mark,
+    ...(opts.row !== undefined ? { row: opts.row } : {}),
+    ...(opts.col !== undefined ? { col: opts.col } : {}),
+    ...(opts.exit_code !== undefined ? { exit_code: opts.exit_code } : {}),
+    ...(opts.aid !== undefined ? { aid: opts.aid } : {}),
+  };
+  return makeEnv<PromptMarkPayload>(payload, {
+    grid_epoch: opts.epoch ?? 1,
+    sequence_no: opts.seq,
+  });
 }

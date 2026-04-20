@@ -14,6 +14,7 @@
  * handler (stable because Zustand actions are referentially stable).
  */
 
+import type { ReactElement } from 'react';
 import { render, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useBlockStore } from '../../../entities/block/index.js';
@@ -26,11 +27,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useCompareStore.getState().resetAll();
+  act(() => {
+    useCompareStore.getState().resetAll();
+  });
 });
 
 describe('<ComparePanel /> invalid-pair defensive close', () => {
-  it('closes itself when the right block id points at a missing entity', () => {
+  it('closes itself when the right block id points at a missing entity', async () => {
     const leftId = useBlockStore.getState().createBlock('ls', '/');
     useBlockStore.getState().completeBlock(leftId, 0);
     // Open with a right id that doesn't exist in the store.
@@ -42,7 +45,7 @@ describe('<ComparePanel /> invalid-pair defensive close', () => {
     });
     // Render the panel. The mounted invalid-path effect fires `closeCompare`,
     // which flips `open` back to false; a second render cycle then yields null.
-    act(() => {
+    await act(async () => {
       render(<ComparePanel />);
     });
     // `closeCompare` keeps the pair around (see entities/compare/model.ts);
@@ -50,7 +53,7 @@ describe('<ComparePanel /> invalid-pair defensive close', () => {
     expect(useCompareStore.getState().open).toBe(false);
   });
 
-  it('does not loop: a stable effect dep settles within one tick', () => {
+  it('does not loop: a stable effect dep settles within one tick', async () => {
     const leftId = useBlockStore.getState().createBlock('ls', '/');
     useBlockStore.getState().completeBlock(leftId, 0);
     act(() => {
@@ -63,8 +66,13 @@ describe('<ComparePanel /> invalid-pair defensive close', () => {
     expect(beforeOpen).toBe(true);
     // Render twice to simulate StrictMode double-invocation; the effect
     // must converge without thrashing the compare state.
-    const { rerender } = render(<ComparePanel />);
-    rerender(<ComparePanel />);
+    let rerender: (ui: ReactElement) => void = () => {};
+    await act(async () => {
+      ({ rerender } = render(<ComparePanel />));
+    });
+    await act(async () => {
+      rerender(<ComparePanel />);
+    });
     expect(useCompareStore.getState().open).toBe(false);
   });
 });

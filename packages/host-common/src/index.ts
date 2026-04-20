@@ -83,6 +83,8 @@ export type {
   HyperlinkRemovedEvent,
   ClipboardRequestEvent,
   SynchronizedUpdateEvent,
+  PromptMarkKind,
+  PromptMarkEvent,
 } from './events.js';
 export { isEventOfKind } from './events.js';
 

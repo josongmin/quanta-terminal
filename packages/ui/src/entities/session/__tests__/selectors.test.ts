@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { useSessionStore, useStatusBarSelector } from '../index.js';
 
 describe('session selectors (subscribeWithSelector + useShallow)', () => {
@@ -27,16 +27,24 @@ describe('session selectors (subscribeWithSelector + useShallow)', () => {
     const { result, rerender } = renderHook(() => useStatusBarSelector());
     const first = result.current;
     // cwdSource is NOT part of the StatusBarSlice.
-    useSessionStore.getState().setSession({ cwdSource: 'osc7' });
-    rerender();
+    act(() => {
+      useSessionStore.getState().setSession({ cwdSource: 'osc7' });
+    });
+    act(() => {
+      rerender();
+    });
     expect(result.current).toBe(first);
   });
 
   it('useStatusBarSelector yields a new reference when a slice field changes', () => {
     const { result, rerender } = renderHook(() => useStatusBarSelector());
     const first = result.current;
-    useSessionStore.getState().setSession({ shell: '/bin/zsh' });
-    rerender();
+    act(() => {
+      useSessionStore.getState().setSession({ shell: '/bin/zsh' });
+    });
+    act(() => {
+      rerender();
+    });
     expect(result.current).not.toBe(first);
     expect(result.current.shell).toBe('/bin/zsh');
   });

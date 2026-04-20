@@ -12,7 +12,7 @@
  * ToastHost renders the expected message.
  */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostBridge } from '@quanta/host-common';
 import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
@@ -84,6 +84,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount before mutating stores so any remaining subscriptions on
+  // ToastHost do not schedule updates outside act().
+  cleanup();
   useToastStore.getState().clearAll();
   if (typeof window !== 'undefined') {
     delete (window as unknown as { __QUANTA_HOST__?: HostBridge }).__QUANTA_HOST__;
@@ -112,6 +115,11 @@ describe('BlockCard path-click → toast on failure', () => {
     const pathBtn = screen.getByRole('button', { name: /src\/main\.c/ });
     await act(async () => {
       fireEvent.click(pathBtn);
+      // Flush the promise chain in `openInEditor().then(...)` so the toast
+      // store mutation + ToastHost re-render both happen inside act().
+      // A macrotask yield lets the async chain + React commit all settle
+      // before act() closes.
+      await new Promise((r) => setTimeout(r, 0));
     });
 
     await waitFor(() => {
@@ -140,6 +148,11 @@ describe('BlockCard path-click → toast on failure', () => {
     const pathBtn = screen.getByRole('button', { name: /src\/main\.c/ });
     await act(async () => {
       fireEvent.click(pathBtn);
+      // Flush the promise chain in `openInEditor().then(...)` so the toast
+      // store mutation + ToastHost re-render both happen inside act().
+      // A macrotask yield lets the async chain + React commit all settle
+      // before act() closes.
+      await new Promise((r) => setTimeout(r, 0));
     });
 
     await waitFor(() => {
@@ -169,12 +182,11 @@ describe('BlockCard path-click → toast on failure', () => {
     const pathBtn = screen.getByRole('button', { name: /src\/main\.c/ });
     await act(async () => {
       fireEvent.click(pathBtn);
+      // Wait a macrotask tick so the .then callback has a chance to run; even
+      // after it fires, a successful result must NOT produce a toast. Doing
+      // this inside act() keeps any incidental re-renders properly batched.
+      await new Promise((r) => setTimeout(r, 0));
     });
-
-    // Wait a microtask tick so the .then callback has a chance to run; even
-    // after it fires, a successful result must NOT produce a toast.
-    await Promise.resolve();
-    await Promise.resolve();
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(useToastStore.getState().items).toHaveLength(0);
   });

@@ -18,6 +18,7 @@ import type {
   GraphemeRun,
   GridMeta,
   ModeChange,
+  PromptMarkKind,
   RowDelta,
   ScrollDelta,
   SpanAttrsExt,
@@ -37,6 +38,7 @@ export type {
   GraphemeRun,
   GridMeta,
   ModeChange,
+  PromptMarkKind,
   RowDelta,
   ScrollDelta,
   SpanAttrsExt,
@@ -126,6 +128,23 @@ export interface SynchronizedUpdatePayload {
   readonly phase: SyncPhase;
 }
 
+/**
+ * OSC 133 A/B/C/D prompt-marker payload.
+ *
+ * UI-contract-only: the Rust VT engine does not yet emit this payload. The
+ * mirror accepts it so the downstream block-router has a typed surface to
+ * consume the moment the engine starts emitting. See the per-field comments
+ * on `PromptMarkEvent` in `@quanta/host-common` for the wire contract.
+ */
+export interface PromptMarkPayload {
+  readonly kind: 'prompt_mark';
+  readonly mark: PromptMarkKind;
+  readonly row?: number;
+  readonly col?: number;
+  readonly exit_code?: number | null;
+  readonly aid?: string | null;
+}
+
 /** Discriminated union of every grid-reducer payload kind. */
 export type GridPayload =
   | GridSnapshotPayload
@@ -137,7 +156,8 @@ export type GridPayload =
   | HyperlinkAddedPayload
   | HyperlinkRemovedPayload
   | ClipboardRequestPayload
-  | SynchronizedUpdatePayload;
+  | SynchronizedUpdatePayload
+  | PromptMarkPayload;
 
 /* ---------- mirror-local types ---------- */
 
