@@ -208,10 +208,37 @@ export function formatSgr(attrs: AttrFlags, fg: Color, bg: Color): string {
   return `0x${hex.padEnd(16, '0').slice(0, 16).toUpperCase()}`;
 }
 
+/**
+ * A grid-space search highlight, as emitted by
+ * `features/output-search/scrollback-search.searchGrid`.
+ *
+ * `rowId` is the absolute scrollback/viewport row id. The CellBuffer's own
+ * internal rows address the live viewport only (0..rows_-1) — the
+ * translation from an absolute `rowId` to a viewport-local `row` is the
+ * responsibility of the Renderer / consumer; the buffer just holds on to
+ * the raw list so a single source of truth drives paint.
+ */
+export interface SearchHighlight {
+  readonly rowId: number;
+  readonly startCol: number;
+  readonly endColExclusive: number;
+  /** Set on the single hit that is the user's "current" selection so the
+   *  Renderer can paint it with emphasis (orange vs. yellow underlay). */
+  readonly current?: boolean;
+}
+
 export class CellBuffer {
   private buf = new Uint32Array(0);
   private rows_ = 0;
   private cols_ = 0;
+  /**
+   * Grid-space search highlights pushed in from the FindPanel widget.
+   * Stored verbatim — no viewport translation here; the Renderer handles
+   * that on paint. Empty when no search is active. The reference itself
+   * is swapped on each `setSearchHighlights` call so consumers can use
+   * identity equality to short-circuit redundant repaints.
+   */
+  private searchHighlights_: readonly SearchHighlight[] = [];
 
   /** Grapheme interning — maps string → id (0..253). id 254 reserved. id 255 = EXT escape. */
   private readonly graphemeIndex = new Map<string, number>();
@@ -435,6 +462,23 @@ export class CellBuffer {
     return this.continuation[row] ?? false;
   }
 
+  /**
+   * Publish the latest grid-space search highlights. Replaces the entire
+   * list; empty clears. Marks the overlay dirty so the Renderer repaints
+   * on the next rAF tick. The list is stored by reference — callers MUST
+   * NOT mutate `highlights` after handing it off.
+   */
+  setSearchHighlights(highlights: readonly SearchHighlight[]): void {
+    if (highlights === this.searchHighlights_) return;
+    this.searchHighlights_ = highlights;
+    this.damage.markOverlayDirty();
+  }
+
+  /** Current grid-space search highlights (empty when no search is active). */
+  getSearchHighlights(): readonly SearchHighlight[] {
+    return this.searchHighlights_;
+  }
+
   /** Drain damage — called by the Renderer on each rAF tick. */
   drainDamage(): DamageSet {
     const drained = new DamageSet();
@@ -464,6 +508,7 @@ export class CellBuffer {
     this.frozenRows.clear();
     this.graphemeIndex.clear();
     this.graphemeTable.length = 1; // keep blank
+    this.searchHighlights_ = [];
   }
 
   /** @internal Test-only: how many unique graphemes are interned? */

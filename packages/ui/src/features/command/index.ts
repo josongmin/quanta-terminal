@@ -31,6 +31,16 @@ export {
 } from './boundary-detector.js';
 export type { BoundaryDetector, BoundaryFeedResult } from './boundary-detector.js';
 
+export { createHybridBoundaryDetector } from './hybrid-detector.js';
+export type {
+  BoundaryEvent,
+  BoundaryEventKind,
+  BoundarySource,
+  HybridBoundaryDetector,
+  HybridBoundaryDetectorOptions,
+} from './hybrid-detector-types.js';
+export type { HybridRouterOptions } from './route-output.js';
+
 export {
   bindBlockStore,
   getBlockStore,
@@ -39,3 +49,14 @@ export {
 export type { BlockStoreActions, StartBlockPortOptions } from './block-store-port.js';
 
 export { bindBlockEntity } from './bind-block-entity.js';
+
+export {
+  installBoundaryListener,
+  createBoundaryListener,
+  mapSourceToConfidence,
+} from './block-boundary-listener.js';
+export type {
+  BoundaryListenerHandle,
+  BoundaryBlockStorePort,
+  ScrollbackPinPort,
+} from './block-boundary-listener.js';

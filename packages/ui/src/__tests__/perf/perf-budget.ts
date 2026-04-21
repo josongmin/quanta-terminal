@@ -118,6 +118,73 @@ export const PERF_BUDGETS = {
 export type PerfBudgetKey = keyof typeof PERF_BUDGETS;
 
 /**
+ * Linux CI budget profile (Plan 0005 P1-H).
+ *
+ * Background
+ * ----------
+ * `PERF_BUDGETS` above are calibrated on an Apple M4 Max workstation
+ * running Node v25.9 with no background load. The GitHub
+ * `ubuntu-24.04` runner — which is the only Linux image we pin in
+ * `.github/workflows/perf-budget.yml` — delivers consistently 3-4×
+ * slower wall-clock on these workloads because of:
+ *
+ *   - Shared vCPUs (2 vCPU on the standard runner, contention with
+ *     other hosted jobs).
+ *   - Slower memory bandwidth vs Apple Silicon's unified memory.
+ *   - No AMX / NEON acceleration for the TS emulator's grid-clone
+ *     hot path (`yes-1gb-budget` feels this the most).
+ *
+ * Rather than pay for a dedicated macOS runner (option B, rejected —
+ * see §P1-H scope), we publish a second "ci-linux" profile that
+ * widens every ceiling by a factor of 3. This still catches genuine
+ * regressions (a doubled hot-path cost will still breach 3× budget)
+ * while tolerating the runner's baseline cost.
+ *
+ * How profiles are selected
+ * -------------------------
+ * `tools/run-perf-budget.mjs` reads the `PERF_PROFILE` env var:
+ *
+ *   - `PERF_PROFILE=local`    → uses `PERF_BUDGETS` (default when unset).
+ *   - `PERF_PROFILE=ci-linux` → uses `CI_LINUX_BUDGETS`.
+ *
+ * The workflow (`perf-budget.yml`) sets `PERF_PROFILE=ci-linux`.
+ *
+ * All multiplier-exempt fields (e.g. the `*Target` north-star values
+ * and the hard `stressScrollbackCeilingRows` ring-buffer canary) keep
+ * their local values. Those aren't runtime-sensitive.
+ */
+export const CI_LINUX_BUDGETS = {
+  feedLatencyP99Ms: 384,
+  feedLatencyP99MsTarget: 16,
+  renderFrameBudgetP99Ms: 384,
+  renderFrameBudgetP99MsTarget: 16,
+  keystrokeToByteLatencyP99Us: 6_000,
+  resizeDurationAvgMs: 36,
+  resizeDurationP99Ms: 96,
+  topMemoryCeilingMb: 150,
+  stressScrollbackCeilingRows: 10_000,
+  yesStreamFeedP99Ms: 30_000,
+} as const;
+
+/**
+ * Profile identifiers understood by the runner. Keep this list in sync
+ * with `resolveBudgets()` below.
+ */
+export type PerfProfile = 'local' | 'ci-linux';
+
+/**
+ * Resolve the budget set for a given profile. Falls back to `local`
+ * for any unknown profile id so a misconfigured environment never
+ * silently disables the budget.
+ */
+export function resolveBudgets(
+  profile: PerfProfile | string | undefined,
+): typeof PERF_BUDGETS | typeof CI_LINUX_BUDGETS {
+  if (profile === 'ci-linux') return CI_LINUX_BUDGETS;
+  return PERF_BUDGETS;
+}
+
+/**
  * Overshoot within this fraction of the budget is downgraded from `fail`
  * to `warn`. 0.10 = 10 %. Documented in the module header.
  */

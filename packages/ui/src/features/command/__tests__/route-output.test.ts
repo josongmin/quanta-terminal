@@ -1429,3 +1429,101 @@ describe('appendToActiveBlock — idle auto-completion', () => {
   });
 });
 
+// =====================================================================
+// L. Hybrid detector integration (P1-A)
+// =====================================================================
+
+describe('installCommandRouter — hybrid detector (P1-A)', () => {
+  /**
+   * Build the base64 representation of an OSC 133 sequence. We do this here
+   * (rather than in a precomputed fixture) because the router accepts base64
+   * through its `appendToActiveBlock` entry — matches the wire contract of
+   * the bridge `pty_data` event.
+   */
+  function osc133B64(
+    kind: 'A' | 'B' | 'C' | 'D',
+    payload?: string,
+  ): string {
+    const body = payload ? `${kind};${payload}` : kind;
+    const bytes = new Uint8Array(3 + 4 + body.length + 1);
+    bytes[0] = 0x1b; // ESC
+    bytes[1] = 0x5d; // ]
+    // '133;'
+    bytes[2] = 0x31;
+    bytes[3] = 0x33;
+    bytes[4] = 0x33;
+    bytes[5] = 0x3b;
+    for (let i = 0; i < body.length; i += 1) {
+      bytes[6 + i] = body.charCodeAt(i);
+    }
+    bytes[6 + body.length] = 0x07; // BEL
+    return btoa(String.fromCharCode(...bytes.subarray(0, 6 + body.length + 1)));
+  }
+
+  it('forwards OSC 133 D events to the onHybridBoundary callback', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    const events: Array<{ kind: string; exitCode?: number | null }> = [];
+    installCommandRouter(A, {
+      detector: null,
+      hybrid: {
+        shellIntegration: 'installed',
+        onHybridBoundary: (e) => events.push({ kind: e.kind, exitCode: e.exitCode ?? null }),
+      },
+    });
+    rec.setActive('blk-a' as BlockId);
+    appendToActiveBlock(A, osc133B64('D', '0'));
+    expect(events).toEqual([{ kind: 'command_end', exitCode: 0 }]);
+  });
+
+  it('omits the detector entirely when the `hybrid` option is not provided', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null });
+    rec.setActive('blk-a' as BlockId);
+    // No onHybridBoundary to assert against; this is a smoke test that the
+    // feed path does not throw when the hybrid is absent.
+    expect(() => appendToActiveBlock(A, osc133B64('A'))).not.toThrow();
+  });
+
+  it('does not affect byte-forwarding into the active block (observer-only)', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      hybrid: { shellIntegration: 'missing' },
+    });
+    rec.setActive('blk-a' as BlockId);
+    appendToActiveBlock(A, B64_FOO);
+    // The chunk must still land in the active block.
+    expect(rec.appends.length).toBe(1);
+    expect(bytesToText(rec.appends[0]!.bytes)).toBe('foo');
+  });
+
+  it('a throwing onHybridBoundary does not break the byte path', () => {
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, {
+      detector: null,
+      hybrid: {
+        shellIntegration: 'installed',
+        onHybridBoundary: () => {
+          throw new Error('observer blew up');
+        },
+      },
+    });
+    rec.setActive('blk-a' as BlockId);
+    // First append carries OSC 133 D; observer throws. Router must isolate
+    // and still route the PTY bytes (the OSC sequence bytes themselves) to
+    // the active block — the hybrid does not consume bytes.
+    expect(() =>
+      appendToActiveBlock(A, osc133B64('D', '0')),
+    ).not.toThrow();
+    expect(rec.appends.length).toBe(1);
+  });
+});
+

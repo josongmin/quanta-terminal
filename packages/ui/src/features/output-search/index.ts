@@ -38,3 +38,11 @@ export {
   type CrossBlockOptions,
   type Match as CrossBlockMatch,
 } from './cross-block.js';
+export {
+  searchGrid,
+  searchGridWithQuery,
+  escapeRegex as escapeRegexForGrid,
+  type GridSearchMatch,
+  type GridSearchEmulator,
+  type SearchGridOptions,
+} from './scrollback-search.js';

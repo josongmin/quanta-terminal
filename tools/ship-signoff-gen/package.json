@@ -1,0 +1,8 @@
+{
+  "name": "ship-signoff-gen",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": "./index.mjs",
+  "description": "Generate SHIP_SIGNOFF.md from live gate checks for Plan 0005 P1-I."
+}

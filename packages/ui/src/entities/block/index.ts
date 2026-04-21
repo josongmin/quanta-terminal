@@ -19,6 +19,8 @@ export type {
   StartBlockOptions,
   CreateBlockOptions,
   SetActiveBlockIdOptions,
+  BlockRowRange,
+  BlockConfidence,
 } from './model.js';
 export {
   useBlockIds,

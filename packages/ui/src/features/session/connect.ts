@@ -73,6 +73,10 @@ import { createSessionEngine, type VtEngineHandle } from './engine.js';
 // `appendToActiveBlock` short-circuits on "no router installed" with zero
 // cost on the hot pty_data path.
 import { getFeatureFlag } from '../../shared/config/feature-flags.js';
+// Plan 0005 P1-B: fire-and-forget opt-out shell-integration install. Kept in
+// a sibling module so the hot path here stays tight — the auto-install is
+// pure policy + IPC that never blocks the returned `ConnectedSession`.
+import { maybeAutoInstallShellIntegration } from './shell-install.js';
 
 const log = createLogger('session.connect');
 
@@ -286,6 +290,19 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     // Surfaced by the Tauri bridge when `/proc/version` carries the WSL token.
     // Unknown → treat as not-WSL so the default-false seed stays authoritative.
     isWsl: spawn.isWsl === true,
+  });
+
+  // Plan 0005 P1-B: fire-and-forget shell-integration auto-install. This is
+  // deliberately NOT awaited — the session is usable the instant the spawn
+  // resolves, and the install IPC (backup, script copy, rc append) should
+  // never delay the first prompt. The helper owns its own flag gate,
+  // back-off, and toast UX; if anything fails it logs and moves on.
+  void maybeAutoInstallShellIntegration(spawn.shell, { bridge }).catch((err) => {
+    // Belt-and-braces: the helper already never throws, but a misbehaving
+    // adapter could still surface an unhandled rejection into the console
+    // and trip the crash reporter. Swallow here so auto-install can never
+    // take down the session.
+    log.warn('auto-install threw', err);
   });
 
   // Create an initial "preamble" block with an empty command so the shell

@@ -15,6 +15,8 @@
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "test:perf": "node tools/run-perf-budget.mjs",
+    "test:perf:tools": "node --test tools/__tests__/perf-regression-check.test.mjs tools/__tests__/perf-budget-resolver.test.mjs",
+    "check:perf-ready": "node tools/check-perf-ready.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
     "check:layering": "node tools/check-fsd-layers.mjs",
@@ -22,6 +24,9 @@
     "check:render-path": "node tools/check-one-render-path/index.mjs",
     "check:input-path": "node tools/check-one-input-path/index.mjs",
     "check:no-block-chunks": "node tools/check-no-block-chunks-in-render/index.mjs",
+    "check:signoff": "node tools/ship-signoff-gen/index.mjs --table --no-write",
+    "check:signoff:gen": "node tools/ship-signoff-gen/index.mjs",
+    "check:signoff:selftest": "node --test tools/ship-signoff-gen/__tests__/compare.test.mjs tools/ship-signoff-gen/__tests__/gate-check.test.mjs",
     "check:all": "pnpm -r --parallel run check && pnpm check:render-path && pnpm check:input-path && pnpm check:no-block-chunks",
     "package-sidecar": "./scripts/package-sidecar.sh",
     "generate-icons": "./scripts/generate-icons.sh"

@@ -24,6 +24,8 @@ import type {
   OpenInEditorOptions,
   ReadTextFileOptions,
   SessionId,
+  ShellInstallOutcome,
+  ShellInstallStatus,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
@@ -213,6 +215,25 @@ export function createMockHostBridge(): HostBridge {
         mutated: confirm ? false : false,
         lineCount: 0,
       });
+    },
+
+    shellInstallAuto(shell: string): Promise<ShellInstallOutcome> {
+      // Browser-dev mode: we can't touch disk, so every shape short-circuits.
+      // Unsupported shells report the dedicated `skipped_unsupported_shell`
+      // outcome; every supported shell falls through to `already_installed`
+      // so the UI never tries to re-run. The session orchestrator's toast
+      // path is therefore never fired from the mock bridge — matching every
+      // other no-op we provide here.
+      if (!/^(?:\/.*\/)?(bash|zsh|fish)$/i.test(shell)) {
+        return Promise.resolve({ kind: 'skipped_unsupported_shell' });
+      }
+      return Promise.resolve({ kind: 'already_installed' });
+    },
+
+    shellInstallStatus(_shell: string): Promise<ShellInstallStatus> {
+      // "Installed" is a safe answer for the mock: the UI treats it as "no
+      // action needed" and the back-off logic records no failures.
+      return Promise.resolve({ installed: true, supported: true, rcPath: null });
     },
 
     uninstallShellIntegration(

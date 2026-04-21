@@ -116,6 +116,9 @@ describe('rerunChildByParent + useBlockSuccessor', () => {
         errorMessage: null,
         rerunOfId: null,
         tags: [],
+        rowRange: null,
+        confidence: null,
+        durationMs: null,
       },
       {
         id: 'child-1',
@@ -132,6 +135,9 @@ describe('rerunChildByParent + useBlockSuccessor', () => {
         errorMessage: null,
         rerunOfId: 'parent-1',
         tags: [],
+        rowRange: null,
+        confidence: null,
+        durationMs: null,
       },
     ]);
     expect(useBlockStore.getState().rerunChildByParent['parent-1']).toBe(

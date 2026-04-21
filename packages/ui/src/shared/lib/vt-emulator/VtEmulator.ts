@@ -384,15 +384,91 @@ export class VtEmulator {
    * the head pointer reaches it. Exposed purely so the α3 test suite can
    * exercise the pause-eviction policy without depending on the (not-yet-
    * implemented) P1 block engine that will set `pinned` in production.
+   *
+   * Plan 0005 P1-C — retained as the positional-index back door for legacy
+   * tests; all NEW consumers (boundary listener, block overlay) go through
+   * the `pinScrollbackRow(rowId)` public API below, which keys on the
+   * monotonic `rowId` so a pin survives arbitrary eviction churn.
    */
   _debugPinScrollbackRow(index: number): void {
     const row = this.mainScrollback.rows[index];
     if (row !== undefined) row.pinned = true;
   }
 
+  /**
+   * Plan 0005 P1-C — public scrollback pin API.
+   *
+   * Pins the row whose stable id equals `rowId`. The id is scoped to the
+   * main-buffer scrollback ring — it matches `mainScrollback.baseRowId +
+   * index`. Subsequent evictions PAUSE when the head pointer reaches a
+   * pinned row, matching the pre-existing pause-eviction policy that
+   * `_debugPinScrollbackRow` exercised in tests.
+   *
+   * When `rowId` is outside the live ring (already evicted, or not yet
+   * captured from the live screen) the call is a no-op. Callers MUST treat
+   * that as a soft failure: a pin lost to eviction is an eventually-
+   * consistent condition — the boundary listener's next `prompt_start` will
+   * try again against the freshly-appended row.
+   *
+   * Idempotent: pinning an already-pinned row is a no-op.
+   */
+  pinScrollbackRow(rowId: number): void {
+    const ring = this.mainScrollback;
+    const index = rowId - ring.baseRowId;
+    if (index < 0 || index >= ring.rows.length) return;
+    const row = ring.rows[index];
+    if (row !== undefined) row.pinned = true;
+  }
+
+  /**
+   * Plan 0005 P1-C — companion to `pinScrollbackRow`. Releases the pin so
+   * eviction can resume past this row. Called by the boundary listener on
+   * `command_end` (or when a retraction invalidates a previously-attached
+   * heuristic boundary). No-op when the row is outside the live ring or
+   * already unpinned.
+   */
+  unpinScrollbackRow(rowId: number): void {
+    const ring = this.mainScrollback;
+    const index = rowId - ring.baseRowId;
+    if (index < 0 || index >= ring.rows.length) return;
+    const row = ring.rows[index];
+    if (row !== undefined) row.pinned = false;
+  }
+
+  /**
+   * Plan 0005 P1-C — pin-status query for the overlay and for tests. Returns
+   * `false` when the row is outside the live ring (evicted already or not
+   * yet captured).
+   */
+  isPinned(rowId: number): boolean {
+    const ring = this.mainScrollback;
+    const index = rowId - ring.baseRowId;
+    if (index < 0 || index >= ring.rows.length) return false;
+    const row = ring.rows[index];
+    return row?.pinned === true;
+  }
+
   /** Public dimensions getter — handy for tests. */
   getDimensions(): { rows: number; cols: number } {
     return { rows: this.rows_, cols: this.cols_ };
+  }
+
+  /**
+   * Read-only projection of the live viewport grid. Used by the grid-wide
+   * search indexer (P1-F): it walks scrollback rows via `getScrollback()`
+   * then continues into the viewport via this getter. The returned rows
+   * share cell identity with the active buffer — callers must treat the
+   * shape as a point-in-time snapshot (stale after the next `feed()`).
+   *
+   * `rowId` semantics line up with `Scrollback.baseRowId`:
+   *   - scrollback row at index `i` has `rowId = baseRowId + i`
+   *   - viewport row `r` has `rowId = baseRowId + scrollback.rows.length + r`
+   *
+   * So the total absolute rowId for a viewport row is
+   *   `scrollback.baseRowId + scrollback.rows.length + r`.
+   */
+  getViewportRows(): readonly (readonly InternalCell[])[] {
+    return this.grid;
   }
 
   /** @internal test-only */

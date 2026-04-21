@@ -38,6 +38,9 @@ function runningBlock(id: string, sessionId: string): Block {
     errorMessage: null,
     rerunOfId: null,
     tags: [],
+    rowRange: null,
+    confidence: null,
+    durationMs: null,
   };
 }
 

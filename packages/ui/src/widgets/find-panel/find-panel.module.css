@@ -1,0 +1,120 @@
+/*
+ * FindPanel — grid-wide find surface (Plan 0005 P1-F).
+ *
+ * Docked at the TOP-right corner of the terminal surface so it does not
+ * overlap the bottom composer or the P0 `OutputSearch` (which lives at the
+ * bottom-right). The two can coexist during the migration.
+ *
+ * Tokens intentionally mirror the Warp-style redesign palette — the panel
+ * should feel like a built-in chrome element, not a foreign overlay.
+ */
+
+.panel {
+  position: absolute;
+  top: var(--q-space-2);
+  right: var(--q-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  box-shadow: var(--q-shadow-pop);
+  z-index: 60;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+  min-width: 420px;
+  max-width: 560px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.icon {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-md);
+  line-height: 1;
+}
+
+.input {
+  flex: 1;
+  appearance: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  padding: 0;
+  min-width: 0;
+}
+
+.input::placeholder {
+  color: var(--q-fg-faint);
+}
+
+.toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: 1px 6px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: calc(var(--q-font-size-sm) * 0.92);
+}
+
+.toggle[data-active='true'] {
+  color: var(--q-fg);
+  background: var(--q-bg-elev-3);
+  border-color: var(--q-border-strong);
+}
+
+.count {
+  color: var(--q-fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.countEmpty {
+  color: var(--q-fg-faint);
+}
+
+.countError {
+  color: var(--q-color-danger, #f55);
+}
+
+.navBtn,
+.closeBtn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--q-radius-sm);
+  padding: 1px 6px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.navBtn:hover,
+.closeBtn:hover {
+  color: var(--q-fg);
+  background: var(--q-bg-elev-3);
+}
+
+.navBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

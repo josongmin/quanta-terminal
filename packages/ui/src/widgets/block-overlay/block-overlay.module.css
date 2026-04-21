@@ -1,0 +1,148 @@
+/**
+ * Plan 0005 P1-C — block-overlay chrome.
+ *
+ * A container that paints no background and does not intercept pointer
+ * events (the grid canvas below must receive clicks). Individual cards use
+ * `pointer-events: auto` so chrome buttons stay clickable.
+ */
+
+.root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  /* Let card content overflow vertically on very tall ranges without
+   * clipping the header. Horizontal overflow stays hidden so chrome
+   * never bleeds past the grid's right edge. */
+  overflow: hidden;
+}
+
+.card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: auto;
+  /* Minimal chrome: a 1-px left accent bar (color keyed off confidence)
+   * and a translucent overlay so the canvas text beneath stays readable.
+   * No border radius on the left edge so it flushes with the grid gutter. */
+  border-left: 2px solid var(--quanta-block-accent, color-mix(in srgb, currentColor 30%, transparent));
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--quanta-surface, #1a1a1a) 85%, transparent) 0%,
+    transparent 40%
+  );
+  /* Start opacity 0.92 so the grid shows through just enough to signal
+   * "this row belongs to the engine, not a widget"; hovering solidifies. */
+  opacity: 0.92;
+  transition: opacity 120ms ease-out;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 0;
+  /* Box-sizing on the card itself so the left accent bar doesn't push the
+   * header out of alignment with the grid cells. */
+  box-sizing: border-box;
+}
+
+.card:hover {
+  opacity: 1;
+}
+
+.card[data-confidence='authoritative'] {
+  --quanta-block-accent: var(--quanta-accent-primary, #4a9eff);
+}
+
+.card[data-confidence='heuristic'] {
+  --quanta-block-accent: var(--quanta-accent-warn, #e8a33d);
+  border-left-style: dashed;
+}
+
+.card[data-confidence='idle'] {
+  --quanta-block-accent: var(--quanta-accent-muted, #6b6b6b);
+  border-left-style: dotted;
+}
+
+.card[data-confidence='synthetic'] {
+  --quanta-block-accent: var(--quanta-accent-muted, #6b6b6b);
+  border-left-style: dashed;
+}
+
+.card[data-status='running'] .statusDot {
+  background: var(--quanta-accent-primary, #4a9eff);
+  box-shadow: 0 0 4px currentColor;
+}
+
+.card[data-status='completed'] .statusDot {
+  background: var(--quanta-accent-ok, #4ade80);
+}
+
+.card[data-status='error'] .statusDot,
+.card[data-status='canceled'] .statusDot {
+  background: var(--quanta-accent-danger, #f87171);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  font-family: var(--quanta-font-family-mono, ui-monospace, monospace);
+  /* Sit flush on top of the first row so the command label is the same
+   * visual baseline as the grid's prompt echo. */
+  min-height: 1.25rem;
+  color: var(--quanta-text-muted, #9ca3af);
+}
+
+.statusDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.command {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--quanta-text, #e5e7eb);
+}
+
+.command:empty::before {
+  /* "running..." placeholder when the detector hasn't ingested command
+   * text yet — matches the boundary listener's early-mount contract. */
+  content: '…';
+  opacity: 0.55;
+}
+
+.duration {
+  flex-shrink: 0;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.exitCode {
+  flex-shrink: 0;
+  padding: 0 0.25rem;
+  border-radius: 0.125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.exitCode[data-ok='true'] {
+  color: var(--quanta-accent-ok, #4ade80);
+}
+
+.exitCode[data-ok='false'] {
+  color: var(--quanta-accent-danger, #f87171);
+}
+
+.cwd {
+  flex-shrink: 0;
+  opacity: 0.6;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

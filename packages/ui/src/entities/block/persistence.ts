@@ -285,6 +285,15 @@ export async function deserializeBlock(row: StoredBlock): Promise<Block> {
     // Forward-compat: legacy rows have no `tags` field — treat as untagged.
     // Defensive copy so downstream mutations can't scribble on the row.
     tags: Array.isArray(row.tags) ? [...row.tags] : [],
+    // Plan 0005 P1-C — row-range / confidence / duration are presentation-only
+    // fields attached by the hybrid boundary detector. Persistence never
+    // stores them (block overlay chrome re-derives them from a live
+    // scrollback at session-restore time), so hydration always yields the
+    // `null` defaults. Legacy rows that predate P1-C land on the same
+    // defaults via the same code path.
+    rowRange: null,
+    confidence: null,
+    durationMs: null,
   };
 }
 

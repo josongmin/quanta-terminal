@@ -53,6 +53,13 @@ pub struct AppState {
     /// offline `MockProvider`. Held as `Arc<dyn …>` so the IPC handler never
     /// has to branch on which implementation it is calling.
     suggestion_provider: Arc<dyn quanta_ai::SuggestionProvider>,
+    /// Per-session session-restore journals (Plan 0005 P1-E). Populated by
+    /// `quanta_session_journal_start`; the PTY data pump writes through the
+    /// handle on every chunk; `quanta_session_journal_stop` drops the entry
+    /// after flushing. Held in a `Mutex<HashMap<…>>` because PTY reader
+    /// threads read (clone) the handle on every chunk; the IPC commands
+    /// insert / remove rarely, so contention is negligible.
+    journals: Arc<Mutex<HashMap<SessionId, crate::session_record::SessionJournal>>>,
 }
 
 impl AppState {
@@ -62,7 +69,15 @@ impl AppState {
             #[cfg(feature = "sidecar")]
             sidecar: Arc::new(Mutex::new(None)),
             suggestion_provider: build_default_suggestion_provider(),
+            journals: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Clone the journals slot so the embedded-shell wiring can read-through
+    /// without taking a Tauri `State<'_, AppState>` (which is not available
+    /// to the `std::thread::spawn`'d reader thread).
+    pub fn journals_handle(&self) -> Arc<Mutex<HashMap<SessionId, crate::session_record::SessionJournal>>> {
+        self.journals.clone()
     }
 
     /// Clone the sidecar slot handle so the async setup task can populate
@@ -274,6 +289,7 @@ pub async fn quanta_spawn_session(
             session_id.clone(),
             spawned.clone(),
             flow_control.clone(),
+            state.journals_handle(),
         );
 
         state.sessions.lock().insert(
@@ -495,6 +511,15 @@ pub async fn quanta_close(
     session_id: SessionId,
     state: State<'_, AppState>,
 ) -> Result<(), TauriError> {
+    // Plan 0005 P1-E: flush the session-restore journal before tearing down
+    // the session so the tail reaches disk. We remove + drop the handle —
+    // subsequent PTY chunks (if any race in after `close` returns) go
+    // through the no-journal branch.
+    if let Some(j) = state.journals.lock().remove(&session_id) {
+        if let Err(err) = j.stop() {
+            tracing::warn!(?err, session_id = %session_id, "journal stop on close failed");
+        }
+    }
     let handle = state.sessions.lock().remove(&session_id);
     #[cfg(feature = "sidecar")]
     {
@@ -591,6 +616,120 @@ pub async fn quanta_resume_pty(
         }
     }
     Ok(())
+}
+
+/* -------------------- session restore journal (Plan 0005 P1-E) -------------------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalStartArgs {
+    pub session_id: SessionId,
+    pub cols: u16,
+    pub rows: u16,
+    pub shell: Option<String>,
+    pub cwd: Option<String>,
+    /// Optional explicit directory override (tests / CLI). Production
+    /// callers leave this null so the default `~/.config/quanta/session-restore`
+    /// is used. Validated against path traversal inside the resolver.
+    pub dir_override: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct JournalStartReply {
+    pub path: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalStopArgs {
+    pub session_id: SessionId,
+}
+
+/// Begin a per-session restore journal.
+///
+/// Idempotent: calling twice on the same session overwrites the previous
+/// journal (caller presumably lost the handle or re-spawned). The PTY reader
+/// thread picks up the new journal on its next chunk because it reads the
+/// slot through `journals_handle()` per chunk.
+#[tauri::command]
+pub async fn quanta_session_journal_start(
+    args: JournalStartArgs,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<JournalStartReply, TauriError> {
+    let dir = resolve_journal_dir(&app, args.dir_override.as_deref())?;
+    let shell = args.shell.as_deref().unwrap_or("");
+    let cwd = args.cwd.as_deref().unwrap_or("");
+    let journal = crate::session_record::SessionJournal::open(
+        &dir,
+        &args.session_id,
+        args.cols,
+        args.rows,
+        shell,
+        cwd,
+    )
+    .map_err(|e| TauriError::bridge_internal(format!("journal open failed: {e}")))?;
+    let path = crate::session_record::journal_path(&dir, &args.session_id);
+    state
+        .journals
+        .lock()
+        .insert(args.session_id.clone(), journal);
+    tracing::info!(session_id = %args.session_id, path = %path.display(), "journal started");
+    Ok(JournalStartReply {
+        path: path.to_string_lossy().into_owned(),
+        created_at_ms: chrono_now_ms(),
+    })
+}
+
+/// Flush + drop the per-session journal.
+///
+/// Silent on unknown sessions (benign race with `close()`), same contract as
+/// `quanta_pause_pty`.
+#[tauri::command]
+pub async fn quanta_session_journal_stop(
+    args: JournalStopArgs,
+    state: State<'_, AppState>,
+) -> Result<(), TauriError> {
+    let removed = state.journals.lock().remove(&args.session_id);
+    if let Some(j) = removed {
+        if let Err(err) = j.stop() {
+            tracing::warn!(?err, session_id = %args.session_id, "journal stop failed");
+        }
+    }
+    Ok(())
+}
+
+fn resolve_journal_dir(app: &AppHandle, dir_override: Option<&str>) -> Result<PathBuf, TauriError> {
+    if let Some(raw) = dir_override {
+        // Tests pass an explicit directory; reject traversal to keep the
+        // surface safe even when exposed in debug builds.
+        let p = PathBuf::from(raw);
+        if raw.is_empty() || raw.contains("..") {
+            return Err(TauriError::bridge_internal("journal dir_override rejected"));
+        }
+        return Ok(p);
+    }
+    // Tauri's app_config_dir is the canonical per-user profile dir; falls
+    // through to `$HOME/.config/quanta` which is what the crash marker uses.
+    use tauri::Manager as _;
+    if let Ok(base) = app.path().app_config_dir() {
+        return Ok(base.join("session-restore"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return Ok(PathBuf::from(home).join(".config/quanta/session-restore"));
+    }
+    Err(TauriError::bridge_internal(
+        "no HOME / config dir for journal",
+    ))
+}
+
+fn chrono_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /* -------------------- open-in-editor -------------------- */
@@ -743,6 +882,7 @@ fn wire_events(
     session_id: SessionId,
     spawned: Arc<SpawnedSession>,
     flow_control: FlowControl,
+    journals: Arc<Mutex<HashMap<SessionId, crate::session_record::SessionJournal>>>,
 ) {
     // Data pump: drain PTY -> emit `quanta://pty.data`.
     //
@@ -774,6 +914,14 @@ fn wire_events(
             match spawned_data.read(&mut buf) {
                 Ok(0) => break, // EOF
                 Ok(n) => {
+                    // Plan 0005 P1-E: tee the chunk into the session-restore
+                    // journal if one is active. The lookup is O(1) on a small
+                    // hash map; the journal itself holds an `Arc<Mutex<…>>`
+                    // so write_chunk returns quickly. We do NOT fail the data
+                    // path on journal errors — write_chunk logs and drops.
+                    if let Some(j) = journals.lock().get(&sid_data).cloned() {
+                        j.write_chunk(&buf[..n]);
+                    }
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                     let payload = DataEvent {
                         session_id: sid_data.clone(),

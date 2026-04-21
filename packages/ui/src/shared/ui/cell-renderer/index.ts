@@ -41,7 +41,14 @@ export {
   formatSgr,
   parseSgr,
 } from './CellBuffer.js';
-export type { AttrFlags, Color, ColorKind, PackedCell, UnpackedCell } from './CellBuffer.js';
+export type {
+  AttrFlags,
+  Color,
+  ColorKind,
+  PackedCell,
+  UnpackedCell,
+  SearchHighlight,
+} from './CellBuffer.js';
 
 export { FontAtlas, MemoryRasterizer, DEFAULT_ATLAS_CAPACITY } from './FontAtlas.js';
 export type { AtlasEntry, AtlasKey, AtlasRasterizer, FontAtlasOptions } from './FontAtlas.js';

@@ -42,49 +42,99 @@ const UI_DIR = path.join(REPO_ROOT, 'packages', 'ui');
 const ARTIFACT_DIR = path.join(REPO_ROOT, 'artifacts', 'perf');
 
 /**
- * Ordered list of perf specs. Order matters — longer specs run last so
- * a quick fail on the easy ones surfaces before the 1 GiB pour.
+ * Budget profiles. The `local` profile matches the canonical
+ * `PERF_BUDGETS` in `packages/ui/src/__tests__/perf/perf-budget.ts`.
+ * The `ci-linux` profile matches the `CI_LINUX_BUDGETS` export —
+ * ~3× wider to absorb the ubuntu-24.04 GitHub runner penalty.
+ *
+ * Kept in-process (rather than dynamically imported from the .ts file)
+ * because this runner is a pure node.mjs script with no transpiler
+ * hook. When you touch these numbers, update perf-budget.ts in the
+ * same change — the `perf-budget-resolver.test.mjs` test locks the
+ * two sources together.
  */
-const SPECS = [
-  {
-    id: 'resize-cycle',
-    relPath: 'src/__tests__/perf/resize-cycle.test.ts',
-    budgets: [
-      { metric: 'avgMs', budget: 12, key: 'resizeDurationAvgMs' },
-      { metric: 'p99Ms', budget: 32, key: 'resizeDurationP99Ms' },
-    ],
+export const BUDGET_PROFILES = {
+  local: {
+    feedLatencyP99Ms: 128,
+    renderFrameBudgetP99Ms: 128,
+    resizeDurationAvgMs: 12,
+    resizeDurationP99Ms: 32,
+    topMemoryCeilingMb: 50,
+    stressScrollbackCeilingRows: 10_000,
+    yesStreamFeedP99Ms: 10_000,
   },
-  {
-    id: 'top-60s',
-    relPath: 'src/__tests__/perf/top-60s-budget.test.ts',
-    budgets: [
-      // Calibrated 2026-04-21. See perf-budget.ts for rationale.
-      { metric: 'feedP99Ms', budget: 128, key: 'feedLatencyP99Ms' },
-      { metric: 'renderP99Ms', budget: 128, key: 'renderFrameBudgetP99Ms' },
-      { metric: 'heapDeltaMb', budget: 50, key: 'topMemoryCeilingMb' },
-    ],
+  'ci-linux': {
+    feedLatencyP99Ms: 384,
+    renderFrameBudgetP99Ms: 384,
+    resizeDurationAvgMs: 36,
+    resizeDurationP99Ms: 96,
+    topMemoryCeilingMb: 150,
+    stressScrollbackCeilingRows: 10_000,
+    yesStreamFeedP99Ms: 30_000,
   },
-  {
-    id: 'watch-60s',
-    relPath: 'src/__tests__/perf/watch-60s-budget.test.ts',
-    budgets: [
-      { metric: 'feedP99Ms', budget: 128, key: 'feedLatencyP99Ms' },
-      { metric: 'renderP99Ms', budget: 128, key: 'renderFrameBudgetP99Ms' },
-      { metric: 'heapDeltaMb', budget: 50, key: 'topMemoryCeilingMb' },
-    ],
-  },
-  {
-    id: 'yes-1gb',
-    relPath: 'src/__tests__/perf/yes-1gb-budget.test.ts',
-    budgets: [
-      // Per-chunk feed P99 for 64 KiB `yes` chunks. See the
-      // `yesStreamFeedP99Ms` comment in perf-budget.ts for why this is
-      // measured in seconds, not ms, on the TS emulator.
-      { metric: 'feedP99Ms', budget: 10_000, key: 'yesStreamFeedP99Ms' },
-      { metric: 'scrollbackRows', budget: 10_000, key: 'stressScrollbackCeilingRows' },
-    ],
-  },
-];
+};
+
+/**
+ * Resolve the active profile. Unknown profile names fall back to
+ * `local` (never silently disable the budget).
+ */
+export function resolveProfile(name) {
+  if (name === 'ci-linux') return { id: 'ci-linux', budgets: BUDGET_PROFILES['ci-linux'] };
+  return { id: 'local', budgets: BUDGET_PROFILES['local'] };
+}
+
+/**
+ * Build the SPECS list against the supplied profile. Keeping the spec
+ * descriptors (id, relPath, metrics list) pure and pulling the
+ * numbers from the profile means a single source of truth per profile
+ * and zero divergence between `local` and `ci-linux` spec shapes.
+ */
+export function buildSpecs(profile) {
+  const b = profile.budgets;
+  return [
+    {
+      id: 'resize-cycle',
+      relPath: 'src/__tests__/perf/resize-cycle.test.ts',
+      budgets: [
+        { metric: 'avgMs', budget: b.resizeDurationAvgMs, key: 'resizeDurationAvgMs' },
+        { metric: 'p99Ms', budget: b.resizeDurationP99Ms, key: 'resizeDurationP99Ms' },
+      ],
+    },
+    {
+      id: 'top-60s',
+      relPath: 'src/__tests__/perf/top-60s-budget.test.ts',
+      budgets: [
+        { metric: 'feedP99Ms', budget: b.feedLatencyP99Ms, key: 'feedLatencyP99Ms' },
+        { metric: 'renderP99Ms', budget: b.renderFrameBudgetP99Ms, key: 'renderFrameBudgetP99Ms' },
+        { metric: 'heapDeltaMb', budget: b.topMemoryCeilingMb, key: 'topMemoryCeilingMb' },
+      ],
+    },
+    {
+      id: 'watch-60s',
+      relPath: 'src/__tests__/perf/watch-60s-budget.test.ts',
+      budgets: [
+        { metric: 'feedP99Ms', budget: b.feedLatencyP99Ms, key: 'feedLatencyP99Ms' },
+        { metric: 'renderP99Ms', budget: b.renderFrameBudgetP99Ms, key: 'renderFrameBudgetP99Ms' },
+        { metric: 'heapDeltaMb', budget: b.topMemoryCeilingMb, key: 'topMemoryCeilingMb' },
+      ],
+    },
+    {
+      id: 'yes-1gb',
+      relPath: 'src/__tests__/perf/yes-1gb-budget.test.ts',
+      budgets: [
+        { metric: 'feedP99Ms', budget: b.yesStreamFeedP99Ms, key: 'yesStreamFeedP99Ms' },
+        {
+          metric: 'scrollbackRows',
+          budget: b.stressScrollbackCeilingRows,
+          key: 'stressScrollbackCeilingRows',
+        },
+      ],
+    },
+  ];
+}
+
+const ACTIVE_PROFILE = resolveProfile(process.env.PERF_PROFILE);
+const SPECS = buildSpecs(ACTIVE_PROFILE);
 
 /**
  * Run a single perf spec. Returns `{ ok, metrics, stdout, stderr }`.
@@ -175,7 +225,14 @@ function main() {
   return (async () => {
     await fs.mkdir(ARTIFACT_DIR, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const commit = process.env.GITHUB_SHA || process.env.PERF_COMMIT || 'local';
+    const commitShort = commit.slice(0, 12);
+    const commitDir = path.join(ARTIFACT_DIR, commitShort);
+    await fs.mkdir(commitDir, { recursive: true });
+    // Primary artefact (flat file, back-compat with existing consumers) +
+    // commit-scoped copy used by `tools/perf-regression-check.mjs`.
     const outFile = path.join(ARTIFACT_DIR, `${timestamp}.json`);
+    const summaryFile = path.join(commitDir, 'summary.json');
 
     const results = [];
     let anyFail = false;
@@ -224,13 +281,28 @@ function main() {
     const summary = {
       startedAt: timestamp,
       repo: 'quanta-terminal',
+      profile: ACTIVE_PROFILE.id,
+      profileBudgets: ACTIVE_PROFILE.budgets,
+      commit,
       results,
       allPass: !anyFail,
     };
     await fs.writeFile(outFile, JSON.stringify(summary, null, 2), 'utf8');
+    await fs.writeFile(summaryFile, JSON.stringify(summary, null, 2), 'utf8');
+    // Emit a small README next to the summary explaining what the file is.
+    // Auto-generated; regression-check tool reads summary.json only.
+    const readmeBody =
+      `# Perf budget report\n\n` +
+      `Commit: \`${commit}\`\n` +
+      `Profile: \`${ACTIVE_PROFILE.id}\`\n` +
+      `Started: \`${timestamp}\`\n` +
+      `Status: **${anyFail ? 'FAIL' : 'PASS'}**\n\n` +
+      `See \`summary.json\` for machine-readable metrics and verdicts.\n` +
+      `Generated by \`tools/run-perf-budget.mjs\`.\n`;
+    await fs.writeFile(path.join(commitDir, 'README.md'), readmeBody, 'utf8');
 
     // Human-readable table.
-    process.stdout.write('\n=== Perf budget summary ===\n');
+    process.stdout.write(`\n=== Perf budget summary (profile=${ACTIVE_PROFILE.id}) ===\n`);
     process.stdout.write(
       padRight('spec', 16) +
         padRight('metric', 18) +
@@ -270,8 +342,13 @@ function main() {
   })();
 }
 
-main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error('run-perf-budget: fatal', err);
-  process.exit(2);
-});
+// Only auto-run when invoked as a CLI, not when imported for tests.
+const INVOKED_AS_CLI =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (INVOKED_AS_CLI) {
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('run-perf-budget: fatal', err);
+    process.exit(2);
+  });
+}

@@ -104,6 +104,37 @@ export interface InstallShellIntegrationReply {
   readonly lineCount: number;
 }
 
+/* ------------------------------------------------------------------------ */
+/*            Auto-install surface (Plan 0005 P1-B — opt-out default)        */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Shape of [`HostBridge.shellInstallAuto`] replies. Mirrors the Rust
+ * `InstallOutcome` enum — `kind` is the discriminator. Fire-and-forget: the
+ * session orchestrator reads `kind` and routes to a toast / wizard.
+ */
+export type ShellInstallOutcome =
+  | { readonly kind: 'already_installed' }
+  | {
+      readonly kind: 'installed';
+      readonly rcPath: string;
+      readonly backupPath: string;
+    }
+  | { readonly kind: 'skipped_unsupported_shell' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+/**
+ * Result of [`HostBridge.shellInstallStatus`]. `installed` is the live
+ * answer to "does the user's rc file already source our script". Used by
+ * the UI to decide whether to auto-install on session spawn or silently
+ * assume things are wired up.
+ */
+export interface ShellInstallStatus {
+  readonly installed: boolean;
+  readonly supported: boolean;
+  readonly rcPath: string | null;
+}
+
 /**
  * Inverse of {@link InstallShellIntegrationOptions}. Same two-phase
  * semantics — `confirm: false` returns the region that would be removed
@@ -217,6 +248,24 @@ export interface ShellIntegrationBridge {
   uninstallShellIntegration(
     options: UninstallShellIntegrationOptions,
   ): Promise<UninstallShellIntegrationReply>;
+  /**
+   * Plan 0005 P1-B opt-out auto-install. The session orchestrator calls this
+   * fire-and-forget on first spawn (gated on `flag.shellIntegrationAutoInstall`).
+   * Unlike the wizard surface, this copies the integration script to
+   * `~/.config/quanta/shell-integration/<shell>.sh` and appends a guarded
+   * `source` line to the user's rc file, after backing it up.
+   *
+   * OPTIONAL: hosts that can't write to disk (mock bridge, VS Code webview)
+   * may omit. Callers null-check before invoking.
+   */
+  shellInstallAuto?(shell: string): Promise<ShellInstallOutcome>;
+  /**
+   * Non-mutating sibling of {@link shellInstallAuto}. Returns whether the
+   * user's rc file currently sources Quanta's script. Used by the session
+   * orchestrator's back-off logic to short-circuit a retry when the user
+   * hand-installed the snippet since the last attempt.
+   */
+  shellInstallStatus?(shell: string): Promise<ShellInstallStatus>;
 }
 
 /** File system + git metadata access. */

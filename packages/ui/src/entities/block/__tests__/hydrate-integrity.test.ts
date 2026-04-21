@@ -28,6 +28,9 @@ function makeBlock(overrides: Partial<Block>): Block {
     errorMessage: null,
     rerunOfId: null,
     tags: [],
+    rowRange: null,
+    confidence: null,
+    durationMs: null,
     ...overrides,
   };
 }

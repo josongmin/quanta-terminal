@@ -9,3 +9,8 @@
 
 export { VtEmulator } from './VtEmulator.js';
 export type { RgbColor, VtEmulatorOptions } from './VtEmulator.js';
+export type {
+  InternalCell,
+  Scrollback,
+  ScrollbackRow,
+} from './types.js';

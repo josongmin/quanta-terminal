@@ -43,6 +43,12 @@ import {
   createMockBoundaryDetector,
   type BoundaryDetector,
 } from './boundary-detector.js';
+import { createHybridBoundaryDetector } from './hybrid-detector.js';
+import type {
+  BoundaryEvent,
+  HybridBoundaryDetector,
+  HybridBoundaryDetectorOptions,
+} from './hybrid-detector-types.js';
 
 const log = createLogger('command.route-output');
 
@@ -141,6 +147,19 @@ interface RouterHandle {
    * that want to hand-drive the router.
    */
   idleTimeoutMs: number | null;
+  /**
+   * P1-A hybrid boundary detector (observer). When installed, every PTY
+   * chunk is fed through this detector IN ADDITION TO the legacy boundary
+   * detection path above. The hybrid detector does NOT own byte flow — it
+   * only emits confidence-stamped `BoundaryEvent`s to the `onHybridEvent`
+   * callback (from install options) and is used by P1-C chrome to render
+   * authoritative vs. heuristic boundaries differently. See
+   * `hybrid-detector.ts` for the signal-fusion design.
+   *
+   * `null` when not installed (default for mock bridge, legacy tests, and
+   * sessions that opted out via `installCommandRouter({ hybrid: null })`).
+   */
+  hybrid: HybridBoundaryDetector | null;
 }
 
 const routers = new Map<SessionId, RouterHandle>();
@@ -274,6 +293,35 @@ export interface InstallCommandRouterOptions {
    * resets this timer on every append and clears it on dispose.
    */
   readonly idleCompletionMs?: number | null;
+  /**
+   * P1-A hybrid boundary detector configuration. When provided, every PTY
+   * chunk is also fed through a hybrid detector (OSC 133 + heuristic regex
+   * + cursor-home + idle) and emitted events are forwarded to
+   * `onHybridBoundary`. The hybrid detector is OBSERVER-ONLY — it does not
+   * consume bytes, rewrite block state, or change the legacy boundary
+   * pipeline. P1-C wires its events to block chrome; P1-A only installs
+   * the emitter so those consumers have a signal to react to.
+   *
+   * Pass `null` or omit to disable the hybrid detector (legacy mode).
+   * Pass an object with `shellIntegration` to select the right confidence
+   * tier for the session's shell-integration status.
+   */
+  readonly hybrid?: null | HybridRouterOptions;
+}
+
+/**
+ * Shape of the hybrid-detector install option. A subset of
+ * `HybridBoundaryDetectorOptions` plus the event sink.
+ */
+export interface HybridRouterOptions {
+  readonly shellIntegration: HybridBoundaryDetectorOptions['shellIntegration'];
+  readonly idleTimeoutMs?: number;
+  readonly suppressionWindowMs?: number;
+  readonly promptPatterns?: readonly RegExp[];
+  /** Fires for every event the detector surfaces, post-arbitration. */
+  readonly onHybridBoundary?: (event: BoundaryEvent) => void;
+  /** Fires for events suppressed by arbitration (telemetry). */
+  readonly onHybridSuppressed?: (event: BoundaryEvent) => void;
 }
 
 export function installCommandRouter(
@@ -295,12 +343,50 @@ export function installCommandRouter(
   const createDetector = resolveDetectorFactory(options.detector);
   const idleTimeoutMs =
     options.idleCompletionMs === undefined ? null : options.idleCompletionMs;
+  // Hybrid detector (P1-A): observer-only. When the caller passes a
+  // `hybrid` block the detector is built now with the caller's confidence
+  // tier; events are forwarded verbatim to `onHybridBoundary`. When the
+  // shell integration is `'missing'`, OSC 133 is still watched (shells
+  // may emit it anyway) but the regex + idle tiers carry the confidence
+  // load. When `installed` / `detected`, OSC 133 is authoritative and
+  // the regex tier is boosted to 0.8 confidence automatically.
+  let hybrid: HybridBoundaryDetector | null = null;
+  if (options.hybrid) {
+    const h = options.hybrid;
+    const detectorOptions: HybridBoundaryDetectorOptions = {
+      shellIntegration: h.shellIntegration,
+      ...(h.idleTimeoutMs !== undefined
+        ? { idleTimeoutMs: h.idleTimeoutMs }
+        : {}),
+      ...(h.suppressionWindowMs !== undefined
+        ? { suppressionWindowMs: h.suppressionWindowMs }
+        : {}),
+      ...(h.promptPatterns !== undefined
+        ? { promptPatterns: h.promptPatterns }
+        : {}),
+      ...(h.onHybridBoundary !== undefined
+        ? { onEvent: h.onHybridBoundary }
+        : {}),
+      ...(h.onHybridSuppressed !== undefined
+        ? { onSuppressed: h.onHybridSuppressed }
+        : {}),
+    };
+    hybrid = createHybridBoundaryDetector(detectorOptions);
+    // When the session has no shell-integration coverage, the OSC 133
+    // tier cannot fire authoritatively (the shell isn't emitting those
+    // markers). We still leave the signal enabled because user-supplied
+    // rc snippets may emit OSC 133 without our installer noticing, but
+    // downstream consumers should treat any OSC 133 arrival as a BONUS
+    // rather than a contract. The confidence tier math already reflects
+    // this: regex stays at 0.6 (vs 0.8 when integration is installed).
+  }
   const handle: RouterHandle = {
     sessionId,
     detector: createDetector(),
     createDetector,
     idleTimer: null,
     idleTimeoutMs,
+    hybrid,
   };
   routers.set(sessionId, handle);
   return {
@@ -407,6 +493,18 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
       } catch (err) {
         log.error('raw observer threw, isolating', err);
       }
+    }
+  }
+
+  // P1-A: feed the hybrid detector before any block mutation. It is a pure
+  // observer (does not own bytes) so we invoke it unconditionally when
+  // installed and ignore any thrown errors — a misbehaving detector must
+  // never break the byte path into the block store.
+  if (handle.hybrid !== null) {
+    try {
+      handle.hybrid.feed(chunk);
+    } catch (err) {
+      log.error('hybrid detector threw, isolating', err);
     }
   }
 

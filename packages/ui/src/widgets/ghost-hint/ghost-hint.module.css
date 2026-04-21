@@ -1,0 +1,62 @@
+/*
+ * GhostHint — Plan 0005 P1-G.
+ *
+ * Subtle bottom-right pill that suggests the key binding to leave the
+ * current pager / REPL / TUI / multiplexer mode. Always floating over the
+ * terminal canvas; never mutates the layout grid.
+ *
+ * Visual language matches the other glassmorphic chrome: translucent
+ * background, faint border, mono-ish text for the key sequence.
+ */
+
+.ghost {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: calc(var(--q-font-size-sm) * 0.9);
+  line-height: 1.3;
+  opacity: 0.4;
+  pointer-events: auto;
+  transition: opacity 120ms ease-out;
+  z-index: 5;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghost:hover,
+.ghost:focus-visible {
+  opacity: 0.8;
+  outline: none;
+}
+
+.ghost[data-dismissed='true'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ghost {
+    transition: none;
+  }
+}
+
+.keys {
+  font-weight: 500;
+  color: var(--q-fg);
+}
+
+.sep {
+  color: var(--q-fg-faint);
+}

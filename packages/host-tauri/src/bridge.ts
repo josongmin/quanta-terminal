@@ -28,6 +28,8 @@ import type {
   OpenInEditorOptions,
   ReadTextFileOptions,
   SessionId,
+  ShellInstallOutcome,
+  ShellInstallStatus,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
@@ -112,6 +114,31 @@ interface QuantaUninstallShellIntegrationReply {
   file_missing: boolean;
   mutated: boolean;
   line_count: number;
+}
+
+/* P1-B auto-install: opt-out shell-integration bootstrap fired on first
+   session spawn. Mirrors `shell_install::InstallOutcome` / `InstallStatus`
+   on the Rust side (tagged-union via serde's `#[serde(tag = "kind")]`). */
+interface QuantaShellInstallAutoArgs {
+  shell: string;
+  home_override: string | null;
+}
+
+interface QuantaShellInstallStatusArgs {
+  shell: string;
+  home_override: string | null;
+}
+
+type QuantaShellInstallOutcomeWire =
+  | { kind: 'already_installed' }
+  | { kind: 'installed'; rc_path: string; backup_path: string }
+  | { kind: 'skipped_unsupported_shell' }
+  | { kind: 'failed'; reason: string };
+
+interface QuantaShellInstallStatusReply {
+  installed: boolean;
+  supported: boolean;
+  rc_path: string | null;
 }
 
 /* AI suggestion command — mirrors `quanta_ai::SuggestionResponse` +
@@ -354,6 +381,66 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         mutated: reply.mutated,
         lineCount: reply.line_count,
       };
+    },
+
+    async shellInstallAuto(shell: string): Promise<ShellInstallOutcome> {
+      // P1-B opt-out auto-install. The Rust side enforces idempotence + backup;
+      // we just forward the shell identifier from the spawn reply. Rejections
+      // are surfaced as a `failed` outcome — the caller (session orchestrator)
+      // treats a bridge-internal error the same as a filesystem failure for
+      // back-off purposes.
+      const args: QuantaShellInstallAutoArgs = {
+        shell,
+        home_override: null,
+      };
+      try {
+        const reply = await invokeStructured<QuantaShellInstallOutcomeWire>(
+          'quanta_shell_install_auto',
+          { args },
+        );
+        if (reply.kind === 'installed') {
+          return {
+            kind: 'installed',
+            rcPath: reply.rc_path,
+            backupPath: reply.backup_path,
+          };
+        }
+        if (reply.kind === 'failed') {
+          return { kind: 'failed', reason: reply.reason };
+        }
+        if (reply.kind === 'skipped_unsupported_shell') {
+          return { kind: 'skipped_unsupported_shell' };
+        }
+        return { kind: 'already_installed' };
+      } catch (err) {
+        // Forced conversion to a typed outcome so the session orchestrator
+        // never has to branch on try/catch vs reply.kind — every failure mode
+        // reaches it as a structured `kind: 'failed'` shape.
+        const reason = err instanceof Error ? err.message : String(err);
+        return { kind: 'failed', reason };
+      }
+    },
+
+    async shellInstallStatus(shell: string): Promise<ShellInstallStatus> {
+      const args: QuantaShellInstallStatusArgs = {
+        shell,
+        home_override: null,
+      };
+      try {
+        const reply = await invokeStructured<QuantaShellInstallStatusReply>(
+          'quanta_shell_install_status',
+          { args },
+        );
+        return {
+          installed: reply.installed,
+          supported: reply.supported,
+          rcPath: reply.rc_path,
+        };
+      } catch {
+        // Worst-case fallback: treat the host as "cannot answer" — the UI's
+        // back-off logic already handles the unknown case as "no install".
+        return { installed: false, supported: false, rcPath: null };
+      }
     },
 
     async uninstallShellIntegration(

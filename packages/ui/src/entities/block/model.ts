@@ -34,6 +34,48 @@ import type { SessionId } from '../../shared/types/generated/index.js';
 export type BlockStatus = 'running' | 'completed' | 'canceled' | 'error';
 
 /**
+ * Plan 0005 P1-C — row-range reference into the VtEmulator scrollback ring.
+ *
+ * `startRow` is the `rowId` (monotonic, matches `mainScrollback.baseRowId + index`)
+ * where the prompt for this block began printing. `endRowExclusive` is one past
+ * the last row covered by the block's output; while the block is still running
+ * the field is left `null` and the overlay stretches its bottom edge with the
+ * cursor.
+ *
+ * The invariant the block-boundary listener maintains: for every non-null
+ * `rowRange` attached to a block, the emulator is guaranteed to hold a pin on
+ * `startRow` until the block transitions to a terminal status (at which point
+ * the pin is released or retained-for-eviction per the card's unmount policy).
+ * Readers look up contents via `VtEmulator.getScrollback().rows` indexed at
+ * `startRow - baseRowId` — see `BlockOverlay.tsx` for the canonical reader.
+ */
+export interface BlockRowRange {
+  readonly startRow: number;
+  readonly endRowExclusive: number | null;
+}
+
+/**
+ * Plan 0005 P1-A / P1-C — confidence stamp carried with every block.
+ *
+ * Mirrors the hybrid boundary detector's emission kinds (see
+ * `features/command/hybrid-detector-types.ts`). Chrome renders blocks with
+ * `authoritative` confidence as crisp (solid status dot, full badge), while
+ * `heuristic` / `idle` blocks get a dashed border + reduced-opacity badges so
+ * the user can tell at a glance whether the boundary came from OSC 133 (real)
+ * or a heuristic fallback (best-effort).
+ *
+ * `'synthetic'` is the legacy mock-bridge confidence kept for back-compat with
+ * P0 tests that predate P1-A — new code should never mint a `'synthetic'`
+ * block. Once the hybrid detector ships (P1-A), mock tests will migrate to
+ * the real source kinds.
+ */
+export type BlockConfidence =
+  | 'authoritative'
+  | 'heuristic'
+  | 'idle'
+  | 'synthetic';
+
+/**
  * Sentinel session id used when a block is created without an explicit session.
  *
  * Phase 4 adds multi-session. Call sites that opt into the new API pass a real
@@ -107,6 +149,35 @@ export interface Block {
    * stored row lacks the field (forward-compat).
    */
   readonly tags: readonly string[];
+  /**
+   * Plan 0005 P1-C — row-range reference into the VtEmulator scrollback.
+   *
+   * Set by the block-boundary listener on `prompt_start` (or the first frame
+   * of an incoming block when the detector hasn't emitted yet) and updated on
+   * `command_end` with the final `endRowExclusive`. `null` when the block was
+   * created by the legacy P0 composer path (no scrollback coordinates
+   * available) — the overlay feature-gates rendering on `rowRange !== null`,
+   * so legacy blocks simply don't get absolute-positioned chrome. Legacy
+   * consumers (BlockList, persistence) continue to read `outputChunks`
+   * unchanged.
+   */
+  readonly rowRange: BlockRowRange | null;
+  /**
+   * Plan 0005 P1-A / P1-C — boundary detector's confidence in the start of
+   * this block. `null` when the block was created before the hybrid detector
+   * shipped (legacy paths, tests that don't thread a confidence). Overlay
+   * chrome uses `'synthetic'` as the visual tier for `null` so the absence
+   * of a stamp degrades gracefully to the dashed-border treatment.
+   */
+  readonly confidence: BlockConfidence | null;
+  /**
+   * Plan 0005 P1-C — command wall-clock duration in milliseconds, stamped on
+   * the `command_end` boundary event (source: `osc133`, field from the OSC
+   * 133 D payload). `null` on boundaries whose source can't carry a duration
+   * (heuristic / idle) — chrome falls back to `completedAt - startedAt` as a
+   * best-effort estimate. `null` on blocks that are still running.
+   */
+  readonly durationMs: number | null;
 }
 
 /**
@@ -198,6 +269,15 @@ export interface StartBlockOptions {
    * composer) may omit this.
    */
   readonly eventId?: string;
+  /**
+   * Plan 0005 P1-C — row-range start from the hybrid boundary detector.
+   * When present, `rowRange.startRow` is a `rowId` (baseRowId + index) into
+   * the emulator scrollback ring and `rowRange.endRowExclusive` is `null`
+   * until `command_end` finalizes it. Omitted by the legacy composer path.
+   */
+  readonly rowRange?: BlockRowRange;
+  /** Plan 0005 P1-A / P1-C — confidence stamp from the detector. */
+  readonly confidence?: BlockConfidence;
 }
 
 export interface CreateBlockOptions {
@@ -207,6 +287,10 @@ export interface CreateBlockOptions {
   readonly sessionId?: SessionId;
   /** See StartBlockOptions.eventId. */
   readonly eventId?: string;
+  /** See StartBlockOptions.rowRange. */
+  readonly rowRange?: BlockRowRange;
+  /** See StartBlockOptions.confidence. */
+  readonly confidence?: BlockConfidence;
 }
 
 /**
@@ -272,6 +356,40 @@ export interface BlockActions {
   removeTag(blockId: string, tag: string): void;
   /** Remove every tag from a block. No-op when none exist. */
   clearTags(blockId: string): void;
+  /**
+   * Plan 0005 P1-C — attach or update the row-range reference on a block.
+   *
+   * Called by `features/command/block-boundary-listener.ts` on every
+   * boundary event the detector emits:
+   *
+   *   - `prompt_start`   → `setBlockRowRange(id, { startRow, endRowExclusive: null }, confidence)`
+   *   - `command_end`    → `setBlockRowRange(id, { startRow, endRowExclusive: <row> })`
+   *
+   * Passing `null` as `rowRange` is valid and resets the block to "no
+   * overlay coordinates" — used by the listener when an authoritative OSC
+   * 133 emission retracts an earlier heuristic boundary (the previously
+   * attached row-range no longer applies). `confidence` is written unchanged
+   * when omitted on an update, so the `command_end` path doesn't have to
+   * re-state the tier.
+   *
+   * The action is a no-op if the block id is unknown. Idempotent on a
+   * write that matches the current value (no store mutation, no subscriber
+   * notification).
+   */
+  setBlockRowRange(
+    id: string,
+    rowRange: BlockRowRange | null,
+    confidence?: BlockConfidence,
+  ): void;
+  /**
+   * Plan 0005 P1-C — stamp a duration on a terminal block. Called by the
+   * boundary listener on `command_end` when the detector carries a wall-
+   * clock `durationMs` from the OSC 133 D payload. The block must already
+   * be in a terminal state (`completed | canceled | error`) — a call
+   * against a running block is a no-op so mis-ordered events don't corrupt
+   * chrome-visible state. Idempotent against an already-matching value.
+   */
+  setBlockDuration(id: string, durationMs: number): void;
   /** Test helper — wipe everything, including pinned. */
   resetAll(): void;
 }
@@ -407,6 +525,9 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         errorMessage: null,
         rerunOfId: rerunOf,
         tags: [],
+        rowRange: options?.rowRange ?? null,
+        confidence: options?.confidence ?? null,
+        durationMs: null,
       };
       const eventId = options?.eventId;
       set((prev) => {
@@ -458,6 +579,9 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         errorMessage: null,
         rerunOfId: rerunOf,
         tags: [],
+        rowRange: options?.rowRange ?? null,
+        confidence: options?.confidence ?? null,
+        durationMs: null,
       };
       const eventId = options?.eventId;
       let previousActiveId: string | null = null;
@@ -805,6 +929,49 @@ export const useBlockStore = create<BlockState & BlockActions>()(
           entities: {
             ...prev.entities,
             [blockId]: { ...b, tags: [] },
+          },
+        };
+      }),
+
+    setBlockRowRange: (id, rowRange, confidence) =>
+      set((prev) => {
+        const b = prev.entities[id];
+        if (!b) return prev;
+        // Idempotency guard: a write that matches the current state is a
+        // no-op (skip the subscriber fanout).
+        const currentRange = b.rowRange;
+        const nextConfidence = confidence ?? b.confidence;
+        const rangeEq =
+          (currentRange === null && rowRange === null) ||
+          (currentRange !== null &&
+            rowRange !== null &&
+            currentRange.startRow === rowRange.startRow &&
+            currentRange.endRowExclusive === rowRange.endRowExclusive);
+        if (rangeEq && nextConfidence === b.confidence) return prev;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [id]: { ...b, rowRange, confidence: nextConfidence },
+          },
+        };
+      }),
+
+    setBlockDuration: (id, durationMs) =>
+      set((prev) => {
+        const b = prev.entities[id];
+        if (!b) return prev;
+        // Only stamp a duration on a terminal block — a running block's
+        // duration is "live" and derived at render time from
+        // `performance.now() - startedAt`. An out-of-order duration arriving
+        // for a still-running block (malformed event stream) is dropped.
+        if (b.status === 'running') return prev;
+        if (b.durationMs === durationMs) return prev;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [id]: { ...b, durationMs },
           },
         };
       }),

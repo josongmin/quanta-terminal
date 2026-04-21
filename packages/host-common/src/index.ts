@@ -18,6 +18,8 @@ export type {
   InstallShellIntegrationReply,
   UninstallShellIntegrationOptions,
   UninstallShellIntegrationReply,
+  ShellInstallOutcome,
+  ShellInstallStatus,
   AiSuggestOptions,
   AiSuggestion,
   AiRiskTier,

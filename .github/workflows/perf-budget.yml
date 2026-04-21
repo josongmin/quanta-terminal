@@ -1,6 +1,6 @@
 name: perf-budget
 
-# Plan 0005 P0 Gate #7 / #10 — JavaScript-side perf-budget harness.
+# Plan 0005 P0 Gate #7 / #10 + P1-H — JavaScript-side perf-budget harness.
 #
 # This workflow is distinct from the existing `perf.yml` (which runs the
 # Rust `quanta-perf-harness` criterion benches). The two complement each
@@ -17,6 +17,10 @@ name: perf-budget
 #     recorded baseline numbers on the reference Apple Silicon runner.
 #   - The runner (`tools/run-perf-budget.mjs`) applies a 10% WARN tolerance
 #     above each budget — only overshoots > 10% fail the spec.
+#   - `PERF_PROFILE=ci-linux` picks the wider Linux budget set
+#     (`CI_LINUX_BUDGETS`) — ubuntu-24.04 is 3-4× slower than M4 Max on
+#     these workloads, so budgets are relaxed 3× in CI. See
+#     `packages/ui/src/__tests__/perf/perf-budget.ts` comments.
 #
 # Noise and retry policy:
 #   Perf budgets are inherently noisy on shared CI hardware (shared cores,
@@ -26,6 +30,8 @@ name: perf-budget
 #       as passing if at least 2 of 3 attempts pass (majority judge).
 #     - Upload the `artifacts/perf/<timestamp>.json` report unconditionally
 #       so regressions can be triaged without a re-run.
+#     - Also upload the commit-scoped `artifacts/perf/<commit>/summary.json`
+#       which is the input to `tools/perf-regression-check.mjs`.
 #
 # IMPORTANT: single-runner only. The macOS runner (macos-latest) is NOT in
 # this matrix — hardware variance between macos-13 and macos-14 images has
@@ -40,6 +46,7 @@ on:
       - 'packages/ui/src/shared/lib/write-batcher-frame-skip.ts'
       - 'packages/ui/src/shared/lib/scrollback/**'
       - 'tools/run-perf-budget.mjs'
+      - 'tools/perf-regression-check.mjs'
       - '.github/workflows/perf-budget.yml'
       - 'docs/plans/0005-sota-convergence/perf-baselines.md'
   push:
@@ -51,14 +58,18 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: write
 
 env:
   PNPM_VERSION: '9.12.0'
+  PERF_PROFILE: ci-linux
 
 jobs:
   budget:
     name: perf-budget (ubuntu-24.04)
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -78,17 +89,21 @@ jobs:
 
       # Retry up to 3 times; the majority-judge policy lives in the runner
       # command itself (best-2-of-3). Each attempt emits a fresh artefact.
-      # We use a shell loop rather than nick3c's retry action to keep the
-      # dependency surface minimal.
+      # The median of all attempts is what `perf-regression-check.mjs`
+      # consumes — the majority-judge and the median-judge are both
+      # belt-and-braces against single-run noise.
       - name: Run perf-budget harness (best 2-of-3)
         id: bench
         shell: bash
+        env:
+          PERF_PROFILE: ${{ env.PERF_PROFILE }}
+          PERF_COMMIT: ${{ github.sha }}
         run: |
           set -o pipefail
           PASSES=0
           FAILS=0
           for ATTEMPT in 1 2 3; do
-            echo "::group::perf-budget attempt ${ATTEMPT}"
+            echo "::group::perf-budget attempt ${ATTEMPT} (profile=${PERF_PROFILE})"
             if pnpm test:perf; then
               PASSES=$((PASSES + 1))
               echo "attempt ${ATTEMPT}: PASS"
@@ -99,22 +114,96 @@ jobs:
             echo "::endgroup::"
             if [ "${PASSES}" -ge 2 ]; then
               echo "majority PASS reached after ${ATTEMPT} attempt(s)"
+              echo "status=pass" >> "${GITHUB_OUTPUT}"
               exit 0
             fi
             if [ "${FAILS}" -ge 2 ]; then
               echo "majority FAIL reached after ${ATTEMPT} attempt(s)" >&2
+              echo "status=fail" >> "${GITHUB_OUTPUT}"
               exit 1
             fi
           done
           echo "inconclusive after 3 attempts" >&2
+          echo "status=inconclusive" >> "${GITHUB_OUTPUT}"
           exit 1
+
+      # Regression gate — only meaningful on PRs (on push-to-main we're
+      # creating the history, not comparing against it).
+      - name: Compare against main history (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        continue-on-error: true
+        run: |
+          node tools/perf-regression-check.mjs \
+            --current "artifacts/perf/${PR_HEAD_SHA:0:12}/summary.json" \
+            --history-branch main \
+            --history-limit 7 \
+            --delta-threshold 0.20
 
       # Always upload — even on failure the JSON report is diagnostic gold.
       - name: Upload perf artefacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-budget-reports
+          name: perf-budget-reports-${{ github.run_id }}
           path: artifacts/perf/
           if-no-files-found: warn
           retention-days: 30
+
+      # PR status check body — posts the perf table as a comment so the
+      # PR author sees the numbers without downloading the artifact.
+      - name: Publish PR status summary
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATUS: ${{ steps.bench.outputs.status || 'inconclusive' }}
+        run: |
+          SUMMARY_PATH="artifacts/perf/${PR_HEAD_SHA:0:12}/summary.json"
+          {
+            echo "### perf-budget (profile=${PERF_PROFILE}) — ${STATUS}"
+            echo ""
+            if [ -f "${SUMMARY_PATH}" ]; then
+              echo '```json'
+              cat "${SUMMARY_PATH}"
+              echo '```'
+            else
+              echo "(no summary.json produced — see workflow logs)"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # Nightly prune of the reports bucket — 30-day retention is enforced
+  # by the upload-artifact step, this is a belt-and-braces safety net
+  # for forks that disable the built-in retention window.
+  prune:
+    name: prune old perf artefacts
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+            const { data } = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            for (const a of data.artifacts) {
+              if (!a.name.startsWith('perf-budget-reports-')) continue;
+              if (new Date(a.created_at).getTime() > cutoffMs) continue;
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: a.id,
+              });
+              core.info(`pruned artifact ${a.name} (${a.id})`);
+            }

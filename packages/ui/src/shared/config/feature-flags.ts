@@ -42,12 +42,38 @@ export interface FeatureFlags {
    * session-level VtEmulator.
    */
   readonly blockUx: boolean;
+  /**
+   * Plan 0005 P1-B opt-out auto-install. When true (default), the session
+   * orchestrator fires `bridge.shellInstallAuto` fire-and-forget on first
+   * spawn so users get OSC 133 shell integration without running the wizard.
+   * Users who prefer the wizard path (or who are locked down by policy) can
+   * set this to false via the settings panel.
+   */
+  readonly shellIntegrationAutoInstall: boolean;
+  /**
+   * Plan 0005 P1-E session restore. When true, the terminal page awaits
+   * `replaySession(id)` before subscribing to a freshly-spawned PTY so the
+   * grid appears seeded with the last-known state rather than blank. Off by
+   * default while the journal format is still under review; flip from the
+   * settings UI or via `QUANTA_FLAG_SESSION_RESTORE=on` at bundle time.
+   */
+  readonly sessionRestore: boolean;
   /** Reserved future flags. */
   readonly [k: string]: boolean;
 }
 
 export const DEFAULT_FLAGS: FeatureFlags = {
   blockUx: false,
+  // Plan 0005 P1-B — opt-OUT default: the roadmap calls for auto-install to
+  // be on for every new user, with a kill switch for policy-restricted
+  // environments. If/when we need an opt-in rollout (e.g. enterprise
+  // dogfood), flip this to false and schedule a gradual ramp.
+  shellIntegrationAutoInstall: true,
+  // Plan 0005 P1-E — default-off while the journal format is under review.
+  // Tauri builds can flip this on by setting `QUANTA_FLAG_SESSION_RESTORE=on`
+  // at bundle time; future P1-E dogfood graduates to default-on in Tauri and
+  // off in the browser (no filesystem journal there today).
+  sessionRestore: false,
 };
 
 /** Storage key — a single JSON blob for forward compatibility. */

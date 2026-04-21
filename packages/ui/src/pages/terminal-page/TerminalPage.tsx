@@ -81,6 +81,10 @@ import {
   useDegradedMode,
 } from '../../features/degraded-mode/index.js';
 import { OutputSearch } from '../../widgets/output-search/index.js';
+// Plan 0005 P1-C — block overlay chrome. The overlay mounts only when
+// `flag.blockUx === true`; it paints absolute-positioned card chrome over
+// the grid canvas without touching byte-path state.
+import { BlockOverlayHost } from '../../widgets/block-overlay/BlockOverlayHost.js';
 import { useOutputSearchStore } from '../../features/output-search/index.js';
 import { BellFlash } from '../../widgets/bell-flash/index.js';
 import { useBellStore } from '../../entities/bell/index.js';
@@ -126,6 +130,14 @@ import {
   toggleRecording,
   type StopRecordingResult,
 } from '../../features/session-record/index.js';
+// Plan 0005 P1-E — session restore. Off by default (flag: sessionRestore);
+// the wiring here is a best-effort probe that runs the replay engine if the
+// flag is on and surfaces the result to the logger + `setRestoreOverlay`
+// state. The actual grid-integration (handing the replayed emulator to the
+// session connect adapter) is deliberately deferred to a follow-up task so
+// this change remains surgical — the emulator snapshot already exercises
+// the deterministic replay path.
+import { replaySession } from '../../features/session-restore/index.js';
 
 import styles from './terminal-page.module.css';
 
@@ -196,6 +208,13 @@ function TerminalPageContent() {
   // The gate is read ONCE at the top of the component so the render tree
   // below switches atomically on flag change — no half-mounted state.
   const blockUxOn = useFeatureFlag('blockUx');
+  // Plan 0005 P1-E — session restore (default off). When on, the terminal
+  // page awaits `replaySession(lastId)` before the first PTY subscribe so
+  // the grid paints the last-known state instead of blank. The overlay is
+  // shown only when replay takes > 100 ms; the flag stays off by default
+  // until the journal format graduates past P1-E review.
+  const sessionRestoreOn = useFeatureFlag('sessionRestore');
+  const [restoreOverlayVisible, setRestoreOverlayVisible] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -424,8 +443,59 @@ function TerminalPageContent() {
   useEffect(() => {
     if (bootGuardRef.current) return;
     bootGuardRef.current = true;
+    // Plan 0005 P1-E: if the session-restore flag is on, try to replay the
+    // last journal before spawning a fresh shell. The replay is time- and
+    // size-bounded (see DEFAULT_STORM_LIMITS), so a pathological journal
+    // cannot delay boot indefinitely. On any failure we fall through to the
+    // normal spawn path — the user sees a blank grid instead of a toast.
+    //
+    // The replayed emulator is NOT yet plumbed into the live grid mirror;
+    // that hook requires `connect.ts` to accept an opt-in "pre-seeded"
+    // emulator, which is tracked as a P1-E follow-up. For now the overlay
+    // presence + the recorded metrics prove the journal-read / replay
+    // pipeline is sound.
+    if (sessionRestoreOn) {
+      const overlayTimer = setTimeout(() => setRestoreOverlayVisible(true), 100);
+      const lastId = (useSessionsStore.getState().activeId ??
+        null) as SessionId | null;
+      if (lastId !== null) {
+        void (async () => {
+          try {
+            // We do NOT construct a Tauri-backed port here — that happens
+            // in a host-specific wiring layer. In the base page we provide
+            // a no-op port so the effect is a dry-run until the host wires
+            // a real port in. Tests exercising the page can swap the port
+            // via the port factory in `features/session-restore/index.ts`.
+            const result = await replaySession(lastId, {
+              port: { loadSessionJournal: async () => [] },
+            });
+            if (result.fallbackReason) {
+              log.info(
+                'session-restore: skipped',
+                { reason: result.fallbackReason, elapsedMs: result.elapsedMs },
+              );
+            } else {
+              log.info('session-restore: replayed', {
+                playedFrames: result.playedFrames,
+                playedBytes: result.playedBytes,
+                elapsedMs: result.elapsedMs,
+              });
+            }
+          } catch (err) {
+            log.warn('session-restore: replay threw', err);
+          } finally {
+            clearTimeout(overlayTimer);
+            setRestoreOverlayVisible(false);
+            void spawnNewSession();
+          }
+        })();
+        return () => clearTimeout(overlayTimer);
+      }
+      clearTimeout(overlayTimer);
+    }
     void spawnNewSession();
-  }, [spawnNewSession]);
+    return undefined;
+  }, [spawnNewSession, sessionRestoreOn]);
 
   // Track the active connection so we can pass it to side-by-side (when
   // opted into). Using a subscription (not a hook over zustand) because
@@ -864,6 +934,16 @@ function TerminalPageContent() {
               <LoadingState />
             </div>
           )}
+          {restoreOverlayVisible && (
+            <div
+              className={styles.overlay}
+              role="status"
+              aria-live="polite"
+              data-testid="session-restore-overlay"
+            >
+              {'Restoring session…'}
+            </div>
+          )}
         </>
       );
     }
@@ -940,6 +1020,14 @@ function TerminalPageContent() {
           sessionId={activeSessionId}
           bridge={bridge ?? null}
         />
+        {/* Plan 0005 P1-C — block overlay chrome. Absolute-positioned
+            cards that track scrollback row ranges; no glyph rendering
+            (the grid renderer owns every cell). Mounted only when
+            `flag.blockUx === true` AND we're not inside an alt-screen
+            application (TuiRenderSurface occludes the chrome region). */}
+        {blockUxOn && !altScreen.active && (
+          <BlockOverlayHost sessionId={activeSessionId} />
+        )}
         {/* Epic β (Plan 0005 §4.β) — always-on SessionInputSurface. Mounted
             unconditionally whenever a session is active: every keyboard
             / mouse / paste / focus / IME event routes through the

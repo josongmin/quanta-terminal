@@ -78,6 +78,12 @@ mod crash;
 mod error;
 mod flow_control;
 mod ipc;
+// Reader-side APIs in `session_record` (FrameReader, open_for_replay,
+// rotated_paths) are invoked from the TS side over the filesystem today;
+// keep the Rust parser available for future sidecar / replay CLI callers.
+#[allow(dead_code)]
+mod session_record;
+mod shell_install;
 mod shell_integration;
 
 // Compile-time guard: the sidecar path and the embedded-shell path must not
@@ -131,8 +137,12 @@ pub fn run() {
             ipc::quanta_git_status,
             ipc::quanta_list_completions,
             ipc::quanta_report_crash,
+            ipc::quanta_session_journal_start,
+            ipc::quanta_session_journal_stop,
             shell_integration::quanta_install_shell_integration,
             shell_integration::quanta_uninstall_shell_integration,
+            shell_install::quanta_shell_install_auto,
+            shell_install::quanta_shell_install_status,
         ])
         .setup(move |app| {
             tracing::info!("Quanta host (Tauri) booted; window manager attached.");

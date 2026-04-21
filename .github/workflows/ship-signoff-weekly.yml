@@ -1,0 +1,133 @@
+name: ship-signoff-weekly
+
+# Plan 0005 P1-I — weekly SHIP_SIGNOFF regeneration + drift detection.
+#
+# Runs every Monday at 14:00 UTC and on manual dispatch. If the newly
+# generated sign-off regresses any gate (GREEN→YELLOW, GREEN→RED, or
+# YELLOW→RED vs. the committed `docs/plans/0005-sota-convergence/SHIP_SIGNOFF.md`),
+# it opens a tracking GH issue via actions/github-script.
+#
+# Never blocks main. Never auto-commits. Never pings Slack / email.
+
+on:
+  schedule:
+    - cron: '0 14 * * MON'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ship-signoff-weekly
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    name: Regenerate SHIP_SIGNOFF and detect drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      # Run the sign-off generator; the `--compare` flag exits non-zero
+      # when regressions are found *and* `--fail-on-drift` is set. We
+      # deliberately do NOT pass `--fail-on-drift`: the job stays green
+      # so the downstream issue-creation step always runs.
+      - name: Generate SHIP_SIGNOFF and drift report
+        id: signoff
+        run: |
+          node tools/ship-signoff-gen/index.mjs \
+            --out artifacts/ship-signoff/generated.md \
+            --compare docs/plans/0005-sota-convergence/SHIP_SIGNOFF.md \
+            > artifacts/ship-signoff/drift-report.txt \
+            2>&1 || true
+          cat artifacts/ship-signoff/drift-report.txt
+
+      - name: Run self-tests
+        run: pnpm check:signoff:selftest
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ship-signoff-${{ github.run_id }}
+          path: artifacts/ship-signoff/
+          retention-days: 30
+
+      # Detect alerting drift from the report and count regressions.
+      # The drift report text contains `N alerting regression(s) detected.`
+      # when there is at least one GREEN→YELLOW / GREEN→RED / YELLOW→RED
+      # transition; zero otherwise.
+      - name: Classify drift
+        id: classify
+        run: |
+          REPORT="$(cat artifacts/ship-signoff/drift-report.txt || echo '')"
+          REGR_COUNT="$(echo "$REPORT" | grep -oE '\*\*[0-9]+ alerting regression' | head -n1 | grep -oE '[0-9]+' || echo '0')"
+          if [ -z "$REGR_COUNT" ]; then REGR_COUNT=0; fi
+          echo "count=$REGR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Detected $REGR_COUNT alerting regression(s)."
+
+      - name: Open / update drift issue
+        if: steps.classify.outputs.count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const count = Number('${{ steps.classify.outputs.count }}') || 0;
+            const today = new Date().toISOString().slice(0, 10);
+            const title = `[ship-signoff drift] ${count} gate(s) regressed on ${today}`;
+            const report = fs.readFileSync(
+              'artifacts/ship-signoff/drift-report.txt',
+              'utf8',
+            );
+            const body = [
+              `Automated SHIP_SIGNOFF drift detection flagged ${count} alerting regression(s).`,
+              '',
+              'Source: `.github/workflows/ship-signoff-weekly.yml` (Plan 0005 P1-I).',
+              '',
+              '---',
+              '',
+              '```',
+              report.slice(0, 50_000),
+              '```',
+              '',
+              'Artifacts (generated SHIP_SIGNOFF + full drift report) are attached to this workflow run.',
+            ].join('\n');
+
+            // Look for an open drift issue from the last 14 days and
+            // update it in place instead of creating duplicates.
+            const { owner, repo } = context.repo;
+            const existing = await github.paginate(
+              github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', labels: 'ship-signoff-drift', per_page: 50 },
+            );
+            if (existing.length > 0) {
+              const issue = existing[0];
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number,
+                title, body,
+              });
+              core.notice(`Updated existing drift issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo, title, body,
+                labels: ['ship-signoff-drift'],
+              });
+              core.notice(`Opened drift issue #${created.data.number}`);
+            }
