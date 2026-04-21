@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { makeIntent } from '../../intent-router';
 import type { AnyIntent, IntentSource } from '../../intent-types';
-import { createSafetyGate, DEFAULT_DANGER_PATTERNS } from '../safety-gate';
+import { createSafetyGate, DEFAULT_DANGER_PATTERNS, __testing } from '../safety-gate';
 
 function execIntent(
   text: string,
@@ -79,16 +79,77 @@ describe('createSafetyGate', () => {
     expect(gate(execIntent('ls', 'agent', 0.3))).toBe('confirm');
   });
 
-  it('does NOT flag safe commands that merely mention rm', () => {
+  it('shell-string strip: rm -rf / inside a double-quoted string → allow', () => {
     const gate = createSafetyGate();
-    expect(gate(execIntent('echo "be careful with rm -rf"', 'user-keystroke'))).toBe('allow');
+    expect(gate(execIntent('echo "be careful with rm -rf /"', 'user-keystroke'))).toBe(
+      'allow',
+    );
+    expect(gate(execIntent("echo 'rm -rf /*'", 'user-keystroke'))).toBe('allow');
   });
 
-  it('does NOT flag rm -rf on a specific path (only root wipes)', () => {
+  it('paranoid mode: rm -rf / inside a string still flagged when regex resolves', () => {
+    // In paranoid mode we scan the raw text — the quote boundaries no
+    // longer hide danger. Use a payload where the regex genuinely hits
+    // raw (slash followed by whitespace so the root-wipe anchor fires).
+    const gate = createSafetyGate({ paranoid: true });
+    expect(gate(execIntent('echo "rm -rf / now"', 'agent'))).toBe('deny');
+
+    // Non-paranoid scan strips the string first → no match → allow.
+    const normal = createSafetyGate();
+    expect(normal(execIntent('echo "rm -rf / now"', 'user-keystroke'))).toBe('allow');
+  });
+
+  it('rm -rf /tmp/foo (user scratch dir) → allow', () => {
     const gate = createSafetyGate();
-    // This is dangerous, but the policy is "root wipe" only; refining
-    // is out of scope for P2-B. The test documents the intent.
     expect(gate(execIntent('rm -rf /tmp/foo', 'user-keystroke'))).toBe('allow');
+  });
+
+  it('rm -rf $HOME/* (glob-wiped home) → confirm', () => {
+    const gate = createSafetyGate();
+    expect(gate(execIntent('rm -rf $HOME/*', 'user-keystroke'))).toBe('confirm');
+    expect(gate(execIntent('rm -rf ~/', 'user-keystroke'))).toBe('confirm');
+  });
+
+  it.each([
+    ['rm -rf /etc', 'deny'],
+    ['rm -rf /usr/local', 'deny'],
+    ['rm -rf /var/log', 'deny'],
+    ['rm -rf /boot', 'deny'],
+    ['rm -rf /sys', 'deny'],
+    ['rm -rf /proc/1', 'deny'],
+    ['rm -rf /root', 'deny'],
+  ])('system-dir wipe %s from agent → %s', (cmd, expected) => {
+    const gate = createSafetyGate();
+    expect(gate(execIntent(cmd, 'agent'))).toBe(expected);
+  });
+
+  it.each([
+    'sudo rm -rf /',
+    'sudo -i rm -rf /',
+    'doas rm -rf /etc',
+  ])('sudo-escalated danger %s still flagged', (cmd) => {
+    const gate = createSafetyGate();
+    expect(gate(execIntent(cmd, 'agent'))).toBe('deny');
+  });
+
+  it('kernel / proc redirect — > /dev/mem, > /proc/sysrq-trigger → deny', () => {
+    const gate = createSafetyGate();
+    expect(gate(execIntent('echo c > /proc/sysrq-trigger', 'agent'))).toBe('deny');
+    expect(gate(execIntent('cat /dev/zero > /dev/mem', 'agent'))).toBe('deny');
+  });
+
+  it('mkfs on a regular file path (disk image) is NOT flagged — only /dev/', () => {
+    const gate = createSafetyGate();
+    // Common workflow for VM image creation — must not false-positive.
+    expect(gate(execIntent('mkfs.ext4 /tmp/foo.img', 'user-keystroke'))).toBe('allow');
+  });
+
+  it('block-redirect only matches device / kernel targets', () => {
+    const gate = createSafetyGate();
+    // > /tmp/foo is a perfectly ordinary file write.
+    expect(gate(execIntent('echo hi > /tmp/foo', 'user-keystroke'))).toBe('allow');
+    // > /dev/null is intentionally safe and must pass.
+    expect(gate(execIntent('echo hi > /dev/null', 'user-keystroke'))).toBe('allow');
   });
 
   it('onMatch hook fires with pattern + decision', () => {
@@ -136,5 +197,32 @@ describe('createSafetyGate', () => {
 
   it('DEFAULT_DANGER_PATTERNS is non-empty (sanity)', () => {
     expect(DEFAULT_DANGER_PATTERNS.length).toBeGreaterThan(0);
+  });
+});
+
+describe('safety-gate helpers', () => {
+  it('stripShellStrings removes balanced " and \' runs', () => {
+    expect(__testing.stripShellStrings('echo "rm -rf /" done')).toBe('echo "" done');
+    expect(__testing.stripShellStrings("git commit -m 'rm -rf /'"))
+      .toBe("git commit -m ''");
+    // Unbalanced quote is left alone — better to over-flag than fake a strip.
+    expect(__testing.stripShellStrings('echo "unterminated')).toBe('echo "unterminated');
+  });
+
+  it('stripPrivilegeEscalation strips sudo / doas prefixes (best-effort)', () => {
+    expect(__testing.stripPrivilegeEscalation('sudo rm -rf /')).toBe('rm -rf /');
+    expect(__testing.stripPrivilegeEscalation('sudo -i rm -rf /etc')).toBe('rm -rf /etc');
+    // Value-taking flags (`-u user`, `-g group`) leave a residue — the
+    // gate scans both raw and stripped so the danger still surfaces.
+    expect(__testing.stripPrivilegeEscalation('doas -u root cmd')).toBe('root cmd');
+    // Non-escalated input unchanged.
+    expect(__testing.stripPrivilegeEscalation('rm -rf /')).toBe('rm -rf /');
+  });
+
+  it('regression: sudo -u root rm -rf / is still caught end-to-end', () => {
+    // The strip leaves `root rm -rf /` which doesn't match, but the raw
+    // scan still finds `rm -rf /`. Combined scan → deny.
+    const gate = createSafetyGate();
+    expect(gate(execIntent('sudo -u root rm -rf /', 'agent'))).toBe('deny');
   });
 });

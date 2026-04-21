@@ -77,7 +77,10 @@ describe('createMockAgentRunner — lifecycle', () => {
 });
 
 describe('createMockAgentRunner — stream chunks', () => {
-  it('emits exactly MOCK_RUN_CHUNK_COUNT stream-chunk actions then stream-end', async () => {
+  it('emits exactly 5 stream-chunk actions then stream-end (contract pin)', async () => {
+    // Hard-code the expected count so the constant + the runner are
+    // BOTH pinned. A self-referential `=== MOCK_RUN_CHUNK_COUNT` check
+    // only caught internal inconsistency; this asserts the contract.
     const sched = createManualScheduler();
     const runner = createMockAgentRunner({ scheduler: sched });
     const actions: AgentAction[] = [];
@@ -85,24 +88,54 @@ describe('createMockAgentRunner — stream chunks', () => {
     await runner.start(buildSpec());
     sched.flushAll();
     const chunks = actions.filter((a) => a.kind === 'stream-chunk');
+    expect(chunks.length).toBe(5);
+    // The constant should agree (sanity — fail fast if either drifts).
     expect(chunks.length).toBe(MOCK_RUN_CHUNK_COUNT);
     const ends = actions.filter((a) => a.kind === 'stream-end');
     expect(ends.length).toBe(1);
     expect(ends[0]).toMatchObject({ kind: 'stream-end', exitCode: 0 });
   });
 
-  it('appends each chunk bytes into the runs-store outputChunks', async () => {
+  it('chunk bytes match the documented contract (literal payload, not helper re-call)', async () => {
     const sched = createManualScheduler();
     const runner = createMockAgentRunner({ scheduler: sched });
-    const { runId } = await runner.start(buildSpec({ tool: 'git_log' }));
+    const { runId } = await runner.start(buildSpec({ tool: 'git_log', args: { n: 5 } }));
     sched.flushAll();
     const run = useRunsStore.getState().entities[runId]!;
-    expect(run.outputChunks.length).toBe(MOCK_RUN_CHUNK_COUNT);
-    // Decode to verify synthetic bytes match our deterministic chunk set.
+    expect(run.outputChunks.length).toBe(5);
     const decoder = new TextDecoder();
-    const joined = run.outputChunks.map((c) => decoder.decode(c)).join('');
-    const expectedChunks = mockChunksForSpec(buildSpec({ tool: 'git_log' }));
-    expect(joined).toBe(expectedChunks.join(''));
+    const decoded = run.outputChunks.map((c) => decoder.decode(c));
+
+    // Literal contract assertions — these will fail if the mock's output
+    // shape changes (even if `mockChunksForSpec` is changed in lockstep
+    // with its callers). Pins the byte-level shape a UI test could see.
+    expect(decoded[0]).toBe('Running tool: git_log\n');
+    expect(decoded[1]).toBe('Args: {"n":5}\n');
+    expect(decoded[2]).toBe('step 1/3\n');
+    expect(decoded[3]).toBe('step 2/3\n');
+    expect(decoded[4]).toBe('step 3/3\n');
+
+    // End-of-stream newline preserved across the join.
+    const joined = decoded.join('');
+    expect(joined.endsWith('step 3/3\n')).toBe(true);
+    // Every chunk decoded to a non-empty string (no stray zero-byte frames).
+    for (const s of decoded) expect(s.length).toBeGreaterThan(0);
+  });
+
+  it('mockChunksForSpec helper is consistent with the runner output', async () => {
+    // Separate sanity check on the helper itself. Keeps the helper
+    // locked to the same contract without making the contract test
+    // dependent on it (defeating the round-trip).
+    const sched = createManualScheduler();
+    const runner = createMockAgentRunner({ scheduler: sched });
+    const spec = buildSpec({ tool: 'git_log', args: { n: 5 } });
+    const { runId } = await runner.start(spec);
+    sched.flushAll();
+    const decoder = new TextDecoder();
+    const decoded = useRunsStore
+      .getState()
+      .entities[runId]!.outputChunks.map((c) => decoder.decode(c));
+    expect(decoded).toEqual(mockChunksForSpec(spec));
   });
 
   it('steps chunk-by-chunk when the caller drains one tick at a time', async () => {

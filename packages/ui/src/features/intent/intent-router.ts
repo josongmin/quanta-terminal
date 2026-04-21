@@ -21,9 +21,9 @@
  *
  * Async confirm: `dispatch()` is `async`. When a gate returns
  * `'confirm'` the router calls the `onConfirm` hook (if wired) and
- * awaits its boolean. If no hook is wired, `'confirm'` is treated like
- * `'allow'` so unit tests can exercise the pipeline without a prompt
- * implementation.
+ * awaits its boolean. If no hook is wired the router is **fail-closed**:
+ * the intent resolves as `'confirmed-denied'`. Tests that want to bypass
+ * confirmation must explicitly set `allowWithoutConfirmHook: true`.
  */
 
 import type { AnyIntent, GateDecision, Intent, IntentKind } from './intent-types';
@@ -42,10 +42,20 @@ export interface IntentRouterOptions {
   readonly onBytes?: (bytes: Uint8Array, intent: AnyIntent) => void;
   /**
    * Called when a gate returns `'confirm'`. Returning `false` aborts
-   * the intent; returning `true` allows it to continue. If unset,
-   * `'confirm'` collapses to `'allow'` (useful in tests / headless).
+   * the intent; returning `true` allows it to continue. If this hook is
+   * missing the router is **fail-closed**: `'confirm'` collapses to
+   * `'confirmed-denied'` (not to `'allow'`). Tests / headless harnesses
+   * that deliberately want to bypass confirmation must set
+   * `allowWithoutConfirmHook: true`.
    */
   readonly onConfirm?: (intent: AnyIntent) => boolean | Promise<boolean>;
+  /**
+   * Explicit escape hatch: when `true`, a `'confirm'` decision with no
+   * `onConfirm` hook collapses to `'allow'` (historical, test-only
+   * behaviour). The default is `false` so production code that forgets
+   * to wire `onConfirm` never accidentally bypasses safety prompts.
+   */
+  readonly allowWithoutConfirmHook?: boolean;
   /**
    * Called when a gate returns `'deny'`. Informational only — used by
    * the safety-gate UI to surface a toast explaining the denial.
@@ -168,16 +178,24 @@ export function createIntentRouter(opts: IntentRouterOptions = {}): IntentRouter
         }
       }
 
-      if (needsConfirm && opts.onConfirm) {
-        let allowed: boolean;
-        try {
-          const r = opts.onConfirm(intent);
-          allowed = typeof r === 'boolean' ? r : await r;
-        } catch {
-          // Confirm hook threw — treat as denied (fail-closed).
+      if (needsConfirm) {
+        if (opts.onConfirm) {
+          let allowed: boolean;
+          try {
+            const r = opts.onConfirm(intent);
+            allowed = typeof r === 'boolean' ? r : await r;
+          } catch {
+            // Confirm hook threw — treat as denied (fail-closed).
+            return { outcome: 'confirmed-denied' };
+          }
+          if (!allowed) return { outcome: 'confirmed-denied' };
+        } else if (!opts.allowWithoutConfirmHook) {
+          // No hook wired and no explicit opt-out → fail-closed. A
+          // forgotten onConfirm must never silently deliver a payload
+          // that a gate asked the user to confirm.
+          opts.onDeny?.(intent, 'confirm hook missing');
           return { outcome: 'confirmed-denied' };
         }
-        if (!allowed) return { outcome: 'confirmed-denied' };
       }
 
       // Phase 3 — rewriters. Each runs in order; a rewriter may drop

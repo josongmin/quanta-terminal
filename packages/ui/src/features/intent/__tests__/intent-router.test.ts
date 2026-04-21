@@ -36,9 +36,9 @@ describe('intent-router', () => {
     expect(inspectCalls).toHaveLength(1);
   });
 
-  it('gates run in insertion order and first deny wins', async () => {
-    const router = createIntentRouter();
-    const denyReason = vi.fn();
+  it('gates run in insertion order and first deny wins, onDeny fires once', async () => {
+    const onDeny = vi.fn();
+    const router = createIntentRouter({ onDeny });
     const secondGate = vi.fn(() => 'allow' as const);
     router.subscribeGate(() => 'deny');
     router.subscribeGate(secondGate);
@@ -46,7 +46,12 @@ describe('intent-router', () => {
     expect(result.outcome).toBe('denied');
     // Second gate should NOT have been called because first wins.
     expect(secondGate).not.toHaveBeenCalled();
-    expect(denyReason).not.toHaveBeenCalled();
+    // onDeny fires exactly once with the original intent payload.
+    expect(onDeny).toHaveBeenCalledTimes(1);
+    expect(onDeny.mock.calls[0]![0]).toMatchObject({
+      kind: 'execute',
+      payload: { text: 'echo hi' },
+    });
   });
 
   it('allow + confirm → prompts via onConfirm hook (allowed)', async () => {
@@ -68,8 +73,27 @@ describe('intent-router', () => {
     expect(result.outcome).toBe('confirmed-denied');
   });
 
-  it('confirm without onConfirm hook collapses to allow', async () => {
-    const router = createIntentRouter();
+  it('confirm without onConfirm hook fails CLOSED (confirmed-denied)', async () => {
+    // Regression guard: a missing confirm hook MUST NOT deliver the
+    // intent. A forgotten onConfirm should never accidentally bypass
+    // the safety-gate prompt.
+    const onDeny = vi.fn();
+    const router = createIntentRouter({ onDeny });
+    const encode = vi.fn(() => new Uint8Array([1]));
+    router.subscribeGate(() => 'confirm');
+    router.subscribeEncode(encode);
+    const result = await router.dispatch(exec());
+    expect(result.outcome).toBe('confirmed-denied');
+    // Encoders must NOT run when confirm fails closed.
+    expect(encode).not.toHaveBeenCalled();
+    // onDeny surfaces the missing-hook reason so callers can log it.
+    expect(onDeny).toHaveBeenCalledWith(expect.anything(), 'confirm hook missing');
+  });
+
+  it('confirm without onConfirm hook ALLOWS with allowWithoutConfirmHook opt-in', async () => {
+    // Explicit escape hatch for tests / headless harnesses. Must be
+    // opt-in, default is the fail-closed path above.
+    const router = createIntentRouter({ allowWithoutConfirmHook: true });
     router.subscribeGate(() => 'confirm');
     router.subscribeEncode(() => new Uint8Array([1]));
     const result = await router.dispatch(exec());

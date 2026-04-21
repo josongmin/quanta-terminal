@@ -199,9 +199,15 @@ describe('P1 wave 1 integration audit', () => {
       // Duration stamp from OSC 133 D.
       expect(store.setBlockDuration).toHaveBeenCalled();
       expect(store.setBlockDuration.mock.calls[0]![1]).toBe(42);
-      // Pin lifecycle: one pin at prompt_start, one unpin at command_end.
+      // Pin lifecycle: exactly one pin at prompt_start, one unpin at
+      // command_end, and the unpinned rowId MUST equal the pinned one.
+      // A count-only assertion would still pass if the wrong row were
+      // unpinned, corrupting the scrollback window.
       expect(pins.pinSpy).toHaveBeenCalledTimes(1);
       expect(pins.unpinSpy).toHaveBeenCalledTimes(1);
+      const pinnedRowId = pins.pinSpy.mock.calls[0]![0] as number;
+      const unpinnedRowId = pins.unpinSpy.mock.calls[0]![0] as number;
+      expect(unpinnedRowId).toBe(pinnedRowId);
 
       listener.dispose();
     });
@@ -397,7 +403,7 @@ describe('P1 wave 1 integration audit', () => {
   });
 
   describe('cross-epic integration sanity', () => {
-    it('hybrid detector heuristic + listener produces a heuristic block when OSC 133 absent', () => {
+    it('hybrid detector heuristic tier produces a heuristic block (OSC 133 absent)', () => {
       const em = makeEmulator(6, 40);
       // Shell integration not installed — OSC 133 won't fire, regex tier
       // must carry the prompt signal.
@@ -409,23 +415,33 @@ describe('P1 wave 1 integration audit', () => {
       const listener = installBoundaryListener(SID, detector, store.port, pins.port);
 
       // Feed a line that ends with a "$ " prompt followed by LF — the
-      // heuristic_regex tier should emit prompt_start.
+      // heuristic_regex tier MUST emit prompt_start. Anything less is
+      // a regression; no vacuous-pass if-guards below.
       const promptBytes = encode('user@host ~ $ \n');
       em.feed(promptBytes);
       const events = detector.feed(promptBytes);
       listener.pump(events);
 
-      // Either regex OR idle may fire first depending on timing; inspect
-      // the events themselves rather than assume a specific confidence.
       const promptEvents = events.filter((e: BoundaryEvent) => e.kind === 'prompt_start');
-      if (promptEvents.length > 0) {
-        expect(store.startBlock).toHaveBeenCalled();
-        const opts = store.startBlock.mock.calls[0]![2] as {
-          readonly confidence?: string;
-        };
-        // Heuristic regex → confidence 'heuristic' per mapSourceToConfidence.
-        expect(['heuristic', 'authoritative']).toContain(opts.confidence);
-      }
+      // Strict: the heuristic regex tier must produce at least one event
+      // on a bare `$ \n` prompt. If zero events arrive the test fails.
+      expect(promptEvents.length).toBeGreaterThanOrEqual(1);
+      expect(store.startBlock).toHaveBeenCalledTimes(1);
+
+      // Strict confidence: OSC 133 is not installed, so the only
+      // acceptable source is `heuristic_regex` → `'heuristic'`. The
+      // older version accepted `authoritative` too, which defeated the
+      // purpose of this cross-epic sanity test.
+      const promptSources = promptEvents
+        .filter((e): e is Extract<BoundaryEvent, { kind: 'prompt_start' }> => e.kind === 'prompt_start')
+        .map((e) => e.source);
+      expect(promptSources).toContain('heuristic_regex');
+      expect(promptSources).not.toContain('osc133');
+
+      const opts = store.startBlock.mock.calls[0]![2] as {
+        readonly confidence?: string;
+      };
+      expect(opts.confidence).toBe('heuristic');
 
       listener.dispose();
     });
