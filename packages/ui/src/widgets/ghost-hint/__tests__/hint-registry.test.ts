@@ -22,9 +22,10 @@ import {
 describe('hint-registry', () => {
   it('declares text and keys for every registered kind', () => {
     const kinds = Object.keys(GHOST_HINTS) as GhostHintKind[];
-    // 9 entries per Plan 0005 P1-G scope. Hardcoded to catch accidental
+    // 13 entries — P1-G base (9) + Wave 1 gap closure (pager_most, pager_bat,
+    // repl_ipython, repl_ruby). Hardcoded to catch accidental
     // additions/removals without a registry-contract update.
-    expect(kinds).toHaveLength(9);
+    expect(kinds).toHaveLength(13);
     for (const kind of kinds) {
       const entry = GHOST_HINTS[kind];
       expect(entry.text.length).toBeGreaterThan(0);
@@ -44,6 +45,7 @@ describe('hint-registry', () => {
     expect(getGhostHint('unknown_mode')).toBeUndefined();
     expect(getGhostHint('')).toBeUndefined();
     expect(getGhostHint('pager_more')).toBeUndefined();
+    expect(getGhostHint('repl_irb')).toBeUndefined();
   });
 
   it('isGhostHintKind narrows known + rejects unknown', () => {
@@ -59,9 +61,13 @@ describe('hint-registry', () => {
     const expected: GhostHintKind[] = [
       'pager_less',
       'pager_man',
+      'pager_most',
+      'pager_bat',
       'repl_python',
+      'repl_ipython',
       'repl_node',
       'repl_psql',
+      'repl_ruby',
       'multiplexer_tmux',
       'tui_vim',
       'tui_htop',

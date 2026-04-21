@@ -57,7 +57,7 @@ export type RenderHint = 'chrome' | 'ghost' | 'none';
 
 export interface ModeLayerHints {
   readonly pagerApp?: 'less' | 'more' | 'man' | 'most' | 'bat';
-  readonly replShell?: 'python' | 'node' | 'psql' | 'ruby';
+  readonly replShell?: 'python' | 'node' | 'psql' | 'ruby' | 'ipython';
   readonly multiplexer?: 'tmux' | 'screen';
 }
 

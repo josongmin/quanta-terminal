@@ -160,6 +160,12 @@ jobs:
             --delta-threshold "${THRESH}"
 
       # Always upload — even on failure the JSON report is diagnostic gold.
+      # Retention ratchet: main-branch runs seed the `--history-limit 7`
+      # baseline median consumed by `perf-regression-check.mjs`. On a quiet
+      # repo (few main pushes) a 30-day cap can outlive 7 green runs and
+      # starve the check into "advisory" mode. Main gets 90 days so the
+      # history stays populated through slow patches; PR artifacts stay at
+      # 30 days because they are ephemeral (diagnostic only).
       - name: Upload perf artefacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -167,7 +173,7 @@ jobs:
           name: perf-budget-reports-${{ github.run_id }}
           path: artifacts/perf/
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 30 }}
 
       # PR status check body — posts the perf table as a comment so the
       # PR author sees the numbers without downloading the artifact.

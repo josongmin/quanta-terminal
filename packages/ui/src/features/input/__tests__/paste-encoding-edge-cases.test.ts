@@ -25,8 +25,6 @@ import { createStubMirror, ModeSnapshot } from '../ModeSnapshot';
 import { Paste } from '../Paste';
 import type { TerminalModeSnapshot } from '../types';
 
-const utf8 = new TextEncoder();
-
 function snap(bp: boolean): TerminalModeSnapshot {
   return Object.freeze({
     decckm: false,

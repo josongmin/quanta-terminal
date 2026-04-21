@@ -66,3 +66,14 @@ test('perf-budget.yml no longer hardcodes --delta-threshold 0.20 directly', () =
     'hardcoded --delta-threshold 0.20 would mask the Linux noise floor',
   );
 });
+
+test('perf-budget.yml retains baseline artifacts 90 days on main, 30 days on PR', () => {
+  // Main branch runs feed the history-limit-7 median used by the
+  // regression check. A flat 30-day retention starves the check on
+  // quiet repos; this assertion locks the main/PR ratchet in place.
+  assert.match(
+    yaml,
+    /retention-days:\s*\$\{\{\s*github\.ref\s*==\s*['"]refs\/heads\/main['"]\s*&&\s*90\s*\|\|\s*30\s*\}\}/,
+    'retention-days must be 90 on main, 30 on PRs (conditional expression)',
+  );
+});

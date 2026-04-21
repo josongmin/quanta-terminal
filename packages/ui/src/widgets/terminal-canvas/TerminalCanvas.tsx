@@ -75,6 +75,7 @@ import {
 // (e.g. a different session's panel owns the store during multi-session
 // restore).
 import type { GridSearchMatch } from '../../features/output-search/scrollback-search.js';
+// FIXME(fsd-layer-skip): canvas subscribes to find-panel store so the panel stays headless in tests and survives multi-session restore (Plan 0005 P1-F).
 import { useFindPanelStore } from '../../widgets/find-panel/find-panel-store.js';
 import styles from './terminal-canvas.module.css';
 

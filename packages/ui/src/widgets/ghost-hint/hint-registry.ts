@@ -35,9 +35,13 @@
 export type GhostHintKind =
   | 'pager_less'
   | 'pager_man'
+  | 'pager_most'
+  | 'pager_bat'
   | 'repl_python'
+  | 'repl_ipython'
   | 'repl_node'
   | 'repl_psql'
+  | 'repl_ruby'
   | 'multiplexer_tmux'
   | 'tui_vim'
   | 'tui_htop'
@@ -58,9 +62,13 @@ export interface GhostHintEntry {
 export const GHOST_HINTS: Readonly<Record<GhostHintKind, GhostHintEntry>> = {
   pager_less: { text: 'press q to quit', keys: ['q'] },
   pager_man: { text: 'press q to quit', keys: ['q'] },
+  pager_most: { text: 'press q to quit', keys: ['q'] },
+  pager_bat: { text: 'press q to quit', keys: ['q'] },
   repl_python: { text: 'exit() or ^D', keys: ['exit()', '^D'] },
+  repl_ipython: { text: 'exit or ^D', keys: ['exit', '^D'] },
   repl_node: { text: '.exit or ^D', keys: ['.exit', '^D'] },
   repl_psql: { text: '\\q to leave', keys: ['\\q'] },
+  repl_ruby: { text: 'exit or ^D', keys: ['exit', '^D'] },
   multiplexer_tmux: { text: 'C-b d to detach', keys: ['C-b d'] },
   tui_vim: { text: ':q to quit', keys: [':q'] },
   tui_htop: { text: 'q or F10 to quit', keys: ['q', 'F10'] },

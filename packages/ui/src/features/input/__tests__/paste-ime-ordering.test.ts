@@ -147,7 +147,7 @@ describe('Bug 2 — paste gate error surfaced via console.warn', () => {
   });
 
   it('processes paste normally when onPasteGate is not set', () => {
-    const { container, handle, bytesOut } = setup({ onPasteGate: undefined });
+    const { container, handle, bytesOut } = setup({});
 
     firePaste(container, 'hello');
 

@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TRACKED_METRICS,
+  DEFAULT_PER_METRIC_THRESHOLDS,
   parseArgs,
   extractMetrics,
   median,
@@ -169,4 +170,84 @@ test('compareSummaries tolerates missing metrics in current (no-data)', () => {
   assert.equal(regressed, false);
   const topRow = rows.find((r) => r.key === 'top-60s/feedP99Ms');
   assert.equal(topRow.verdict, 'no-data');
+});
+
+test('DEFAULT_PER_METRIC_THRESHOLDS widens yes-1gb feed P99 to 30%', () => {
+  assert.equal(DEFAULT_PER_METRIC_THRESHOLDS['yes-1gb/feedP99Ms'], 0.3);
+});
+
+test('parseArgs accepts --per-metric-thresholds JSON and merges over defaults', () => {
+  const o = parseArgs([
+    '--per-metric-thresholds',
+    '{"top-60s/feedP99Ms": 0.25, "resize-cycle/p99Ms": 0.5}',
+  ]);
+  // Default preserved for yes-1gb.
+  assert.equal(o.perMetricThresholds['yes-1gb/feedP99Ms'], 0.3);
+  // Override applied for top-60s.
+  assert.equal(o.perMetricThresholds['top-60s/feedP99Ms'], 0.25);
+  assert.equal(o.perMetricThresholds['resize-cycle/p99Ms'], 0.5);
+});
+
+test('parseArgs ignores malformed --per-metric-thresholds JSON', () => {
+  const o = parseArgs(['--per-metric-thresholds', 'not-json']);
+  // Defaults still present.
+  assert.equal(o.perMetricThresholds['yes-1gb/feedP99Ms'], 0.3);
+});
+
+test('parseArgs ignores non-positive per-metric threshold values', () => {
+  const o = parseArgs([
+    '--per-metric-thresholds',
+    '{"top-60s/feedP99Ms": -0.1, "watch-60s/feedP99Ms": 0}',
+  ]);
+  assert.equal(o.perMetricThresholds['top-60s/feedP99Ms'], undefined);
+  assert.equal(o.perMetricThresholds['watch-60s/feedP99Ms'], undefined);
+});
+
+test('compareSummaries uses per-metric threshold to avoid flipping a noisy gate', () => {
+  // yes-1gb feedP99 +25% regression: would fail at global 0.20 but pass
+  // under the per-metric 0.30 ceiling. Real-world scenario — ubuntu runner
+  // noise flipping a green gate.
+  const current = makeSummary({
+    results: [
+      { id: 'resize-cycle', metrics: { avgMs: 0.3, p99Ms: 1.2 } },
+      { id: 'top-60s', metrics: { feedP99Ms: 50, renderP99Ms: 48, heapDeltaMb: 20 } },
+      { id: 'watch-60s', metrics: { feedP99Ms: 40, renderP99Ms: 42, heapDeltaMb: 18 } },
+      { id: 'yes-1gb', metrics: { feedP99Ms: 3125 } }, // +25% vs baseline 2500
+    ],
+  });
+  const baseline = makeSummary();
+  const history = [baseline, baseline, baseline, baseline, baseline];
+
+  // At the global 0.20 threshold, yes-1gb regresses.
+  const globalRun = compareSummaries(current, history, 0.2);
+  assert.equal(globalRun.regressed, true);
+
+  // With the default per-metric override (0.30 for yes-1gb), it passes.
+  const overrideRun = compareSummaries(current, history, 0.2, {
+    ...DEFAULT_PER_METRIC_THRESHOLDS,
+  });
+  assert.equal(overrideRun.regressed, false);
+  const yesRow = overrideRun.rows.find((r) => r.key === 'yes-1gb/feedP99Ms');
+  assert.equal(yesRow.verdict, 'pass');
+  assert.equal(yesRow.thresholdUsed, 0.3);
+});
+
+test('compareSummaries still regresses when delta exceeds even the per-metric ceiling', () => {
+  const current = makeSummary({
+    results: [
+      { id: 'resize-cycle', metrics: { avgMs: 0.3, p99Ms: 1.2 } },
+      { id: 'top-60s', metrics: { feedP99Ms: 50, renderP99Ms: 48, heapDeltaMb: 20 } },
+      { id: 'watch-60s', metrics: { feedP99Ms: 40, renderP99Ms: 42, heapDeltaMb: 18 } },
+      { id: 'yes-1gb', metrics: { feedP99Ms: 4000 } }, // +60% vs baseline 2500
+    ],
+  });
+  const baseline = makeSummary();
+  const history = [baseline, baseline, baseline];
+  const run = compareSummaries(current, history, 0.2, {
+    ...DEFAULT_PER_METRIC_THRESHOLDS,
+  });
+  assert.equal(run.regressed, true);
+  const yesRow = run.rows.find((r) => r.key === 'yes-1gb/feedP99Ms');
+  assert.equal(yesRow.verdict, 'regressed');
+  assert.equal(yesRow.thresholdUsed, 0.3);
 });

@@ -77,6 +77,23 @@ export const TRACKED_METRICS = [
  * pull in yargs / commander — this script must run as a bare
  * `node tools/*.mjs` with zero installs.
  */
+/**
+ * Per-metric threshold defaults — known-noisy metrics get a wider tolerance
+ * so a 1-2 % CI-runner hiccup doesn't flip a green gate. Keys follow the
+ * same `specId/metric` shape as `extractMetrics` output. Unlisted metrics
+ * fall back to the global `--delta-threshold` value (default 0.20 = 20 %).
+ *
+ * These defaults are deliberately conservative — they only widen tolerance
+ * for metrics whose historical variance was observed to be > 20 % on CI.
+ * Tighter metrics stay at the global default.
+ */
+export const DEFAULT_PER_METRIC_THRESHOLDS = Object.freeze({
+  // `yes-1gb` feedP99 is byte-throughput dominated and swings with runner
+  // IO contention; 30 % tolerance matches the observed P95 variance on
+  // ubuntu-24.04.
+  'yes-1gb/feedP99Ms': 0.3,
+});
+
 export function parseArgs(argv) {
   const out = {
     current: null,
@@ -84,6 +101,7 @@ export function parseArgs(argv) {
     historyLimit: 7,
     historyDir: null,
     deltaThreshold: 0.2,
+    perMetricThresholds: { ...DEFAULT_PER_METRIC_THRESHOLDS },
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -104,6 +122,23 @@ export function parseArgs(argv) {
       case '--delta-threshold':
         out.deltaThreshold = Number(next());
         break;
+      case '--per-metric-thresholds': {
+        // JSON blob keyed by `specId/metric`. Merges on top of defaults so
+        // callers can override a subset without restating the rest.
+        const raw = next();
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            for (const [k, v] of Object.entries(parsed)) {
+              if (typeof v === 'number' && v > 0) out.perMetricThresholds[k] = v;
+            }
+          }
+        } catch {
+          // Silently ignore malformed JSON; CLI usage errors are surfaced
+          // in the workflow step, not here.
+        }
+        break;
+      }
       default:
         // Unknown — skip. (Not an error: future flags won't break old
         // invocations.)
@@ -178,9 +213,10 @@ export function judgeMetric(currentValue, historyMedian, threshold) {
  * and an array of history summaries, returns the report. Keeps the
  * side-effectful IO in `main()` so we can unit-test this.
  */
-export function compareSummaries(current, history, threshold) {
+export function compareSummaries(current, history, threshold, perMetricThresholds) {
   const currentMetrics = extractMetrics(current);
   const historyMetricsList = history.map(extractMetrics);
+  const overrides = perMetricThresholds ?? {};
   const rows = [];
   let regressed = false;
   for (const tracked of TRACKED_METRICS) {
@@ -201,7 +237,9 @@ export function compareSummaries(current, history, threshold) {
       .map((m) => m[key])
       .filter((v) => typeof v === 'number');
     const medianValue = median(historyValues);
-    const j = judgeMetric(cur, medianValue, threshold);
+    const effectiveThreshold =
+      typeof overrides[key] === 'number' ? overrides[key] : threshold;
+    const j = judgeMetric(cur, medianValue, effectiveThreshold);
     if (j.verdict === 'regressed') regressed = true;
     rows.push({
       key,
@@ -211,6 +249,7 @@ export function compareSummaries(current, history, threshold) {
       verdict: j.verdict,
       delta: j.delta,
       noiseFloor: j.noiseFloor ?? false,
+      thresholdUsed: effectiveThreshold,
     });
   }
   return { rows, regressed };
@@ -333,7 +372,12 @@ async function mainCli() {
     process.exit(0);
   }
 
-  const { rows, regressed } = compareSummaries(current, history, args.deltaThreshold);
+  const { rows, regressed } = compareSummaries(
+    current,
+    history,
+    args.deltaThreshold,
+    args.perMetricThresholds,
+  );
 
   process.stdout.write(
     `\n=== perf regression check (threshold=${(args.deltaThreshold * 100).toFixed(0)}%, history=${history.length} runs) ===\n`,

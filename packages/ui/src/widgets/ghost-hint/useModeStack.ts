@@ -64,23 +64,21 @@ function projectLayer(layer: ModeLayer): ModeStackLayer | null {
       return null;
     case 'pager': {
       const app = layer.hints?.pagerApp;
-      if (app === 'less' || app === 'man' || app === 'bat' || app === 'most') {
-        // `bat` and `most` both use less-style keybindings; render the
-        // `pager_less` hint. `man` has its own entry.
-        return {
-          kind: app === 'man' ? 'pager_man' : 'pager_less',
-        };
-      }
-      // Unknown pager variant → fall back to the generic `pager_less`
-      // hint; the "press q" affordance is correct for every pager.
+      if (app === 'man') return { kind: 'pager_man' };
+      if (app === 'bat') return { kind: 'pager_bat' };
+      if (app === 'most') return { kind: 'pager_most' };
+      // `less` and unknown pagers both use the `pager_less` entry — the
+      // "press q" affordance is correct for every pager variant.
       return { kind: 'pager_less' };
     }
     case 'repl': {
       const shell = layer.hints?.replShell;
       if (shell === 'python') return { kind: 'repl_python' };
+      if (shell === 'ipython') return { kind: 'repl_ipython' };
       if (shell === 'node') return { kind: 'repl_node' };
       if (shell === 'psql') return { kind: 'repl_psql' };
-      // ruby / unknown → no entry in the current registry; render nothing.
+      if (shell === 'ruby') return { kind: 'repl_ruby' };
+      // Unknown repl → no entry; render nothing.
       return null;
     }
     case 'multiplexer':

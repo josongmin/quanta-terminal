@@ -37,6 +37,9 @@ interface PromptPattern {
 }
 
 const PROMPTS: readonly PromptPattern[] = [
+  // ipython precedes python because `In [N]: ` is strictly more specific;
+  // plain python's `>>> ` fallback still matches when ipython is absent.
+  { kind: 'ipython', primary: /^In\s*\[\d+\]:\s*$/ },
   { kind: 'python', primary: /^>>> ?$/ },
   { kind: 'node', primary: /^> ?$/ },
   // psql default "db=#" (superuser) or "db=>" (regular). We allow any
