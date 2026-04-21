@@ -1,5 +1,8 @@
 # C-IME-04 — European dead-key composition
 
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 4, Agent-W).
+
 Companion to C-IME-01 (wide CJK). This fixture verifies that BMP Latin-1
 accented characters committed by the host's dead-key IME (e.g. `'` + `e`
 → `é`) render as **narrow width-1 graphemes**, not as wide-leading +

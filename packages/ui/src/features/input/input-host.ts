@@ -76,6 +76,30 @@ export interface InputHostMountOptions {
    * promise contract lets the caller await a user confirmation dialog.
    */
   onPasteGate?: (text: string) => boolean | Promise<boolean>;
+  /**
+   * Pre-byte-delivery gate. Return `false` (or a promise resolving to
+   * `false`) to DROP the encoded byte batch silently — the encoder still
+   * ran and produced bytes, but `onBytesOut` is skipped for this emit.
+   *
+   * Called once per byte batch (per keystroke / mouse event / paste /
+   * focus / IME commit), regardless of batch size. The `source` tag lets
+   * callers attribute drops (e.g. the degraded-mode telemetry counter
+   * cares whether the drop came from a keystroke vs a mouse move).
+   *
+   * Positioned AFTER the encoder (bytes are already formed) so degraded-
+   * mode suppression composes with whatever mode state the encoder read.
+   * This is intentional: degraded means "PTY is unreachable", the
+   * encoder's view of DECCKM / mouse reporting is irrelevant at that
+   * point — we just refuse to put bytes on the wire.
+   *
+   * Returning a promise is supported for symmetry with `onPasteGate`,
+   * but the keystroke hot path calls the gate synchronously; async-false
+   * still works but introduces a microtask for every key.
+   */
+  onByteGate?: (
+    bytes: Uint8Array,
+    source: 'keyboard' | 'mouse' | 'paste' | 'focus' | 'ime',
+  ) => boolean | Promise<boolean>;
 }
 
 export interface InputHostHandle {
@@ -140,6 +164,45 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
   let persistTimer: unknown = null;
   let currentOverlay: PreeditOverlayProps | null = null;
 
+  /**
+   * Gate + deliver helper. Runs `onByteGate` (if bound) with the source
+   * attribution; on `false` the bytes are dropped silently (the caller
+   * already observed them via the encoder layer). Zero-length batches
+   * short-circuit — we never call the gate for empty emits, which means
+   * callers can count "gate invocations" as a proxy for "intended wire
+   * events" without worrying about noop encoder output.
+   *
+   * Async gates: the keystroke path should generally use synchronous
+   * gates (see docs on `InputHostMountOptions.onByteGate`), but a
+   * Promise<boolean> still works — the decision just lands a microtask
+   * later. Errors from async gates are logged and treated as DROP to
+   * match the paste-gate policy (fail-closed).
+   */
+  const deliverBytes = (
+    bytes: Uint8Array,
+    source: 'keyboard' | 'mouse' | 'paste' | 'focus' | 'ime',
+  ): void => {
+    if (bytes.length === 0) return;
+    const gate = opts.onByteGate;
+    if (!gate) {
+      opts.onBytesOut(bytes);
+      return;
+    }
+    const decision = gate(bytes, source);
+    if (typeof decision === 'boolean') {
+      if (decision) opts.onBytesOut(bytes);
+      return;
+    }
+    // Async gate. Fail-closed on rejection matches the paste-gate policy.
+    void decision
+      .then((allowed) => {
+        if (allowed) opts.onBytesOut(bytes);
+      })
+      .catch((err) => {
+        log.warn('input-host: byte gate rejected', err);
+      });
+  };
+
   const emitOverlay = (o: PreeditOverlayProps | null): void => {
     currentOverlay = o;
     opts.onOverlayUpdate?.(o);
@@ -201,7 +264,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
         }
         case 'emit-commit-bytes': {
           const out = opts.paste.encode(eff.paste);
-          if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+          deliverBytes(out.bytes, 'ime');
           break;
         }
         case 'show-banner':
@@ -235,7 +298,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
     }
     const normalized = normalizeKey(ev, 'keydown');
     const out = opts.keyEncoder.encode(normalized);
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'keyboard');
   };
 
   const onKeyUp = (ev: KeyboardEvent): void => {
@@ -243,7 +306,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
     const normalized = normalizeKey(ev, 'keyup');
     // Only emit release for kitty ≥ L2 (encoder naturally empties if not).
     const out = opts.keyEncoder.encode(normalized);
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'keyboard');
   };
 
   const onCompositionStart = (ev: CompositionEvent): void => {
@@ -259,12 +322,12 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
   const onBlur = (): void => {
     dispatchIme({ kind: 'blur' });
     const out = opts.focus.encode({ focused: false });
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'focus');
   };
   const onFocus = (): void => {
     dispatchIme({ kind: 'focus' });
     const out = opts.focus.encode({ focused: true });
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'focus');
   };
 
   const onPaste = (ev: ClipboardEvent): void => {
@@ -277,14 +340,14 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
     const gate = opts.onPasteGate;
     if (!gate) {
       const out = opts.paste.encode({ text, length: text.length });
-      if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+      deliverBytes(out.bytes, 'paste');
       return;
     }
     const decision = gate(text);
     const emit = (allowed: boolean): void => {
       if (!allowed) return;
       const out = opts.paste.encode({ text, length: text.length });
-      if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+      deliverBytes(out.bytes, 'paste');
     };
     if (typeof decision === 'boolean') {
       emit(decision);
@@ -313,7 +376,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
       kind,
     };
     const out = opts.mouseEncoder.encode(me);
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'mouse');
   };
   const onPointerDown = (ev: PointerEvent): void => pointerMouse(ev, 'press');
   const onPointerUp = (ev: PointerEvent): void => pointerMouse(ev, 'release');
@@ -356,7 +419,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
       wheelLines: lines,
     };
     const out = opts.mouseEncoder.encode(me);
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    deliverBytes(out.bytes, 'mouse');
   };
 
   const onResize = (): void => dispatchIme({ kind: 'resize' });

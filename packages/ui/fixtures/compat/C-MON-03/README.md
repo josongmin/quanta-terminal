@@ -1,8 +1,8 @@
 # C-MON-03: watch -n 0.1 date (continuous repaint stress)
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real `watch` recording once `tools/compat-record` lands (Plan 0005 Epic
-e6).
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 3, Agent-P). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 

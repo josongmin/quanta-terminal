@@ -1,7 +1,8 @@
 # C-MUX-02: tmux-in-ssh (depth-2)
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real tmux-over-ssh recording once `tools/compat-record` lands.
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 3, Agent-P). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 

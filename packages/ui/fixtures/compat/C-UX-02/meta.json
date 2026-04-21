@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "Resize cycle: 10 alternating resizes between 80×24 and 200×50. Main-buffer content preserved across every cycle; cursor clamped per emulator contract; scrollback ring untouched. Exercises the compat harness in-stream `resize` hook.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-UX-02",
+  "snapshotFormatVersion": 1
+}

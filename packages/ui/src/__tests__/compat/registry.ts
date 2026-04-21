@@ -241,11 +241,11 @@ export const COMPAT_FIXTURES: Readonly<Record<string, CompatFixture>> = {
   // Categories: C-STRESS-* → `stress` (new — eviction-ring focus); C-UX-*
   // + C-COMB-* → `interactive` (reuse — see CompatCategory jsdoc).
   //
-  // Skipped from the original gate-#6 slate:
-  //   - C-UX-02 (resize 200×50 ↔ 80×24, 10 cycles) — the compat harness
-  //     only drives `emulator.feed()`; resize is a side-channel call.
-  //     Covered instead by resize-focused tests in the VtEmulator suite
-  //     (`vt-emulator/__tests__/resize.test.ts` et al.).
+  // C-UX-02 (resize 200×50 ↔ 80×24, 10 cycles) landed in the Gate #6
+  // CLOSING pass once the compat harness grew an in-stream `resize`
+  // hook (see `CheckpointExpected.resize` in `compat-replay.ts`).
+  //
+  // Still skipped from the original Gate #6 slate:
   //   - C-UX-04 (split pane) — a true multi-pane scenario needs two
   //     independent sessions; the "alt-buffer split" variant is already
   //     covered by C-MUX-01 + C-MUX-02.
@@ -276,6 +276,17 @@ export const COMPAT_FIXTURES: Readonly<Record<string, CompatFixture>> = {
     fixtureDir: 'packages/ui/fixtures/compat/C-UX-01',
     description:
       '`clear` behaviour: CSI H + CSI 2J wipes the visible grid and homes the cursor. Scrollback survives (no CSI 3J emitted). Verifies the baseline `clear` contract used by every shell + bash-in-SSH deployment.',
+  },
+  'C-UX-02': {
+    // Categorised under `interactive` alongside the other C-UX-* entries
+    // for consistency with the CompatCategory jsdoc ("UX contracts"). No
+    // dedicated `ux` bucket — the matrix is readable without one and the
+    // fixture IDs already encode the sub-domain.
+    id: 'C-UX-02',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-UX-02',
+    description:
+      'Resize cycle: 10 alternating resizes between 80×24 and 200×50 (5 round-trips). Exercises the compat harness in-stream `resize` hook; verifies main-buffer content reflows + is preserved byte-exact at pinned rows, cursor clamped, scrollback untouched.',
   },
   'C-UX-03': {
     id: 'C-UX-03',

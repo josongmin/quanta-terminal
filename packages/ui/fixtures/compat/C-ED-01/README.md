@@ -1,8 +1,9 @@
 # C-ED-01: vim round-trip
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real `vim :q<Return>` recording once `tools/compat-record` lands
-(Plan 0005 Epic ε §6).
+**Status:** synthetic (hand-authored byte stream). Shipped wave 1
+(Agent-C, green post Epic α at `f74c047`). A `tools/compat-record`
+driven `recorded` variant is post-P0 work; see
+`docs/plans/0005-sota-convergence/test-strategy.md` §4.2.
 
 ## What this fixture asserts
 
@@ -47,9 +48,7 @@ that matter: DECSET 1049, CSI cursor-move, CSI erase, SGR inverse.
 
 ## Epic dependency
 
-This fixture is stamped `test.fails(...)` in
-`packages/ui/src/__tests__/compat/C-ED-01-vim-round-trip.test.ts`. Until
-Plan 0005 Epic α lands the alt-buffer swap in `VtEmulator`, the
-emulator hard-codes `mode_state.alt_screen: false` and drops DECSET
-1049 — so the test is RED by design. When Epic α lands, the test flips
-to green automatically.
+Green post Plan 0005 Epic α (alt-buffer swap landed in `VtEmulator` at
+commit `f74c047`). The integration test at
+`packages/ui/src/__tests__/compat/C-ED-01-vim-round-trip.test.ts` runs
+as a regular `it(...)`; no `.fails(...)` stamps.

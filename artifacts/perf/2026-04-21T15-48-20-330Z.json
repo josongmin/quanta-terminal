@@ -1,0 +1,146 @@
+{
+  "startedAt": "2026-04-21T15-48-20-330Z",
+  "repo": "quanta-terminal",
+  "results": [
+    {
+      "id": "resize-cycle",
+      "ok": true,
+      "durationMs": 1259,
+      "metrics": {
+        "cycles": 100,
+        "avgMs": 0.3,
+        "p50Ms": 0.244,
+        "p95Ms": 0.469,
+        "p99Ms": 0.873,
+        "maxMs": 4.559
+      },
+      "verdicts": [
+        {
+          "metric": "avgMs",
+          "budget": 12,
+          "actual": 0.3,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "p99Ms",
+          "budget": 32,
+          "actual": 0.873,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "top-60s",
+      "ok": true,
+      "durationMs": 1869,
+      "metrics": {
+        "fixture": "C-MON-01",
+        "simulatedSeconds": 180,
+        "samples": 367,
+        "feedP50Ms": 1.233,
+        "feedP95Ms": 4.93,
+        "feedP99Ms": 32.242,
+        "feedMaxMs": 38.396,
+        "renderP99Ms": 32.279,
+        "heapDeltaMb": 17.442,
+        "bytesFedMb": 0.378,
+        "droppedBytes": 0,
+        "frameSkips": 18
+      },
+      "verdicts": [
+        {
+          "metric": "feedP99Ms",
+          "budget": 64,
+          "actual": 32.242,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "renderP99Ms",
+          "budget": 64,
+          "actual": 32.279,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "heapDeltaMb",
+          "budget": 150,
+          "actual": 17.442,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "watch-60s",
+      "ok": true,
+      "durationMs": 1600,
+      "metrics": {
+        "fixture": "C-PG-01-loop",
+        "simulatedSeconds": 180,
+        "samples": 216,
+        "feedP50Ms": 1.269,
+        "feedP95Ms": 1.897,
+        "feedP99Ms": 31,
+        "feedMaxMs": 34.831,
+        "renderP99Ms": 31.038,
+        "heapDeltaMb": 0.551,
+        "bytesFedMb": 0.23,
+        "droppedBytes": 0,
+        "frameSkips": 7
+      },
+      "verdicts": [
+        {
+          "metric": "feedP99Ms",
+          "budget": 64,
+          "actual": 31,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "renderP99Ms",
+          "budget": 64,
+          "actual": 31.038,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "heapDeltaMb",
+          "budget": 150,
+          "actual": 0.551,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "yes-1gb",
+      "ok": true,
+      "durationMs": 59379,
+      "metrics": {
+        "fixture": "yes-1gb",
+        "totalBytesFed": 2097152,
+        "totalBytesDropped": 0,
+        "samples": 32,
+        "feedP50Ms": 1675.493,
+        "feedP95Ms": 2291.654,
+        "feedP99Ms": 2649.462,
+        "feedMaxMs": 2649.462,
+        "bytesPerMs": 35.917,
+        "scrollbackRows": 10000,
+        "scrollbackEvicted": 1038553,
+        "heapDeltaMb": 95.008,
+        "frameSkips": 31
+      },
+      "verdicts": [
+        {
+          "metric": "feedP99Ms",
+          "budget": 10000,
+          "actual": 2649.462,
+          "verdict": "PASS"
+        },
+        {
+          "metric": "scrollbackRows",
+          "budget": 10000,
+          "actual": 10000,
+          "verdict": "PASS"
+        }
+      ]
+    }
+  ],
+  "allPass": true
+}

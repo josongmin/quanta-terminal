@@ -1,8 +1,8 @@
 # C-ED-02: nvim + LSP diagnostic overlay
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real `nvim` recording once `tools/compat-record` lands (Plan 0005
-Epic ε §6).
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 2, Agent-K). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 

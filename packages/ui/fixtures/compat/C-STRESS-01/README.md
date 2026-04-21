@@ -1,7 +1,8 @@
 # C-STRESS-01: tail -f /dev/urandom | base64 (volume stress)
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real recording once `tools/compat-record` lands (Plan 0005 Epic ε6).
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 4, Agent-U). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 

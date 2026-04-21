@@ -89,6 +89,7 @@ import {
   type PasteAnalysis,
 } from '../paste-safety/index.js';
 import { getSessionConnection } from '../session-tabs/index.js';
+import { tryGetDegradedGate } from '../degraded-mode/index.js';
 
 import { defaultKeymapGuard } from './KeymapGuard.js';
 
@@ -211,6 +212,23 @@ export function SessionInputSurface(
     pendingResolverRef.current = null;
     setPendingPaste(null);
     setPasteAnalysis(null);
+    // Degraded-mode policy: even when the user clicked "Allow" on the
+    // paste-safety dialog, if the session is degraded at resolve time we
+    // must NOT put the bytes on the wire. The `onByteGate` below would
+    // catch them anyway — but telling the paste encoder "denied" here
+    // means we don't waste an encode + gate round-trip, and the
+    // dropped-input counter still increments via the byte gate (the
+    // keystroke path is the canonical accounting site). Cancels are a
+    // user-initiated no-op regardless of engine health.
+    if (allowed) {
+      const gate = tryGetDegradedGate();
+      if (gate?.isDegraded()) {
+        gate.reportDroppedInput();
+        log.debug('paste dropped: session is degraded after user confirm');
+        resolver?.(false);
+        return;
+      }
+    }
     resolver?.(allowed);
   }, []);
 
@@ -338,6 +356,26 @@ export function SessionInputSurface(
           void writeToSession(sessionId, bridge, bytes);
         },
         onPasteGate,
+        // Degraded-mode suppression (RFC §20 + ADR 0010). Sits between
+        // the encoder and the bridge: the encoders are mode-aware, but
+        // degraded means "PTY is unreachable" — we don't care what DECCKM
+        // thinks, we just refuse to put bytes on the wire. The counter
+        // bumps once PER DROPPED EVENT (a 7-byte CSI emit still counts
+        // as one drop), because the user's intent was one keystroke, not
+        // seven bytes. Source attribution lets future panels surface
+        // "N keystrokes / M mouse events dropped while offline".
+        onByteGate: (bytes, source) => {
+          const gate = tryGetDegradedGate();
+          if (gate?.isDegraded()) {
+            gate.reportDroppedInput();
+            log.debug('input dropped: session is degraded', {
+              source,
+              byteCount: bytes.length,
+            });
+            return false;
+          }
+          return true;
+        },
       });
     } catch (err) {
       log.warn('session-input-surface: mount failed', err);

@@ -1,5 +1,8 @@
 # C-PG-03 — `more /etc/hosts`
 
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 4, Agent-W).
+
 Companion to C-PG-01 (less, alt-buffer pager). This fixture exercises the
 **opposite** pager contract: GNU `more` from util-linux paints content
 directly into the main buffer and does **not** toggle DECSET 1049.

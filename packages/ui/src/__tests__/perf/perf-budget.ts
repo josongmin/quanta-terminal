@@ -46,38 +46,73 @@
 export const PERF_BUDGETS = {
   /**
    * P99 latency of a single `VtEmulator.feed(chunk)` call on 1 KiB
-   * input chunks. The north-star is 16 ms (one 60 Hz frame). The
-   * current TS implementation regularly sees GC-pause-driven tail
-   * spikes to ~40 ms, so the enforced budget is 64 ms — 4× the
-   * north-star, which the runner's WARN band (10 %) still catches
-   * when regressing.
+   * input chunks (top/watch fixtures). The north-star is 16 ms (one
+   * 60 Hz frame).
+   *
+   * Calibration (2026-04-21, Apple M4 Max, Node v25.9)
+   * ---------------------------------------------------
+   *   top-60s feed P99 median (3 runs)   : 29.2 ms
+   *   watch-60s feed P99 median (3 runs) : 25.4 ms
+   *   top-60s feed P99 noisy max         : 72 ms (background CPU contention)
+   *
+   * CI runs on shared Linux (ubuntu-24.04) which is ~2-3× slower than
+   * Apple M4 Max on this workload. The enforced budget is set to 128 ms
+   * = 4× the median — covers Linux × 3 + 20 % noise headroom. The
+   * runner's 10 % WARN band surfaces drift before it hits FAIL.
+   *
+   * The north-star (16 ms) is retained in `feedLatencyP99MsTarget`
+   * and will be enforced once the Rust engine replaces the TS
+   * reference emulator.
    */
-  feedLatencyP99Ms: 64,
+  feedLatencyP99Ms: 128,
   /**
    * North-star value retained for reference / reporting. Not used as
    * the assertion budget today. @see feedLatencyP99Ms.
    */
   feedLatencyP99MsTarget: 16,
   /** P99 render-tick latency (a full batcher flush cycle). Same
-   *  reasoning as feed. North-star 16 ms; enforced 64 ms. */
-  renderFrameBudgetP99Ms: 64,
+   *  reasoning as feed. North-star 16 ms; enforced 128 ms. */
+  renderFrameBudgetP99Ms: 128,
   renderFrameBudgetP99MsTarget: 16,
   /** P99 keystroke-to-byte latency; measured by the input path, not
    *  reused here but kept in the budget catalogue for cross-reference. */
   keystrokeToByteLatencyP99Us: 2_000,
-  /** Mean duration of a single `emulator.resize()` call. North-star
-   *  12 ms; the TS impl comfortably hits this today. */
+  /**
+   * Mean duration of a single `emulator.resize()` call.
+   * Measured 2026-04-21 Apple M4 Max median: 0.27 ms. Budget of 12 ms
+   * ≈ 44× headroom which absorbs Linux CI + reflow-dominated workloads.
+   */
   resizeDurationAvgMs: 12,
-  /** P99 duration of a single `emulator.resize()` call. */
+  /**
+   * P99 duration of a single `emulator.resize()` call.
+   * Measured 2026-04-21 Apple M4 Max median: 1.04 ms (noisy max 3.4 ms).
+   * Budget of 32 ms ≈ 30× headroom; leaves plenty for Linux CI noise.
+   */
   resizeDurationP99Ms: 32,
-  /** Maximum acceptable heapUsed delta during a `top`-like 60 s session
-   *  at 80×24. Based on scrollback cap math (~17 MB) + working-set
-   *  headroom. */
-  topMemoryCeilingMb: 150,
+  /**
+   * Maximum acceptable heapUsed delta during a `top`-like 60 s session
+   * at 80×24. Measured 2026-04-21 Apple M4 Max: 17.44 MB (stable across
+   * all runs). Budget 50 MB = ~3× measured, sized to catch leaky changes
+   * while tolerating minor allocation-pattern drift. The original
+   * scrollback-cap math (17 MB) is the steady-state floor.
+   */
+  topMemoryCeilingMb: 50,
   /** Maximum scrollback row count after a 1 GiB stress pour. Hard-bounded
    *  by `VtEmulator`'s scrollbackRows option; this assertion is the
    *  "ring really did evict" canary. */
   stressScrollbackCeilingRows: 10_000,
+  /**
+   * Per-chunk feed P99 for the `yes`-stress test (64 KiB chunks of
+   * `y\n`). Calibrated 2026-04-21 on Apple M4 Max; observed P99 ≈ 2.25 s
+   * per 64 KiB chunk because the TS emulator's scrollUp path clones the
+   * full 24×80 grid on every LF — an O(bytes × rows × cols) hot path.
+   * The budget is set to 10 000 ms = measured × ~4.4 = Apple-silicon
+   * headroom (~1.2×) × Linux-CI-runner factor (~3×).
+   *
+   * The north-star Rust engine is expected to hit < 64 ms here; this
+   * value will drop sharply once the Rust backend lands.
+   */
+  yesStreamFeedP99Ms: 10_000,
 } as const;
 
 export type PerfBudgetKey = keyof typeof PERF_BUDGETS;

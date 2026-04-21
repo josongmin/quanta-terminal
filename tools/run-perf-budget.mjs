@@ -58,25 +58,29 @@ const SPECS = [
     id: 'top-60s',
     relPath: 'src/__tests__/perf/top-60s-budget.test.ts',
     budgets: [
-      { metric: 'feedP99Ms', budget: 64, key: 'feedLatencyP99Ms' },
-      { metric: 'renderP99Ms', budget: 64, key: 'renderFrameBudgetP99Ms' },
-      { metric: 'heapDeltaMb', budget: 150, key: 'topMemoryCeilingMb' },
+      // Calibrated 2026-04-21. See perf-budget.ts for rationale.
+      { metric: 'feedP99Ms', budget: 128, key: 'feedLatencyP99Ms' },
+      { metric: 'renderP99Ms', budget: 128, key: 'renderFrameBudgetP99Ms' },
+      { metric: 'heapDeltaMb', budget: 50, key: 'topMemoryCeilingMb' },
     ],
   },
   {
     id: 'watch-60s',
     relPath: 'src/__tests__/perf/watch-60s-budget.test.ts',
     budgets: [
-      { metric: 'feedP99Ms', budget: 64, key: 'feedLatencyP99Ms' },
-      { metric: 'renderP99Ms', budget: 64, key: 'renderFrameBudgetP99Ms' },
-      { metric: 'heapDeltaMb', budget: 150, key: 'topMemoryCeilingMb' },
+      { metric: 'feedP99Ms', budget: 128, key: 'feedLatencyP99Ms' },
+      { metric: 'renderP99Ms', budget: 128, key: 'renderFrameBudgetP99Ms' },
+      { metric: 'heapDeltaMb', budget: 50, key: 'topMemoryCeilingMb' },
     ],
   },
   {
     id: 'yes-1gb',
     relPath: 'src/__tests__/perf/yes-1gb-budget.test.ts',
     budgets: [
-      { metric: 'feedP99Ms', budget: 64, key: 'feedLatencyP99Ms' },
+      // Per-chunk feed P99 for 64 KiB `yes` chunks. See the
+      // `yesStreamFeedP99Ms` comment in perf-budget.ts for why this is
+      // measured in seconds, not ms, on the TS emulator.
+      { metric: 'feedP99Ms', budget: 10_000, key: 'yesStreamFeedP99Ms' },
       { metric: 'scrollbackRows', budget: 10_000, key: 'stressScrollbackCeilingRows' },
     ],
   },

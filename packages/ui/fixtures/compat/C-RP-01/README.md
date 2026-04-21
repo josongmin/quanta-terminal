@@ -1,7 +1,8 @@
 # C-RP-01: python3 multi-line def
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real PTY recording once `tools/compat-record` lands (Plan 0005 Epic ε §6).
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 4, Agent-T). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 

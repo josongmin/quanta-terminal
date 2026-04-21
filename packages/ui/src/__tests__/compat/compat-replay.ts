@@ -147,6 +147,25 @@ export interface CheckpointExpected {
      */
     readonly rows?: Readonly<Record<string, RowProjection>>;
   };
+  /**
+   * In-stream resize hook. When present, the harness calls
+   * `emulator.resize(rows, cols)` at this checkpoint's byte offset BEFORE
+   * running diffs. Used by `C-UX-02` and any future fixture that exercises
+   * resize semantics without needing a fresh byte stream per dimension.
+   *
+   * Semantics:
+   *  - The resize fires exactly once per checkpoint that declares it.
+   *  - Multiple checkpoints at the same `at_byte_offset` cycle through
+   *    resize dimensions (main buffer reflows; alt buffer clears per
+   *    xterm). See `VtEmulator.resize()`.
+   *  - Diffs that follow are projected against the NEW dimensions: row
+   *    indices are validated against `emulator.getDimensions().rows`, and
+   *    `selected_rows[*].widths` arrays must match the new column count.
+   */
+  readonly resize?: {
+    readonly cols: number;
+    readonly rows: number;
+  };
 }
 
 /** One checkpoint entry in `checkpoints.json`. */
@@ -276,6 +295,13 @@ export async function replayCompatFixture(
       const next = Math.min(fedUpTo + SLICE, cp.at_byte_offset, input.length);
       feedSlice(fedUpTo, next);
       fedUpTo = next;
+    }
+    // In-stream resize hook. Fires BEFORE the diff so assertions in this
+    // same checkpoint see the grid at the new dimensions. `VtEmulator.resize`
+    // takes (rows, cols); the checkpoint field is declared `{ cols, rows }`
+    // to match the common "cols × rows" display form.
+    if (cp.expected.resize) {
+      emulator.resize(cp.expected.resize.rows, cp.expected.resize.cols);
     }
     const diff = diffCheckpoint(emulator, envs, cp, meta);
     if (diff.length > 0) {
@@ -464,19 +490,26 @@ function diffCheckpoint(
   }
 
   if (cp.expected.selected_rows) {
+    // Read LIVE dimensions. After an in-stream `resize` hook the emulator's
+    // grid may no longer match `meta.rows` / `meta.cols`; projection and
+    // row-index validation MUST track the post-resize reality. For fixtures
+    // without a resize hook, `liveDims` equals `{ rows: meta.rows, cols: meta.cols }`
+    // (constructor uses meta; no resize path taken), so existing fixtures
+    // project identically.
+    const liveDims = emulator.getDimensions();
     for (const [rowKey, expectedRow] of Object.entries(
       cp.expected.selected_rows,
     )) {
       const row = Number.parseInt(rowKey, 10);
-      if (!Number.isInteger(row) || row < 0 || row >= meta.rows) {
+      if (!Number.isInteger(row) || row < 0 || row >= liveDims.rows) {
         diff.push({
           field: `selected_rows.${rowKey}`,
-          expected: 'valid row index',
+          expected: `valid row index (0..${liveDims.rows - 1})`,
           actual: `out-of-range or non-integer (${rowKey})`,
         });
         continue;
       }
-      const actualRow = projectRow(emulator, row, meta.cols, {
+      const actualRow = projectRow(emulator, row, liveDims.cols, {
         includeSgrDigest: expectedRow.sgrDigest !== undefined,
       });
       if (actualRow.text !== expectedRow.text) {

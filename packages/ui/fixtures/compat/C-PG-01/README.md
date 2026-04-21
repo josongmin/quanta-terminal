@@ -1,8 +1,8 @@
 # C-PG-01: less /etc/passwd
 
-**Status:** synthetic (hand-authored byte stream). Will be replaced by a
-real `less /etc/passwd` recording once `tools/compat-record` lands
-(Plan 0005 Epic ε §6).
+**Status:** synthetic (hand-authored byte stream). Shipped at commit
+`f74c047` (wave 2, Agent-H). A `kind: recorded` variant via
+`tools/compat-record` is post-P0 work; see test-strategy.md §4.2.
 
 ## What this fixture asserts
 
