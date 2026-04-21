@@ -248,6 +248,27 @@ export interface SessionBridge {
   pausePty?(sessionId: SessionId): Promise<void>;
   /** Inverse of {@link pausePty}. Idempotent. */
   resumePty?(sessionId: SessionId): Promise<void>;
+  /**
+   * Plan 0005 P1-E / W2-D — read the persisted `.qrpl` journal(s) for a
+   * session so the UI can replay the last-known grid state before the
+   * freshly-spawned shell has produced a single byte.
+   *
+   * Returns the rotated tails + active journal in chronological order
+   * (oldest first). Each entry is the full `.qrpl` file bytes wrapped as
+   * `{ bytes_b64 }` so the JSON bridge carries it losslessly.
+   *
+   * Contract: missing journal resolves to `[]`, NOT a rejection — the UI
+   * treats absent-journal identically to empty-journal. Failures at the
+   * host layer (I/O error, permission denied) should also downgrade to
+   * `[]` and log; "no restore available" is always better than a crash.
+   *
+   * OPTIONAL because not every adapter can persist PTY bytes (mock bridge,
+   * VS Code webview without filesystem access). The session-restore feature
+   * null-checks and falls back to no-op when absent.
+   */
+  loadSessionJournal?(
+    sessionId: SessionId,
+  ): Promise<ReadonlyArray<{ readonly bytes_b64: string }>>;
   subscribe(listener: HostEventListener): Subscription;
 }
 

@@ -351,6 +351,23 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       await invokeStructured('quanta_resume_pty', { args: { sessionId } });
     },
 
+    async loadSessionJournal(sessionId: SessionId) {
+      // Plan 0005 P1-E / W2-D — session restore port. Returns the rotated
+      // tails + active `.qrpl` for the session in chronological order.
+      // Missing directory / IPC failure downgrades to `[]` so the UI treats
+      // it identically to "no journal". The inner `args` envelope matches
+      // the `#[tauri::command]` extractor contract for `JournalReadArgs`.
+      try {
+        const raw = (await invokeStructured('quanta_session_journal_read', {
+          args: { sessionId },
+        })) as ReadonlyArray<{ bytes_b64: string }> | null | undefined;
+        if (!Array.isArray(raw)) return [];
+        return raw;
+      } catch {
+        return [];
+      }
+    },
+
     async notify(options: NotifyOptions): Promise<void> {
       // Tauri host delegates to the notification plugin on the Rust side.
       // NOTE to Track β: the `tauri-plugin-notification` crate requires

@@ -18,6 +18,7 @@ export {
 export {
   type JournalPort,
   createTauriJournalPort,
+  base64ToBytes,
 } from './journal-port.js';
 export {
   JOURNAL_VERSION,

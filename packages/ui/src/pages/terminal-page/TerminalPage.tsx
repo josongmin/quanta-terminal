@@ -88,6 +88,11 @@ import { OutputSearch } from '../../widgets/output-search/index.js';
 // legacy OutputSearch (block-local) stays mounted on the page for now but
 // is no longer bound to Cmd+F; users reach it through the command palette.
 import { FindPanel, useFindPanelStore } from '../../widgets/find-panel/index.js';
+// Plan 0005 P1-G wave 2 — ghost-hint pill reads from the real ModeStack
+// (wired via `features/mode-stack/install.ts` in connect.ts). Mounted here
+// gated on `flag.ghostHints` so power users can opt out without the widget
+// touching their keyboard / focus semantics.
+import { GhostHint } from '../../widgets/ghost-hint/index.js';
 // Plan 0005 P1-C — block overlay chrome. The overlay mounts only when
 // `flag.blockUx === true`; it paints absolute-positioned card chrome over
 // the grid canvas without touching byte-path state.
@@ -144,7 +149,7 @@ import {
 // session connect adapter) is deliberately deferred to a follow-up task so
 // this change remains surgical — the emulator snapshot already exercises
 // the deterministic replay path.
-import { replaySession } from '../../features/session-restore/index.js';
+import { base64ToBytes, replaySession } from '../../features/session-restore/index.js';
 
 import styles from './terminal-page.module.css';
 
@@ -221,6 +226,7 @@ function TerminalPageContent() {
   // shown only when replay takes > 100 ms; the flag stays off by default
   // until the journal format graduates past P1-E review.
   const sessionRestoreOn = useFeatureFlag('sessionRestore');
+  const ghostHintsOn = useFeatureFlag('ghostHints');
   const [restoreOverlayVisible, setRestoreOverlayVisible] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -468,13 +474,28 @@ function TerminalPageContent() {
       if (lastId !== null) {
         void (async () => {
           try {
-            // We do NOT construct a Tauri-backed port here — that happens
-            // in a host-specific wiring layer. In the base page we provide
-            // a no-op port so the effect is a dry-run until the host wires
-            // a real port in. Tests exercising the page can swap the port
-            // via the port factory in `features/session-restore/index.ts`.
+            // Plan 0005 P1-E / W2-D — consume the host bridge's
+            // `loadSessionJournal` method when present (Tauri wires this
+            // via `quanta_session_journal_read`). Hosts without persistent
+            // storage (mock bridge, VS Code webview) null-check out and the
+            // replay downgrades to a no-op dry run — the overlay timer and
+            // metrics still fire so the pipeline stays exercised.
+            const hostBridge = tryGetHostBridge();
+            const journalLoader =
+              hostBridge && typeof hostBridge.loadSessionJournal === 'function'
+                ? hostBridge.loadSessionJournal.bind(hostBridge)
+                : async () => [];
             const result = await replaySession(lastId, {
-              port: { loadSessionJournal: async () => [] },
+              port: {
+                async loadSessionJournal(sid) {
+                  const entries = await journalLoader(sid);
+                  const out: Uint8Array[] = [];
+                  for (const e of entries) {
+                    out.push(base64ToBytes(e.bytes_b64));
+                  }
+                  return out;
+                },
+              },
             });
             if (result.fallbackReason) {
               log.info(
@@ -1081,6 +1102,13 @@ function TerminalPageContent() {
             return conn?.engine.emulator ?? null;
           }}
         />
+        {/* Plan 0005 P1-G — passive bottom-right mode-hint pill. Reads the
+            ModeStack populated by `features/mode-stack/install.ts`. Pill is
+            non-modal (`role="status"` + `aria-live="polite"`); clicking only
+            cancels the auto-dismiss timer, never steals keys from the inner
+            mode. Gated on `flag.ghostHints` (default on) so users can opt
+            out. */}
+        {ghostHintsOn && <GhostHint />}
         {/* Visual bell flash overlay — renders a brief 80 ms highlight
             across the terminal area when the bell store advances. Returns
             null when visualBell is off or no bell is active, so it stays

@@ -58,7 +58,11 @@ export function createTauriJournalPort(
   };
 }
 
-function base64ToBytes(b64: string): Uint8Array {
+/**
+ * Decode a base64-wrapped `.qrpl` payload. Exported so host-bridge wiring
+ * can reuse the same decoder without rebuilding the port from scratch.
+ */
+export function base64ToBytes(b64: string): Uint8Array {
   const binary =
     typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
   const out = new Uint8Array(binary.length);

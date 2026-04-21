@@ -701,6 +701,68 @@ pub async fn quanta_session_journal_stop(
     Ok(())
 }
 
+/// Read every rotated tail + the active `.qrpl` for a session in chronological
+/// order (oldest first). Plan 0005 P1-E / W2-D — closes the session-restore
+/// Tauri port so `createTauriJournalPort(invoke)` in
+/// `features/session-restore/journal-port.ts` can load real journal bytes.
+///
+/// Contract:
+///   - Missing journal directory → empty array (UI treats missing identically
+///     to "no journal"; this must not surface as an error).
+///   - A partial read of any single file (I/O error mid-read) skips that file
+///     and continues; the rest are still returned. Replay engine handles
+///     truncated-tail correctly via its frame-level FSM.
+///   - Each entry is a full `.qrpl` file (header + frames), base64-encoded so
+///     the Tauri JSON bridge carries it losslessly. 50 MiB per file × up to 5
+///     files (4 rotated + active) = 250 MiB worst-case — within the invoke
+///     ABI envelope.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalReadArgs {
+    pub session_id: SessionId,
+    pub dir_override: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JournalReadEntry {
+    pub bytes_b64: String,
+}
+
+#[tauri::command]
+pub async fn quanta_session_journal_read(
+    args: JournalReadArgs,
+    app: AppHandle,
+) -> Result<Vec<JournalReadEntry>, TauriError> {
+    use base64::Engine as _;
+
+    let dir = resolve_journal_dir(&app, args.dir_override.as_deref())?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let paths = crate::session_record::rotated_paths(&dir, &args.session_id);
+    let mut out: Vec<JournalReadEntry> = Vec::with_capacity(paths.len());
+    for path in paths {
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                out.push(JournalReadEntry { bytes_b64: b64 });
+            }
+            Err(err) => {
+                // A per-file read error is not fatal — the caller handles
+                // short tails already, and a disk-full scenario mid-rotation
+                // shouldn't abort the whole load.
+                tracing::warn!(
+                    ?err,
+                    session_id = %args.session_id,
+                    path = %path.display(),
+                    "journal file read failed; skipping"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn resolve_journal_dir(app: &AppHandle, dir_override: Option<&str>) -> Result<PathBuf, TauriError> {
     if let Some(raw) = dir_override {
         // Tests pass an explicit directory; reject traversal to keep the

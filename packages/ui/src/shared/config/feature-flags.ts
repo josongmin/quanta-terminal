@@ -89,6 +89,17 @@ export interface FeatureFlags {
    * glance. Off by default — gated on the agent-run pipeline landing.
    */
   readonly agentRunSurface: boolean;
+  /**
+   * Plan 0005 P1-G ghost hints. When true (default), `GhostHint` projects
+   * the live ModeStack into a passive bottom-right affordance pill for
+   * pagers / REPLs / multiplexers / TUIs / nested shells. Off hides the
+   * pill entirely — useful for power users who know the keybindings or
+   * for screen-reader-heavy setups where the extra live region is noise.
+   * Per p1-wave2-gaps §3.5 — the flag was deferred behind the real store
+   * shim; now that W2-C + W2-E landed the real wiring, this is the
+   * user-facing opt-out.
+   */
+  readonly ghostHints: boolean;
   /** Reserved future flags. */
   readonly [k: string]: boolean;
 }
@@ -122,6 +133,11 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   // `Run.type === 'agent'` runs when on. Cards only render if upstream
   // mounts gate on this flag; the runner registry is always available.
   agentRunSurface: false,
+  // Plan 0005 P1-G — default-ON. The hint pill is passive (never steals
+  // focus, never intercepts keys) so the only reason to turn it off is a
+  // user preference. Matches the p1-roadmap §"Migration from P0 flags"
+  // recommendation.
+  ghostHints: true,
 };
 
 /** Storage key — a single JSON blob for forward compatibility. */

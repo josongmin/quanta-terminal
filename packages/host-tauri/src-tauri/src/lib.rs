@@ -139,6 +139,7 @@ pub fn run() {
             ipc::quanta_report_crash,
             ipc::quanta_session_journal_start,
             ipc::quanta_session_journal_stop,
+            ipc::quanta_session_journal_read,
             shell_integration::quanta_install_shell_integration,
             shell_integration::quanta_uninstall_shell_integration,
             shell_install::quanta_shell_install_auto,
