@@ -1,0 +1,8 @@
+{
+  "name": "check-one-render-path",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": "./index.mjs",
+  "description": "Enforces Plan 0005 I-11: only the cell renderer paints character data."
+}

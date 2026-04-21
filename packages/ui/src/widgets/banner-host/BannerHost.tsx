@@ -90,7 +90,10 @@ export function BannerHost() {
     () => selectVisibleConditions({ active, dismissed }),
     [active, dismissed],
   );
-  const top = useMemo(() => pickBannerCondition(visible), [visible]);
+  const top = useMemo(() => {
+    const filtered = visible.filter((c) => c !== 'shell_integration');
+    return pickBannerCondition(filtered);
+  }, [visible]);
 
   // Wrap the store-backed dismiss in a useCallback keyed on `top` so the
   // `onDismiss` prop is referentially stable for each presented banner. Without

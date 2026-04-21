@@ -358,11 +358,14 @@ afterEach(() => {
 // -----------------------------------------------------------------------------
 
 describe('TUI full flow (e2e, byte-driven)', () => {
-  it('inactive: Composer is visible and TUI surfaces are absent', async () => {
+  it('inactive: Composer is visible; TuiRenderSurface absent; SessionInputSurface is always-on while a session is active', async () => {
     seedActiveSession();
     await renderPage();
     expect(screen.getByTestId('composer')).toBeInTheDocument();
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: the input surface is always mounted when a session is
+    // active — no alt-screen gate. TuiRenderSurface still gates on
+    // altScreen.active (Epic δ unifies it later).
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.queryByTestId('tui-render-surface')).toBeNull();
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('false');
     expect(isComposerHidden()).toBe(false);
@@ -379,7 +382,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     expect(useTuiStore.getState().active).toBe(true);
     expect(useTuiStore.getState().depth).toBe(1);
     expect(screen.getByRole('main').dataset['altScreenActive']).toBe('true');
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
     // The composer host carries the `altActive` modifier on the root page
     // div; in production CSS this hides the composer via `display: none`.
@@ -394,7 +397,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     act(() => {
       __emitRawChunkForTests(ENTER_1049);
     });
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
 
     act(() => {
@@ -403,7 +406,9 @@ describe('TUI full flow (e2e, byte-driven)', () => {
 
     expect(useTuiStore.getState().active).toBe(false);
     expect(useTuiStore.getState().depth).toBe(0);
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: SessionInputSurface stays mounted across alt-screen exit —
+    // it's the always-on input sink now. TuiRenderSurface still unmounts.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.queryByTestId('tui-render-surface')).toBeNull();
     expect(isComposerHidden()).toBe(false);
   });
@@ -417,7 +422,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
       __emitRawChunkForTests(ENTER_1049);
     });
     expect(useTuiStore.getState().depth).toBe(2);
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
 
     act(() => {
       __emitRawChunkForTests(EXIT_1049);
@@ -425,14 +430,15 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     // One level peeled; still active.
     expect(useTuiStore.getState().depth).toBe(1);
     expect(useTuiStore.getState().active).toBe(true);
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
 
     act(() => {
       __emitRawChunkForTests(EXIT_1049);
     });
     expect(useTuiStore.getState().active).toBe(false);
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: input surface remains mounted.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.queryByTestId('tui-render-surface')).toBeNull();
   });
 
@@ -443,7 +449,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
       __emitRawChunkForTests(ENTER_1049);
     });
 
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     act(() => {
       surface.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true }),
@@ -474,7 +480,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     bridge.write.mockImplementation(async (_sid: SessionId, data: string) => {
       bytesOutLog.push(data);
     });
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     act(() => {
       surface.dispatchEvent(
         new KeyboardEvent('keydown', {
@@ -505,7 +511,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     bridge.write.mockImplementation(async (_sid: SessionId, data: string) => {
       bytesOutLog.push(data);
     });
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     act(() => {
       surface.dispatchEvent(
         new KeyboardEvent('keydown', {
@@ -536,7 +542,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     const textarea = screen
       .getByTestId('composer')
       .querySelector('textarea') as HTMLTextAreaElement;
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     const valueBefore = textarea.value;
 
     act(() => {
@@ -565,7 +571,10 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     act(() => {
       __emitRawChunkForTests(EXIT_1049);
     });
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: the input surface stays mounted. The Composer textarea is
+    // still independently routable via fireEvent.change (controlled input
+    // path); the surface captures events that fire OUTSIDE the textarea.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
 
     const textarea = screen
       .getByTestId('composer')
@@ -674,7 +683,7 @@ describe('TUI full flow (e2e, byte-driven)', () => {
       __emitRawChunkForTests(ENTER_1049);
     });
 
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     // The surface is focusable (tabindex=0) and the mount effect calls
     // `.focus()` on it. jsdom respects .focus() — the active element is
     // the surface after entry.
@@ -682,24 +691,23 @@ describe('TUI full flow (e2e, byte-driven)', () => {
     expect(document.activeElement).toBe(surface);
   });
 
-  it('after alt-screen exit, focus is no longer trapped on the (now-removed) TuiInputSurface', async () => {
+  it('after alt-screen exit, SessionInputSurface remains mounted (Epic β always-on)', async () => {
     seedActiveSession();
     await renderPage();
     act(() => {
       __emitRawChunkForTests(ENTER_1049);
     });
     expect(document.activeElement?.getAttribute('data-testid')).toBe(
-      'tui-input-surface',
+      'session-input-surface',
     );
 
     act(() => {
       __emitRawChunkForTests(EXIT_1049);
     });
-    // With the surface gone the active element must be anything EXCEPT the
-    // tui-input-surface. jsdom typically falls back to body; the contract
-    // we pin is "focus is released" rather than a specific next-focus
-    // target, because the Composer's own autoFocus is false by default.
-    const active = document.activeElement as HTMLElement | null;
-    expect(active?.getAttribute('data-testid')).not.toBe('tui-input-surface');
+    // Epic β: the surface is always-on. It stays mounted across the
+    // alt-screen transition and still holds focus (the input-host's
+    // auto-focus ran on the original mount; exit did not remount the
+    // surface).
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
   });
 });

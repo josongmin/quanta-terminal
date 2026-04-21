@@ -1,0 +1,2 @@
+$ tmux new -s demo
+[?1049h[2J[H[1;1H$ echo hello[2;1Hhello[3;1H$ [10;1H[7m[demo] 0:zsh*[0m[2J[1;1H$ [6;1H$ [10;1H[7m[demo] 0:zsh*[0m[?1049l$ 

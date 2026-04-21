@@ -126,6 +126,7 @@ pub fn run() {
             ipc::quanta_read_text_file,
             ipc::quanta_get_home_dir,
             ipc::quanta_git_status,
+            ipc::quanta_list_completions,
             ipc::quanta_report_crash,
             shell_integration::quanta_install_shell_integration,
             shell_integration::quanta_uninstall_shell_integration,

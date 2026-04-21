@@ -1,43 +1,40 @@
-/* Composer — Warp-style minimal bottom input dock.
- * Clean, focused. Focus state shows a blue glow ring.
- * Inline autosuggest (ghost text) + syntax highlight overlay. */
+/* Composer — flat inline shell prompt. No box, no border, no focus ring.
+ * Just the prompt glyph + textarea on the terminal surface. */
 
 .wrap {
   display: flex;
   flex-direction: column;
   position: relative;
-  margin: 0 var(--q-space-4) var(--q-space-3) var(--q-space-4);
-  background: var(--q-bg-elev-1);
-  border: 1px solid var(--q-border-subtle);
-  border-radius: var(--q-radius-lg);
-  transition:
-    border-color var(--q-dur-fast) var(--q-ease-out),
-    box-shadow var(--q-dur-fast) var(--q-ease-out);
-  min-height: var(--q-composer-min-height);
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .wrap.focused {
-  border-color: var(--q-border-focus);
-  box-shadow: var(--q-shadow-focus-ring);
+  border: none;
+  box-shadow: none;
 }
 
 .row {
   display: flex;
   align-items: flex-start;
-  gap: var(--q-space-2);
-  padding: 10px 14px;
+  gap: 6px;
+  padding: 2px var(--q-space-2) 6px calc(6px + var(--q-space-2));
+  background: transparent;
 }
 
-/* Shell prompt glyph */
+/* Shell prompt glyph — pure plain text like a real shell (`% `). */
 .prompt {
   flex: 0 0 auto;
-  margin-top: 2px;
-  color: var(--q-accent);
+  margin-top: 0;
+  color: var(--q-fg);
   font-family: var(--q-font-mono);
-  font-size: var(--q-font-size-md);
-  line-height: 20px;
+  font-size: var(--q-font-size-term);
+  line-height: var(--q-line-height-term);
   user-select: none;
-  opacity: 0.8;
+  opacity: 1;
 }
 
 .editorWrap {
@@ -55,14 +52,13 @@
   border: none;
   outline: none;
   resize: none;
-  padding: 2px 0;
+  padding: 0;
   color: var(--q-fg);
   font-family: var(--q-font-mono);
-  font-size: var(--q-font-size-md);
+  font-size: var(--q-font-size-term);
   font-feature-settings: var(--q-font-features, normal);
-  line-height: 20px;
-  caret-color: var(--q-accent);
-  animation: q-caret-pulse 1.2s var(--q-ease-in-out) infinite;
+  line-height: var(--q-line-height-term);
+  caret-color: var(--q-fg);
   position: relative;
   z-index: 2;
 }
@@ -71,11 +67,11 @@
 .highlight {
   position: absolute;
   inset: 0;
-  padding: 2px 0;
+  padding: 0;
   font-family: var(--q-font-mono);
-  font-size: var(--q-font-size-md);
+  font-size: var(--q-font-size-term);
   font-feature-settings: var(--q-font-features, normal);
-  line-height: 20px;
+  line-height: var(--q-line-height-term);
   color: var(--q-fg);
   pointer-events: none;
   white-space: pre-wrap;
@@ -104,11 +100,11 @@
 .ghost {
   position: absolute;
   inset: 0;
-  padding: 2px 0;
+  padding: 0;
   font-family: var(--q-font-mono);
-  font-size: var(--q-font-size-md);
+  font-size: var(--q-font-size-term);
   font-feature-settings: var(--q-font-features, normal);
-  line-height: 20px;
+  line-height: var(--q-line-height-term);
   pointer-events: none;
   white-space: pre;
   overflow: hidden;
@@ -122,7 +118,7 @@
   opacity: 0.7;
 }
 
-/* Suppress double focus ring */
+/* Suppress browser default focus rings */
 .editor:focus,
 .editor:focus-visible {
   outline: none;
@@ -132,42 +128,16 @@
 
 .editor::placeholder {
   color: var(--q-fg-faint);
-  opacity: 0.6;
+  opacity: 0.5;
 }
 .editor:disabled {
   color: var(--q-fg-muted);
   cursor: progress;
 }
 
-@keyframes q-caret-pulse {
-  0%, 100% { caret-color: var(--q-accent); }
-  50%      { caret-color: rgba(107, 163, 255, 0.5); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .editor { animation: none; }
-}
-
-/* Mode chip — shell / AI toggle */
+/* Mode chip hidden in the pure-terminal look. Kept in DOM for a11y. */
 .modeChip {
-  flex: 0 0 auto;
-  align-self: center;
-  padding: 2px 8px;
-  color: var(--q-fg-faint);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--q-border-subtle);
-  border-radius: var(--q-radius-sm);
-  font-family: var(--q-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
-  user-select: none;
-  transition: color var(--q-dur-fast) var(--q-ease-out),
-              background var(--q-dur-fast) var(--q-ease-out),
-              border-color var(--q-dur-fast) var(--q-ease-out);
-}
-.wrap.focused .modeChip {
-  color: var(--q-fg-muted);
-  border-color: var(--q-border-strong);
+  display: none;
 }
 
 /* History panel — slides up above the input row, shows recent commands */
@@ -176,7 +146,7 @@
   padding: 6px 4px;
   animation: q-history-in var(--q-dur-med) var(--q-ease-standard);
   background: var(--q-bg-elev-2);
-  border-radius: var(--q-radius-lg) var(--q-radius-lg) 0 0;
+  border-radius: 0;
   max-height: 280px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -216,10 +186,10 @@
   background: rgba(255, 255, 255, 0.04);
 }
 .historyItemActive {
-  background: rgba(107, 163, 255, 0.10);
+  background: rgba(255, 255, 255, 0.08);
 }
 .historyItemActive:hover {
-  background: rgba(107, 163, 255, 0.13);
+  background: rgba(255, 255, 255, 0.10);
 }
 .historyItemCmd {
   font-family: var(--q-font-mono);
@@ -255,7 +225,7 @@
 
 /* Inline submit error */
 .error {
-  padding: 4px 14px 8px 14px;
+  padding: 2px var(--q-space-2) 4px calc(6px + var(--q-space-2));
   color: var(--q-danger);
   background: transparent;
   font-family: var(--q-font-mono);
@@ -265,13 +235,6 @@
 }
 
 @media (forced-colors: active) {
-  .wrap {
-    forced-color-adjust: none;
-    border-color: CanvasText;
-  }
-  .wrap.focused {
-    border-color: Highlight;
-  }
   .error {
     color: LinkText;
   }

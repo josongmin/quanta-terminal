@@ -49,6 +49,7 @@ import {
   IDLE_COMPLETE_MS,
   installCommandRouter,
 } from '../command/route-output.js'; // FIXME(fsd-layer-skip): session hands pty bytes + exit to command router per documented cross-slice handoff; see also the integration test comment for the inverse direction.
+import { tryGetBlockStore } from '../command/block-store-port.js';
 // FIXME(fsd-layer-skip): the session feature consults the degraded gate so
 // the `ConnectedSession.write` wrapper honors RFC §20 ("input disabled
 // during degraded state") for every caller — command/submit today, and
@@ -61,6 +62,17 @@ import { tryGetDegradedGate } from '../degraded-mode/degraded-gate.js';
 // feature subscribes via its own module; connect only emits into the bus.
 import { base64ToBytes } from '../../shared/lib/base64.js';
 import { publishSessionChunk } from '../session-record/byte-bus.js';
+// Session-scoped VT engine (Plan 0005 α1). Every PTY byte feeds the engine
+// BEFORE any block/router consumer runs — the engine is the SSOT for grid
+// state. In P0 the legacy block-router byte path stays wired in parallel;
+// Epic δ will tear it down once TerminalSurface reads from the engine.
+import { createSessionEngine, type VtEngineHandle } from './engine.js';
+// Plan 0005 Epic δ: block-UX-only paths (preamble block creation, router
+// install) gate on `flag.blockUx`. In P0 default, the router never installs
+// and no preamble block is seeded, so the block store stays dormant and
+// `appendToActiveBlock` short-circuits on "no router installed" with zero
+// cost on the hot pty_data path.
+import { getFeatureFlag } from '../../shared/config/feature-flags.js';
 
 const log = createLogger('session.connect');
 
@@ -85,6 +97,17 @@ export interface ConnectOptions {
 export interface ConnectedSession {
   readonly sessionId: SessionId;
   readonly subscription: Subscription;
+  /**
+   * Session-scoped VT engine (Plan 0005 α1). Every PTY byte feeds through
+   * this engine before any other consumer sees it. Callers may subscribe
+   * via `engine.subscribe()` to observe `GridEventEnvelope<GridPayload>`
+   * updates (snapshot / delta / mode_changed / …) or read the emulator
+   * directly for cell-level inspection.
+   *
+   * Lifetime matches the connection: the handle is live from the moment
+   * `connectSession()` resolves until `close()` returns.
+   */
+  readonly engine: VtEngineHandle;
   write(text: string): Promise<void>;
   resize(cols: number, rows: number): Promise<void>;
   close(): Promise<void>;
@@ -94,6 +117,18 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   const { bridge, cols, rows, onData, shell, cwd, env } = opts;
 
   await bridge.ready();
+
+  // α1: build the session-scoped VT engine BEFORE subscribing, so the very
+  // first `pty_data` frame (which may arrive synchronously inside the
+  // spawn() await) is routed through the engine. The engine is keyed by a
+  // stable pre-spawn id until the host hands us the real session id during
+  // pre-buffer drain — the id is cosmetic inside the emulator (used only in
+  // outgoing envelopes) and is not observed by consumers yet in P0.
+  const engine: VtEngineHandle = createSessionEngine({
+    sessionId: 'pending',
+    cols,
+    rows,
+  });
 
   // Subscribe FIRST, buffer until we know the session id. The host may emit
   // `pty_data` synchronously inside `spawn()`; without this pre-subscribe we
@@ -136,6 +171,7 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     });
   } catch (err) {
     subscription.unsubscribe();
+    engine.dispose();
     throw err;
   }
   sessionId = spawn.sessionId;
@@ -179,12 +215,19 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   //      block spinner spins forever. The idle window is a heuristic — see
   //      the `IDLE_COMPLETE_MS` rationale in `route-output.ts`.
   const isMockBridge = spawn.shell === '/bin/mock';
-  routerDispose = installCommandRouter(
-    sessionId,
-    isMockBridge
-      ? {}
-      : { detector: null, idleCompletionMs: IDLE_COMPLETE_MS },
-  ).dispose;
+  // Epic δ P0: the command router is a block-UX-only path (it routes pty
+  // bytes into block.outputChunks). Skip install when `flag.blockUx` is
+  // off so the session runs without any block-store coupling — pty_data
+  // flows engine-only, which is the P0 shipping surface. In P1, re-install
+  // happens on flag flip by re-mounting the session (no hot-swap needed).
+  if (getFeatureFlag('blockUx')) {
+    routerDispose = installCommandRouter(
+      sessionId,
+      isMockBridge
+        ? {}
+        : { detector: null, idleCompletionMs: IDLE_COMPLETE_MS },
+    ).dispose;
+  }
 
   // Seed the entity in the collection. `addSession` is a no-op if the id is
   // already known, so double-mount or late replay stays idempotent. We
@@ -204,6 +247,26 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     isWsl: spawn.isWsl === true,
   });
 
+  // Create an initial "preamble" block with an empty command so the shell
+  // greeting (macOS "Last login: …" + the first PS1 prompt) is captured and
+  // rendered natively — just like opening Terminal.app. The block has no
+  // command header chrome (hidden via CSS on empty command) and closes via
+  // the idle-completion timer once the shell finishes drawing its prompt.
+  //
+  // Epic δ P0: block-UX-only. Without a block presentation layer nothing
+  // reads the preamble block anyway, and seeding it would leak a dormant
+  // running-block into the store for callers that inspect it.
+  if (getFeatureFlag('blockUx')) {
+    try {
+      const blockStore = tryGetBlockStore();
+      if (blockStore) {
+        blockStore.startBlock('', spawn.cwd, { sessionId });
+      }
+    } catch (err) {
+      log.debug('preamble block creation skipped', err);
+    }
+  }
+
   // Drain the pre-buffer in original order, keeping events that match the
   // session we just got. A verbose debug log makes out-of-order diagnosis
   // trivial in dev builds — production strips it.
@@ -218,6 +281,7 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   return {
     sessionId,
     subscription,
+    engine,
     async write(text) {
       // RFC §20 / ADR 0010: in degraded state the wrapper drops the bytes
       // and increments the telemetry counter. Skipping the bridge call is
@@ -233,12 +297,32 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       await bridge.write(sessionId, text);
     },
     async resize(nextCols, nextRows) {
+      // α1: resize the engine grid alongside the PTY. Engine-side resize
+      // is synchronous so the next `feed()` observes the new dimensions
+      // without an rAF lag; the bridge.resize call updates the kernel
+      // TIOCSWINSZ. Both can run in parallel — the emulator doesn't
+      // require the kernel to have acked the new size.
+      engine.resize(nextCols, nextRows);
       await bridge.resize(sessionId, nextCols, nextRows);
     },
     async close() {
       if (closed) return;
       closed = true;
+      // α1 teardown order (NOTE the race discussion in engine.ts):
+      //   1. unsubscribe the bridge so no new pty_data can enter after
+      //      dispose runs. This closes the window where a late event
+      //      would race engine.dispose().
+      //   2. dispose the engine (flushes any queued bytes through the
+      //      emulator, then cancels the rAF trampoline and releases
+      //      subscribers). Safe to call before bridge.close() because
+      //      the emulator no longer has any subscribers that could call
+      //      back into bridge.write().
+      //   3. router dispose — belongs AFTER engine dispose so a final
+      //      emulator flush cannot re-enter the router path.
+      //   4. bridge.close() — the PTY tear-down itself; may emit a final
+      //      pty_exit that our unsubscribed listener will no longer see.
       subscription.unsubscribe();
+      engine.dispose();
       if (routerDispose) {
         routerDispose();
         routerDispose = undefined;
@@ -261,6 +345,23 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     // could land the tail on the wrong block.
     if (ended) return;
     if (isEventOfKind(event, 'pty_data')) {
+      // α1 ordering: decode ONCE, feed the engine FIRST, then fan out.
+      // The engine is the SSOT for grid state; downstream consumers in
+      // later epics will read from it. In P0 the legacy block-router
+      // and session-record bus still consume the raw bytes directly —
+      // they run AFTER the engine on the same event so their view of
+      // the stream can never be ahead of the engine's.
+      let decoded: Uint8Array | null = null;
+      try {
+        decoded = base64ToBytes(event.bytesB64);
+      } catch {
+        // Malformed base64: nothing downstream can do with these bytes.
+        // Bail out so the router / engine are not fed garbage.
+        decoded = null;
+      }
+      if (decoded !== null && decoded.byteLength > 0) {
+        engine.feed(decoded);
+      }
       if (sessionId !== undefined) {
         // Fanout: the command router must see the bytes so the active
         // block accrues output. The `onData` callback is an inert hook
@@ -271,13 +372,11 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
         // Session-record fan-out: publish the decoded chunk to the byte
         // bus so an in-flight asciicast recorder can capture it. The
         // publish is a zero-cost no-op when there is no subscriber.
-        if (publishSessionChunk.length >= 0) {
+        if (decoded !== null) {
           try {
-            const bytes = base64ToBytes(event.bytesB64);
-            publishSessionChunk(sessionId, bytes, Date.now());
+            publishSessionChunk(sessionId, decoded, Date.now());
           } catch {
-            // A malformed base64 frame must not derail the block-router
-            // fanout; the recorder simply loses that chunk.
+            // A recorder failure must not derail the block-router fanout.
           }
         }
       }

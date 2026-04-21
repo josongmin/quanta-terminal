@@ -36,17 +36,12 @@
   flex-direction: column;
 }
 
-.composerHost {
-  display: contents;
-}
-
-/* Alt-screen active: hide block list, keep composer mounted */
+/* Alt-screen active: hide block list (composer is inside blockListHost) */
 .main.altActive {
   background: var(--q-bg);
 }
 
-.main.altActive .blockListHost,
-.page.altActive .composerHost {
+.main.altActive .blockListHost {
   display: none;
 }
 

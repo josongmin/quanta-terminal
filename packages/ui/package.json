@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:compat": "vitest run compat",
     "lint:fsd": "node ../../tools/check-fsd-layers.mjs"
   },
   "dependencies": {

@@ -294,7 +294,7 @@ describe('top/htop real-time refresh (e2e)', () => {
 
     act(() => {
       emitFrameBurst(20);
-      const surface = screen.getByTestId('tui-input-surface');
+      const surface = screen.getByTestId('session-input-surface');
       surface.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'q', code: 'KeyQ', bubbles: true }),
       );
@@ -321,7 +321,7 @@ describe('top/htop real-time refresh (e2e)', () => {
 
     act(() => {
       emitFrameBurst(15);
-      const surface = screen.getByTestId('tui-input-surface');
+      const surface = screen.getByTestId('session-input-surface');
       surface.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }),
       );
@@ -349,7 +349,7 @@ describe('top/htop real-time refresh (e2e)', () => {
 
     act(() => {
       emitFrameBurst(50);
-      const surface = screen.getByTestId('tui-input-surface');
+      const surface = screen.getByTestId('session-input-surface');
       surface.dispatchEvent(
         new KeyboardEvent('keydown', {
           key: 'c',
@@ -382,7 +382,9 @@ describe('top/htop real-time refresh (e2e)', () => {
     });
 
     expect(screen.queryByTestId('tui-render-surface')).toBeNull();
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: input surface is always-on; stays mounted post alt-screen
+    // exit while a session remains active.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(useTuiStore.getState().active).toBe(false);
     expect(useTuiStore.getState().depth).toBe(0);
   });

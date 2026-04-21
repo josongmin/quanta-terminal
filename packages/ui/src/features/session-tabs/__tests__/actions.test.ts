@@ -38,6 +38,13 @@ import {
   type StartBlockPortOptions,
 } from '../../command/block-store-port.js';
 import { __resetRouterForTests } from '../../command/route-output.js';
+// Plan 0005 Epic δ: startupCommands is P1 block-ux — session-tabs now
+// skips it when `flag.blockUx` is off. These tests assert the P1 behavior,
+// so they enable the flag before each case in the block-scoped describe.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../../shared/config/feature-flags.js';
 
 interface ScriptedBridge extends HostBridge {
   emit: (event: HostEvent) => void;
@@ -308,9 +315,15 @@ describe('switchSession', () => {
 
 describe('createSession startupCommands', () => {
   let unbind: (() => void) | undefined;
+  beforeEach(() => {
+    // P1-gated: startup commands feed `submitCommand`, which the P0 default
+    // doesn't mount. Flip the flag on so the submit path runs here.
+    setFeatureFlag('blockUx', true);
+  });
   afterEach(() => {
     if (unbind) unbind();
     unbind = undefined;
+    resetFeatureFlags();
   });
 
   it('submits each startup command through submitCommand after ready', async () => {
@@ -333,11 +346,15 @@ describe('createSession startupCommands', () => {
     // The startup runner kicks off asynchronously (50 ms gap between
     // commands). Wait past the gap before asserting.
     await new Promise((r) => setTimeout(r, 150));
-    // Two startup commands → two startBlock calls → two bridge.write calls
-    // carrying the command text with a trailing newline.
-    expect(store.startBlockMock).toHaveBeenCalledTimes(2);
-    expect(store.startBlockMock.mock.calls[0]?.[0]).toBe('cd ~/projects/foo');
-    expect(store.startBlockMock.mock.calls[1]?.[0]).toBe('pnpm dev');
+    // Three startBlock calls total:
+    //   1. preamble block (empty command) seeded by `connectSession` when
+    //      `flag.blockUx === true` — captures shell greeting / initial prompt.
+    //   2. `cd ~/projects/foo`
+    //   3. `pnpm dev`
+    expect(store.startBlockMock).toHaveBeenCalledTimes(3);
+    expect(store.startBlockMock.mock.calls[0]?.[0]).toBe('');
+    expect(store.startBlockMock.mock.calls[1]?.[0]).toBe('cd ~/projects/foo');
+    expect(store.startBlockMock.mock.calls[2]?.[0]).toBe('pnpm dev');
   });
 
   it('does nothing when the profile has no startup commands', async () => {
@@ -356,8 +373,9 @@ describe('createSession startupCommands', () => {
       profile: id,
     });
     await new Promise((r) => setTimeout(r, 100));
-    // No startup commands → no block creation (aside from what the session
-    // itself might seed, which the mock block store does not do).
-    expect(store.startBlockMock).not.toHaveBeenCalled();
+    // No startup commands → only the preamble block the session seeds for
+    // the shell greeting (see `connectSession` under `flag.blockUx`).
+    expect(store.startBlockMock).toHaveBeenCalledTimes(1);
+    expect(store.startBlockMock.mock.calls[0]?.[0]).toBe('');
   });
 });

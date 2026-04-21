@@ -427,7 +427,7 @@ describe('less pagination — TUI page integration (e2e)', () => {
       bytesOut.push(data);
     });
 
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     act(() => {
       // deltaY < 0 = scroll up. deltaMode=0 (pixels): lines = floor(100/16) = 6.
       surface.dispatchEvent(
@@ -452,14 +452,14 @@ describe('less pagination — TUI page integration (e2e)', () => {
     act(() => {
       __emitRawChunkForTests(ENTER_1049);
     });
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
 
     const bytesOut: string[] = [];
     bridge.write.mockImplementation(async (_sid: SessionId, data: string) => {
       bytesOut.push(data);
     });
 
-    const surface = screen.getByTestId('tui-input-surface');
+    const surface = screen.getByTestId('session-input-surface');
     act(() => {
       surface.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'q', code: 'KeyQ', bubbles: true }),
@@ -478,7 +478,9 @@ describe('less pagination — TUI page integration (e2e)', () => {
       __emitRawChunkForTests(EXIT_1049);
     });
 
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: SessionInputSurface is always-on; it stays mounted after
+    // alt-screen exit while a session remains active.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
     expect(screen.getByTestId('composer')).toBeInTheDocument();
     expect(useTuiStore.getState().active).toBe(false);
   });

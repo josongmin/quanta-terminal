@@ -592,11 +592,23 @@ describe('VtEmulator — DEC private modes', () => {
     expect(h.emulator._getCursor().row).toBe(0);
   });
 
-  it('CSI ?1049h (alt screen flip) is a no-op here', () => {
+  it('CSI ?1049h switches to a blank alt buffer; exit restores main', () => {
+    // Post plan-0005 α2 the emulator itself owns the alt-buffer swap.
+    // Entering 1049 must leave the previous main content invisible (alt
+    // is blank) and DECRESET must byte-exactly restore main so vim/htop
+    // exits stop smearing their paint onto the shell prompt.
     const h = new Harness(3, 5);
-    h.feed('abc\x1b[?1049h');
-    // Grid state preserved — alt-screen routing is out of scope.
+    h.feed('abc');
+    h.feed('\x1b[?1049h');
+    // On alt: first row should be entirely blank.
+    expect(h.cellGrapheme(0, 0)).toBe('');
+    expect(h.cellGrapheme(0, 1)).toBe('');
+    expect(h.cellGrapheme(0, 2)).toBe('');
+    h.feed('\x1b[?1049l');
+    // Back on main: original content preserved byte-exact.
     expect(h.cellGrapheme(0, 0)).toBe('a');
+    expect(h.cellGrapheme(0, 1)).toBe('b');
+    expect(h.cellGrapheme(0, 2)).toBe('c');
   });
 });
 

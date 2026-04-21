@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 6,
+  "description": "vim round-trip: main-buffer prompt → DECSET 1049h → alt-buffer paint + insert → DECSET 1049l → main buffer restored, vim content gone.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

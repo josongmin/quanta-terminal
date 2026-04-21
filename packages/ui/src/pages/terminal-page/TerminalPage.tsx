@@ -68,7 +68,8 @@ import { useBannerStore, selectVisibleConditions } from '../../entities/banner/i
 import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import { installBannerDetectors } from '../../features/banner/index.js';
 import { bindBlockEntity } from '../../features/command/index.js';
-import { installTuiDetector, TuiInputSurface, TuiRenderSurface } from '../../features/tui/index.js';
+import { installTuiDetector, TuiRenderSurface } from '../../features/tui/index.js';
+import { SessionInputSurface } from '../../features/session/index.js';
 import { rerunBlock, copyBlock } from '../../features/block/index.js';
 import { openCompareFromBlock } from '../../features/compare/index.js';
 import { submitCommand } from '../../features/composer/submit.js';
@@ -107,6 +108,13 @@ import { getHostBridge, tryGetHostBridge } from '../../shared/api/host-bridge.js
 import { cx } from '../../shared/lib/cx.js';
 import { useKeymap } from '../../shared/lib/keymap.js';
 import { createLogger } from '../../shared/lib/logger.js';
+// Plan 0005 Epic δ: block UX widgets (BlockList / Composer / BlockCard /
+// ShellIntegrationBanner / etc.) mount only when `flag.blockUx === true`.
+// The default P0 shipping surface is a plain grid — TuiRenderSurface +
+// SessionInputSurface — so this flag is read at the top of the component
+// and gates every block-scoped subtree below. See the README in
+// `src/__tests__/p1-block-ux/` for the migration convention.
+import { useFeatureFlag } from '../../shared/config/feature-flags.js';
 import { t } from '../../shared/i18n/index.js';
 import { useZoomStore } from '../../features/zoom/index.js';
 import { installNotificationDetector } from '../../features/notifications/index.js';
@@ -176,6 +184,18 @@ export function TerminalPage() {
 TerminalPage.displayName = 'TerminalPage';
 
 function TerminalPageContent() {
+  // Plan 0005 Epic δ — P0 default gate.
+  //   - When `blockUxOn === false` (the P0 default), the block presentation
+  //     layer (BlockList / BlockCard / Composer / ShellIntegrationBanner /
+  //     etc.) does NOT mount. The terminal is a plain grid: TuiRenderSurface
+  //     paints the session's VT engine output, and SessionInputSurface routes
+  //     keystrokes to the PTY byte-for-byte.
+  //   - When `blockUxOn === true` (P1 opt-in, set via the feature-flags
+  //     store or the `QUANTA_FLAG_BLOCK_UX=on` env var), the legacy block-
+  //     card surface mounts on top, same as the pre-Epic-δ layout.
+  // The gate is read ONCE at the top of the component so the render tree
+  // below switches atomically on flag change — no half-mounted state.
+  const blockUxOn = useFeatureFlag('blockUx');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -830,6 +850,23 @@ function TerminalPageContent() {
     if (health === 'error' && !sessionId) {
       return <ErrorState message={t('terminal.errorMessage')} onRetry={retrySpawn} />;
     }
+    // Epic δ P0 default: no block UX. The `blockListHost` slot stays
+    // `flex: 1` to preserve the layout below; the grid is painted by the
+    // always-on `TuiRenderSurface` further down in the <main> tree. A
+    // booting session still surfaces the LoadingState overlay so first-
+    // spawn feedback is identical to the P1 layout.
+    if (!blockUxOn) {
+      return (
+        <>
+          <div className={styles.blockListHost} />
+          {!sessionId && health === 'booting' && (
+            <div className={styles.overlay}>
+              <LoadingState />
+            </div>
+          )}
+        </>
+      );
+    }
     if (isMultiPane) {
       return (
         <div className={styles.blockListHost}>
@@ -903,12 +940,29 @@ function TerminalPageContent() {
           sessionId={activeSessionId}
           bridge={bridge ?? null}
         />
-        {/* Alt-screen input sink: while a TUI program is active, this
-            surface routes keyboard/mouse/paste/focus/IME events directly
-            to the PTY via the input-host encoder layer. Returns null when
-            inactive, letting the Composer own focus by default. Mounted
-            last so it stacks above TuiRenderSurface for pointer capture. */}
-        <TuiInputSurface sessionId={activeSessionId} />
+        {/* Epic β (Plan 0005 §4.β) — always-on SessionInputSurface. Mounted
+            unconditionally whenever a session is active: every keyboard
+            / mouse / paste / focus / IME event routes through the
+            `input-host` encoders and lands on the PTY wire byte-for-byte,
+            not via the Composer textarea's submit path. The alt-screen
+            gate that previously lived here is gone; the TuiRenderSurface
+            visibility still follows `altScreen.active` per existing
+            behavior and Epic δ will unify render later.
+
+            Composer coexistence (transitional):
+              - Composer is still mounted below; its Enter still calls
+                `submitCommand` (legacy path) for now.
+              - Events inside the composer textarea (it has its own focus
+                + event handlers) stay on the composer — this surface only
+                captures events outside that DOM node.
+              - Once `flag.blockUx` lands in Epic δ, Composer unmounts in
+                the default renderer and every keystroke lands on the wire
+                via this surface alone.
+              - TODO(Epic δ): remove <Composer /> from this page once the
+                flag flips; delete the `submitCommand` legacy path. */}
+        {activeSessionId !== null && (
+          <SessionInputSurface sessionId={activeSessionId} />
+        )}
         {/* Output-search bar: finds text in visible block output. Docks
             itself to the bottom-right of <main> via absolute positioning.
             Returns null when closed so the DOM is completely quiet. */}
@@ -919,9 +973,15 @@ function TerminalPageContent() {
             invisible to pointer events at all times. */}
         <BellFlash />
       </main>
-      <div className={styles.composerHost}>
-        <Composer />
-      </div>
+      {/* Epic δ P0: Composer is a block-UX widget. It unmounts when the
+          flag is off; keystrokes still land on the wire via the always-on
+          SessionInputSurface. In P1 the composer returns and its Enter
+          path feeds submitCommand as before. */}
+      {blockUxOn && (
+        <div className={styles.composerHost}>
+          <Composer />
+        </div>
+      )}
       <StatusBar />
       <CommandPalette open={paletteOpen} onClose={closePalette} />
       <HistorySearch open={historyOpen} onClose={closeHistory} hydrating={hydrating} />

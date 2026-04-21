@@ -1,0 +1,8 @@
+{
+  "name": "check-one-input-path",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": "./index.mjs",
+  "description": "Enforces Plan 0005 I-12: only features/input/ may write to the PTY bridge."
+}

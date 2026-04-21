@@ -210,6 +210,7 @@ export interface FileBridge {
   readTextFile(options: ReadTextFileOptions): Promise<string | null>;
   getHomeDir?(): Promise<string | null>;
   gitStatus?(options: GitStatusOptions): Promise<GitStatus | null>;
+  listCompletions?(options: ListCompletionsOptions): Promise<CompletionEntry[]>;
 }
 
 /** OS notification dispatch. */
@@ -504,6 +505,17 @@ export interface GitStatus {
   readonly ahead: number;
   readonly behind: number;
   readonly detached: boolean;
+}
+
+export interface ListCompletionsOptions {
+  readonly prefix: string;
+  readonly cwd: string;
+}
+
+export interface CompletionEntry {
+  readonly name: string;
+  readonly insert: string;
+  readonly kind: 'dir' | 'file' | 'exec';
 }
 
 /** Default cap applied when the caller omits `maxBytes`. 64 KiB is ample for

@@ -1,0 +1,8 @@
+{
+  "shell": "zsh",
+  "cols": 40,
+  "rows": 4,
+  "description": "Korean 2-set IME post-commit render: `$ echo 안녕하세요!` lands on row 0 with width-2 leading + width-0 continuation per hangul; cursor advances by 2 per syllable.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

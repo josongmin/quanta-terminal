@@ -35,9 +35,8 @@
  * exported `shouldAutoscroll` helper and e2e is covered by live usage.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Kbd } from '../../shared/ui/kbd/index.js';
 // Cross-slice: BlockList composes BlockCard. Both are block-domain widgets;
 // splitting them into entities/ would coerce a presentational component into
 // a non-presentational layer, and moving BlockCard into shared/ would force
@@ -70,6 +69,12 @@ export interface BlockListProps {
    * pre-mount flows still render correctly.
    */
   readonly cellToScreen?: (row: number, col: number) => Rect;
+  /**
+   * Optional element rendered as the last child of the scroll container,
+   * pinned to the bottom when blocks don't fill the viewport (real-terminal
+   * feel — input follows the last prompt).
+   */
+  readonly footer?: ReactNode;
 }
 
 /** If the user is within this many pixels of the bottom, we treat them as
@@ -183,7 +188,7 @@ function BlockRowChrome(props: {
 }
 
 export function BlockList(props: BlockListProps) {
-  const { onRerun, onCopy, onCompare, sessionId, cellToScreen = defaultCellToScreen } = props;
+  const { onRerun, onCopy, onCompare, sessionId, cellToScreen = defaultCellToScreen, footer } = props;
   // Both hooks run on every render regardless of the `sessionId` prop — React's
   // rules-of-hooks forbid conditional calls. The unused return value is cheap
   // (shallow-compared, one array reference).
@@ -231,6 +236,9 @@ export function BlockList(props: BlockListProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const prevCountRef = useRef(ids.length);
   const [scrolledUp, setScrolledUp] = useState(false);
+  // Ref mirror so the ResizeObserver callback (closure, not re-registered on
+  // every scrolledUp change) can read the current value without stale closure.
+  const scrolledUpRef = useRef(false);
 
   const estimateSize = useCallback(
     (rowIndex: number) => {
@@ -251,25 +259,22 @@ export function BlockList(props: BlockListProps) {
     getItemKey: (index) => index,
   });
 
-  // Autoscroll — run AFTER render so the virtualizer has the new total size.
+  // Autoscroll — follow the latest output unless the user has explicitly
+  // scrolled up. `scrolledUp` is the authoritative signal: false = user is at
+  // (or near) the bottom and expects live-follow; true = user scrolled away.
+  // New-block creation always pins regardless (e.g. Enter submits new command).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) {
       prevCountRef.current = ids.length;
       return;
     }
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const pin = shouldAutoscroll({
-      prevCount: prevCountRef.current,
-      nextCount: ids.length,
-      distanceFromBottom: distance,
-      threshold: AUTO_SCROLL_THRESHOLD_PX,
-    });
+    const isNewBlock = ids.length > prevCountRef.current;
     prevCountRef.current = ids.length;
-    if (pin && totalRows > 0) {
-      virtualizer.scrollToIndex(totalRows - 1, { align: 'end' });
+    if (isNewBlock || !scrolledUp) {
+      el.scrollTop = el.scrollHeight;
     }
-  }, [ids.length, totalRows, virtualizer]);
+  }, [ids.length, totalRows, scrolledUp, virtualizer]);
 
   // Track whether the user has scrolled up away from the bottom edge.
   useEffect(() => {
@@ -277,7 +282,9 @@ export function BlockList(props: BlockListProps) {
     if (!el) return;
     const onScroll = () => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setScrolledUp(dist > AUTO_SCROLL_THRESHOLD_PX);
+      const up = dist > AUTO_SCROLL_THRESHOLD_PX;
+      scrolledUpRef.current = up;
+      setScrolledUp(up);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -302,9 +309,8 @@ export function BlockList(props: BlockListProps) {
       if (rafId !== 0) return;
       rafId = requestAnimationFrame(() => {
         rafId = 0;
-        const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distance <= AUTO_SCROLL_THRESHOLD_PX && totalRows > 0) {
-          virtualizer.scrollToIndex(totalRows - 1, { align: 'end' });
+        if (!scrolledUpRef.current) {
+          el.scrollTop = el.scrollHeight;
         }
       });
     };
@@ -322,20 +328,32 @@ export function BlockList(props: BlockListProps) {
   // for the matched/total count display.
   const displayIds = useFilteredBlockIds(ids);
 
+  // Click on non-interactive area → refocus composer textarea.
+  const handleScrollClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as Element;
+    if (target.closest('button, a, input, textarea, select, [role="button"], [role="option"], [contenteditable]')) return;
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    (scrollRef.current?.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]'))?.focus();
+  }, []);
+
   if (ids.length === 0) {
     return (
-      <div
-        ref={scrollRef}
-        className={styles.scroll}
-        data-testid="block-list-empty"
-        aria-live="polite"
-        aria-relevant="additions"
-        aria-label={t('blockList.ariaLabel')}
-      >
-        <div className={styles.empty}>
-          <div>{t('blockList.empty')}</div>
-          <div className={styles.emptyHint}>
-            Press <Kbd>Enter</Kbd> to submit.
+      <div className={styles.scrollWrap}>
+        <div
+          ref={scrollRef}
+          className={styles.scroll}
+          data-testid="block-list-empty"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label={t('blockList.ariaLabel')}
+          onClick={handleScrollClick}
+        >
+          <div className={styles.emptyInner}>
+            <div className={styles.empty}>
+              <div>{t('blockList.empty')}</div>
+            </div>
+            {footer ? <div className={styles.footer}>{footer}</div> : null}
           </div>
         </div>
       </div>
@@ -366,6 +384,7 @@ export function BlockList(props: BlockListProps) {
           aria-live="polite"
           aria-relevant="additions"
           aria-label={t('blockList.ariaLabel')}
+          onClick={handleScrollClick}
         >
           <div className={styles.inner} data-testid="block-list-inner">
             {displayIds.map((id) => (
@@ -378,6 +397,7 @@ export function BlockList(props: BlockListProps) {
               />
             ))}
           </div>
+          {footer ? <div className={styles.footer}>{footer}</div> : null}
         </div>
         {scrolledUp && (
           <button

@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 10,
+  "description": "tmux new + split-horizontal + detach: DECSET 1049h → upper pane paint + status bar (SGR 7) → C-b \" split paint (two panes visible) → DECSET 1049l → main buffer restored.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

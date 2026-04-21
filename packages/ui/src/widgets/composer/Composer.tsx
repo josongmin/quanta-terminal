@@ -72,7 +72,10 @@ import {
   useAutosuggest,
   useHistoryEntries,
 } from '../../features/autosuggest/index.js';
+import { usePathCompletion } from '../../features/path-completion/index.js';
 import { useHighlighted } from '../../features/shell-highlight/index.js';
+import { CompletionPopup } from '../completion-popup/index.js';
+import { useSessionStore } from '../../entities/session/index.js';
 import styles from './composer.module.css';
 
 const log = createLogger('composer');
@@ -182,6 +185,16 @@ export function Composer(props: ComposerProps) {
   const [composing, setComposing] = useState(false);
 
   const passwordMode = usePasswordPromptActive();
+  const cwd = useSessionStore((s) => s.cwd);
+
+  // Path completion (Warp-style dropdown).
+  const pathCompletion = usePathCompletion({
+    value,
+    caret,
+    cwd: cwd || '',
+    disabled: passwordMode || value.includes('\n'),
+  });
+  const pathPopupVisible = pathCompletion.items.length > 0;
 
   // Inline autosuggest: fish-shell-style greyed-out tail. Gated off in
   // password mode (security), multi-line input, when the caret isn't at the
@@ -411,6 +424,24 @@ export function Composer(props: ComposerProps) {
     setComposing(false);
   }, []);
 
+  /** Accept the active path completion item. Returns the new value. */
+  const acceptPathCompletion = useCallback((idx?: number): boolean => {
+    const items = pathCompletion.items;
+    const i = idx ?? pathCompletion.activeIndex;
+    const item = items[i];
+    if (!item) return false;
+    const next = pathCompletion.accept(item);
+    setValue(next);
+    const newCaret = (pathCompletion.token?.start ?? 0) + item.insert.length;
+    queueMicrotask(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      try { el.setSelectionRange(newCaret, newCaret); } catch { /* jsdom */ }
+      setCaret(newCaret);
+    });
+    return true;
+  }, [pathCompletion]);
+
   const handleKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -419,42 +450,43 @@ export function Composer(props: ComposerProps) {
         if (composingRef.current || e.nativeEvent.isComposing) {
           return;
         }
+        // If path completion popup is open, Enter accepts the active item.
+        if (pathPopupVisible) {
+          e.preventDefault();
+          acceptPathCompletion();
+          return;
+        }
         e.preventDefault();
         void handleSubmit();
         return;
       }
-      // Tab accepts the autosuggest if one is visible. We do this BEFORE the
-      // ArrowUp / Escape branches so a suggestion's presence wins over any
-      // other Tab-focus traversal (the textarea is the only tab-stop in the
-      // composer row anyway).
-      if (e.key === 'Tab' && !e.shiftKey && autosuggest.suggestion !== null) {
-        e.preventDefault();
-        acceptAutosuggest();
+      // Tab: path completion takes priority, then history autosuggest.
+      if (e.key === 'Tab' && !e.shiftKey) {
+        if (pathPopupVisible) {
+          e.preventDefault();
+          acceptPathCompletion();
+          return;
+        }
+        if (autosuggest.suggestion !== null) {
+          e.preventDefault();
+          acceptAutosuggest();
+          return;
+        }
         return;
       }
-      // ArrowRight at end-of-buffer also accepts — the cursor is already at
-      // the tail, so "moving right" means "swallow the ghost tail into
-      // typed text". Mid-line ArrowRight falls through to the native caret
-      // move so selection behaviour is unchanged.
-      if (
-        e.key === 'ArrowRight' &&
-        !e.shiftKey &&
-        autosuggest.suggestion !== null &&
-        e.currentTarget.selectionStart === e.currentTarget.value.length &&
-        e.currentTarget.selectionEnd === e.currentTarget.value.length
-      ) {
-        e.preventDefault();
-        acceptAutosuggest();
-        return;
-      }
+      // ArrowUp: path completion navigation → then history.
       if (e.key === 'ArrowUp' && !e.shiftKey) {
+        if (pathPopupVisible) {
+          e.preventDefault();
+          pathCompletion.setActiveIndex(Math.max(0, pathCompletion.activeIndex - 1));
+          return;
+        }
         if (passwordMode) return;
         const el = e.currentTarget;
         const upToCursor = el.value.slice(0, el.selectionStart);
         if (!upToCursor.includes('\n')) {
           e.preventDefault();
           if (historyOpen) {
-            // Navigate up the history list (index 0 = most recent).
             setHistoryIndex((i) => Math.max(0, i - 1));
           } else {
             setHistoryOpen(true);
@@ -463,9 +495,32 @@ export function Composer(props: ComposerProps) {
         }
         return;
       }
-      if (e.key === 'ArrowDown' && !e.shiftKey && historyOpen) {
+      // ArrowDown: path completion navigation → then history.
+      if (e.key === 'ArrowDown' && !e.shiftKey) {
+        if (pathPopupVisible) {
+          e.preventDefault();
+          pathCompletion.setActiveIndex(
+            Math.min(pathCompletion.items.length - 1, pathCompletion.activeIndex + 1),
+          );
+          return;
+        }
+        if (historyOpen) {
+          e.preventDefault();
+          setHistoryIndex((i) => Math.min(historyCommands.length - 1, i + 1));
+          return;
+        }
+      }
+      // ArrowRight at end-of-buffer accepts history autosuggest.
+      if (
+        e.key === 'ArrowRight' &&
+        !e.shiftKey &&
+        !pathPopupVisible &&
+        autosuggest.suggestion !== null &&
+        e.currentTarget.selectionStart === e.currentTarget.value.length &&
+        e.currentTarget.selectionEnd === e.currentTarget.value.length
+      ) {
         e.preventDefault();
-        setHistoryIndex((i) => Math.min(historyCommands.length - 1, i + 1));
+        acceptAutosuggest();
         return;
       }
       if (e.key === 'Enter' && historyOpen) {
@@ -485,6 +540,11 @@ export function Composer(props: ComposerProps) {
         return;
       }
       if (e.key === 'Escape') {
+        if (pathPopupVisible) {
+          e.preventDefault();
+          pathCompletion.dismiss();
+          return;
+        }
         if (autosuggest.suggestion !== null && !autosuggestDismissed) {
           e.preventDefault();
           setAutosuggestDismissed(true);
@@ -499,6 +559,7 @@ export function Composer(props: ComposerProps) {
     },
     [
       acceptAutosuggest,
+      acceptPathCompletion,
       autosuggest.suggestion,
       autosuggestDismissed,
       handleSubmit,
@@ -506,6 +567,8 @@ export function Composer(props: ComposerProps) {
       historyIndex,
       historyOpen,
       passwordMode,
+      pathCompletion,
+      pathPopupVisible,
     ],
   );
 
@@ -533,6 +596,14 @@ export function Composer(props: ComposerProps) {
     return out;
   }, [passwordMode, value]);
 
+  const namePrefix = pathCompletion.token
+    ? (() => {
+        const t = pathCompletion.token.text;
+        const slash = t.lastIndexOf('/');
+        return slash >= 0 ? t.slice(slash + 1) : t;
+      })()
+    : '';
+
   return (
     <div
       className={cx(styles.wrap, focused && styles.focused)}
@@ -540,6 +611,18 @@ export function Composer(props: ComposerProps) {
       data-password-mode={passwordMode ? 'true' : 'false'}
       data-testid="composer"
     >
+      {pathPopupVisible ? (
+        <CompletionPopup
+          items={pathCompletion.items}
+          activeIndex={pathCompletion.activeIndex}
+          namePrefix={namePrefix}
+          onSelect={(item) => {
+            acceptPathCompletion(pathCompletion.items.indexOf(item));
+            queueMicrotask(() => textareaRef.current?.focus());
+          }}
+          onSetActive={pathCompletion.setActiveIndex}
+        />
+      ) : null}
       {historyOpen ? (
         <div
           className={styles.history}
@@ -589,7 +672,7 @@ export function Composer(props: ComposerProps) {
       ) : null}
       <div className={styles.row}>
         <span className={styles.prompt} aria-hidden>
-          &gt;
+          %
         </span>
         <label className={styles.srOnly} htmlFor="quanta-composer-input">
           {t('composer.inputLabel')}
@@ -641,7 +724,7 @@ export function Composer(props: ComposerProps) {
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          placeholder={t('composer.placeholder')}
+          placeholder=""
           onChange={(e) => {
             // In password mode, the textarea's `value` we set is the masked
             // version (bullets). A native `onChange` reports the masked string
@@ -725,7 +808,6 @@ export function Composer(props: ComposerProps) {
                 ? 'quanta-composer-password-hint'
                 : undefined
           }
-          disabled={busy}
           data-testid="composer-input"
         />
         </div>

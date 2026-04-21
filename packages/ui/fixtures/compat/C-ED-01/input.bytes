@@ -1,0 +1,2 @@
+$ vim /tmp/sample.txt
+[?1049h[2J[H[2;1H~[3;1H~[4;1H~[5;1H~[6;1H[7m-- INSERT --[0m[1;1Hhello world[?1049l$ 

@@ -41,7 +41,6 @@ import {
   type MouseEvent,
   type RefObject,
 } from 'react';
-import { Badge } from '../../shared/ui/badge/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { Tooltip } from '../../shared/ui/tooltip/index.js';
 import { Spinner } from '../../shared/ui/spinner/index.js';
@@ -94,7 +93,6 @@ import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import { showToast } from '../../shared/ui/toast/index.js';
 import { t } from '../../shared/i18n/index.js';
 import { BlockHoverCard } from './BlockHoverCard.js';
-import { BlockTagStrip } from './BlockTagStrip.js';
 import { CommandCorrectionHint } from '../../features/command-correction/index.js';
 import { AiExplainPanel, useExplainShortcut } from '../../features/ai-explain/index.js';
 import { useHighlighted } from '../../features/shell-highlight/index.js';
@@ -512,13 +510,6 @@ function BlockCardImpl(props: BlockCardProps) {
 
   const exitAttr = header.exitCode === null ? undefined : header.exitCode === 0 ? '0' : 'nonzero';
 
-  // Tag-editor open signal — monotonic counter bumped by the `T` shortcut
-  // (wired via `useBlockTagEditorShortcut` below). BlockTagStrip opens its
-  // popover whenever this increments; we start at 0 so the initial render
-  // stays closed.
-  const [tagOpenSignal, setTagOpenSignal] = useState(0);
-  useBlockTagEditorShortcut(articleRef, () => setTagOpenSignal((v) => v + 1));
-
   // "Explain this error" shortcut — `E` while this card has focus fires a
   // window event the `<AiExplainPanel />` below listens for. The hook
   // gates on the exit code / feature flag internally, so binding it
@@ -532,12 +523,14 @@ function BlockCardImpl(props: BlockCardProps) {
         styles.card,
         isOwningAltScreenBlock ? styles.altScreenCollapsed : undefined,
         altScreen.crashed && isOwningAltScreenBlock ? styles.altScreenCrashed : undefined,
+        header.command === '' ? styles.preamble : undefined,
       )}
       data-testid={`block-card-${header.id}`}
       data-status={header.status}
       data-collapsed={header.collapsed ? 'true' : 'false'}
       data-alt-screen={isOwningAltScreenBlock ? 'true' : 'false'}
       data-alt-depth={String(altScreen.depth)}
+      data-preamble={header.command === '' ? 'true' : 'false'}
     >
       <span className={styles.stripe} aria-hidden />
       <div
@@ -554,15 +547,11 @@ function BlockCardImpl(props: BlockCardProps) {
         onFocus={handleHeaderEnter}
         onBlur={handleHeaderLeave}
       >
-        {header.status === 'running' ? (
-          <Spinner size="sm" label="Running" />
-        ) : (
-          <span
-            className={styles.dot}
-            aria-hidden
-            {...(exitAttr !== undefined ? { 'data-exit': exitAttr } : {})}
-          />
-        )}
+        <span
+          className={styles.dot}
+          aria-hidden
+          {...(exitAttr !== undefined ? { 'data-exit': exitAttr } : {})}
+        />
         <Tooltip content={header.command}>
           <span className={styles.command}>
             {commandSpans.length > 0
@@ -575,24 +564,25 @@ function BlockCardImpl(props: BlockCardProps) {
           </span>
         </Tooltip>
         <span className={styles.meta}>
+          {header.cwd && (
+            <span
+              className={styles.cwd}
+              aria-label={`Working directory ${header.cwd}`}
+            >
+              {header.cwd}
+            </span>
+          )}
           <span className={styles.duration} aria-label="Duration">
-            {duration}
+            ({duration})
           </span>
-          {header.exitCode !== null && (
+          {header.exitCode !== null && header.exitCode !== 0 && (
             <span
               className={styles.exit}
-              data-nonzero={header.exitCode !== 0 ? 'true' : 'false'}
+              data-nonzero="true"
               aria-label={`Exit code ${header.exitCode}`}
             >
               exit {header.exitCode}
             </span>
-          )}
-          {header.cwd && (
-            <Badge
-              label={header.cwd}
-              tone="neutral"
-              srDescription={`Working directory ${header.cwd}`}
-            />
           )}
         </span>
         <span
@@ -753,9 +743,6 @@ function BlockCardImpl(props: BlockCardProps) {
         </span>
       </div>
 
-      {!isOwningAltScreenBlock && (
-        <BlockTagStrip blockId={header.id} tags={header.tags} openSignal={tagOpenSignal} />
-      )}
 
       <BlockBody
         blockId={header.id}

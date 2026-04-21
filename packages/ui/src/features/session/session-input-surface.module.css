@@ -1,0 +1,30 @@
+/**
+ * SessionInputSurface — invisible but focusable DOM sink for keyboard,
+ * pointer, wheel, paste, focus, and IME events whenever a session is
+ * active. Always mounted (Epic β) — no alt-screen gate.
+ *
+ * The surface overlays the terminal chrome full-bleed so pointer + wheel
+ * targets map 1:1 onto the visual cell grid. Transparent background keeps
+ * the TerminalCanvas / BlockList painted below fully visible. Pointer-
+ * events are allowed so clicks re-focus the surface and mouse encoders can
+ * translate into CSI mouse-tracking bytes when an app requests them.
+ *
+ * `tabindex=0` with `outline: none` lets the element receive focus without
+ * drawing a focus ring over the terminal surface — the app cursor (the
+ * blinking block inside vim/htop/etc.) is the user's focus indicator in
+ * alt-screen, and the composer's glow serves that role in main-screen.
+ */
+.sessionInputSurface {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: transparent;
+  outline: none;
+  appearance: none;
+  cursor: text;
+}
+
+.sessionInputSurface:focus,
+.sessionInputSurface:focus-visible {
+  outline: none;
+}

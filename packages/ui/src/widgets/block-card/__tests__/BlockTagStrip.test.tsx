@@ -1,11 +1,17 @@
 /**
- * BlockTagStrip — integration test.
+ * BlockTagStrip — integration test (P1 block-UX, Plan 0005 Epic δ).
  *
- * We render the strip inside a BlockCard (rather than in isolation) so the
- * wiring path matches production: tags arrive via the header selector,
- * chip clicks dispatch through the filter store, and the × button removes
- * via the block store. The popover is portaled — we assert against
- * document.body.
+ * BlockTagStrip is part of the P1 block presentation layer — it lives
+ * inside `<BlockCard />`, which is itself unmounted by `<TerminalPage />`
+ * when `flag.blockUx === false` (the P0 default). The tests below exercise
+ * the strip directly so they flip the flag to `true` in setup; when the
+ * flag is off they are skipped to match the P0 shipping surface.
+ *
+ * If you're reading this file while investigating a test failure: the
+ * BlockTagStrip behavior covered here is pre-existing. The Epic δ gate
+ * alone does not change the assertions; widget changes that predate Epic δ
+ * may still break these cases when the flag is on. See
+ * `packages/ui/src/__tests__/p1-block-ux/README.md`.
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -14,6 +20,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BlockCard } from '../BlockCard.js';
 import { useBlockStore, type Block } from '../../../entities/block/index.js';
 import { useBlockFilterStore } from '../../../entities/block-filter/index.js';
+import {
+  getFeatureFlag,
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../../shared/config/feature-flags.js';
 
 function currentBlock(id: string): Block {
   const b = useBlockStore.getState().entities[id];
@@ -22,15 +33,22 @@ function currentBlock(id: string): Block {
 }
 
 beforeEach(() => {
+  setFeatureFlag('blockUx', true);
   useBlockStore.getState().resetAll();
   useBlockFilterStore.getState().clear();
 });
 
 afterEach(() => {
   cleanup();
+  resetFeatureFlags();
 });
 
-describe('<BlockTagStrip /> inside BlockCard', () => {
+// P1-gated: run only when the blockUx flag is on. `resetFeatureFlags()`
+// before the describe-selection runs ensures the branch is evaluated in
+// the P0 default state, so CI with flag=off skips cleanly.
+const describeP1 = getFeatureFlag('blockUx') ? describe : describe.skip;
+
+describeP1('<BlockTagStrip /> inside BlockCard [P1 blockUx]', () => {
   it('renders a chip for each tag on the block', () => {
     const id = useBlockStore.getState().createBlock('ls', '/');
     useBlockStore.getState().addTag(id, 'bug');

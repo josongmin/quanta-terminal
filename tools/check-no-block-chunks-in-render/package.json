@@ -1,0 +1,8 @@
+{
+  "name": "check-no-block-chunks-in-render",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": "./index.mjs",
+  "description": "Enforces post-P0 migration: outputChunks only lives in entities/block and P1 widgets."
+}

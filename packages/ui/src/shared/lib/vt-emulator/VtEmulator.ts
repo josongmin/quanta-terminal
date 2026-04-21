@@ -43,6 +43,7 @@
 import type { AnsiColor } from '../../ui/ansi-output/types.js';
 import { DefaultClassifier } from '../width/classifier.js';
 import type {
+  BufferKind,
   CellSpan,
   CursorState,
   GridDeltaPayload,
@@ -50,6 +51,7 @@ import type {
   GridPayload,
   GridSnapshotPayload,
   CursorMovedPayload,
+  ModeChangedPayload,
   RowDelta,
   TerminalModeState,
 } from '../grid-mirror/types.js';
@@ -57,11 +59,14 @@ import {
   blankCell,
   blankCellWithSgr,
   defaultSgr,
+  type Buffer,
   type InternalCell,
   type InternalCursor,
   type InternalSavedState,
   type InternalScrollRegion,
   type InternalSgrStyle,
+  type Scrollback,
+  type ScrollbackRow,
 } from './types.js';
 
 /**
@@ -126,6 +131,17 @@ export interface VtEmulatorOptions {
    * audible beep.
    */
   readonly onBell?: () => void;
+  /**
+   * Maximum rows retained in the main-buffer scrollback ring. When a row
+   * falls off the top of the main scroll region (LF / IND / NEL / autowrap
+   * at bottom), it is cloned into the ring before being cleared.
+   *
+   * Defaults to 10 000 (a familiar xterm-family ceiling; see note in
+   * VtEmulator's `DEFAULT_SCROLLBACK_ROWS`). Set to `0` to disable
+   * scrollback entirely — rows will be discarded as they were before α3.
+   * Alt buffer never contributes to scrollback regardless of this value.
+   */
+  readonly scrollbackRows?: number;
 }
 
 /** 8-bit-per-channel RGB triple. */
@@ -142,6 +158,14 @@ type FsmState =
   | 'Osc'
   | 'IgnoreUntilSt';
 
+/**
+ * In-flight record of a mode flip observed this feed. We only track the
+ * fields downstream actually consumes — `alt_screen` is the one that
+ * matters for α2. Extending this to `bracketed_paste` / `mouse_tracking`
+ * etc. is α-future work, gated on the engine emitting them too.
+ */
+type ModeChangeEntry = { readonly mode: 'alt_screen'; readonly value: boolean };
+
 const ESC = 0x1b;
 const BEL = 0x07;
 const BS = 0x08;
@@ -153,6 +177,15 @@ const CR = 0x0d;
 
 const DEFAULT_ROWS = 24;
 const DEFAULT_COLS = 80;
+/**
+ * Default scrollback cap — mirrors xterm's `saveLines: 10000` default, which
+ * in practice costs ~17 MB for 200-col wide rows of `InternalCell` at typical
+ * V8 shapes (~8-9 bytes per cell field × 12 fields). See scrollback.test.ts
+ * for the sanity-check math. Hosts that need more (e.g. CI log viewers) can
+ * raise via `VtEmulatorOptions.scrollbackRows`; hosts that need tighter
+ * memory (embedded / tiny TUI demos) can pass `0` to disable.
+ */
+const DEFAULT_SCROLLBACK_ROWS = 10_000;
 
 export class VtEmulator {
   private readonly sessionId: string;
@@ -191,10 +224,50 @@ export class VtEmulator {
   private rows_: number;
   private cols_: number;
 
-  /** 2D cell grid. `grid[row][col]` is the canonical cell. */
+  /**
+   * 2D cell grid of the *active* buffer. `grid[row][col]` is the canonical
+   * cell. Always equal to `activeBuffer().grid`; kept as a direct field so
+   * hot-path write ops don't indirect through the active-kind switch.
+   */
   private grid: InternalCell[][] = [];
-  /** Per-row revision counter (wraps at 2^32 — same as GridMirror wire). */
+  /**
+   * Per-row revision counter for the active buffer (wraps at 2^32 — same as
+   * GridMirror wire). Swapped in/out with `grid` when we flip alt/main.
+   * Each buffer owns its revisions independently so main's revisions don't
+   * advance while alt is being scribbled on (and vice-versa).
+   */
   private rowRevisions: Uint32Array = new Uint32Array(0);
+
+  /**
+   * Buffer currently holding main screen contents. When `active === 'main'`
+   * this *is* `{ grid, rowRevisions }` (same object refs). When alt is
+   * active, it stashes the last-seen main state.
+   */
+  private mainBuffer: Buffer = { grid: [], rowRevisions: new Uint32Array(0) };
+  /** Alt-screen buffer — dormant when main is active, live when alt is. */
+  private altBuffer: Buffer = { grid: [], rowRevisions: new Uint32Array(0) };
+  /** Which buffer is currently receiving writes. */
+  private active: BufferKind = 'main';
+
+  /**
+   * Bounded scrollback ring for the main buffer. Rows are appended when
+   * they fall off the top of the scroll region while `active === 'main'`.
+   * Alt buffer scroll-offs bypass this ring entirely (xterm contract).
+   *
+   * Stored as a mutable internal state that we expose through `getScrollback()`
+   * as a `Readonly<>` projection. `maxRows` is frozen at construction (it's
+   * `readonly` on the interface); the mutable head/tail machinery lives in
+   * `rows`, `baseRowId`, `evictedCount`, `pinBlockedEvictions`.
+   */
+  private mainScrollback!: Scrollback;
+
+  /**
+   * 1048/1049 cursor-save slot. Per xterm `ctlseqs`, 1048 keeps a SEPARATE
+   * save slot from DECSC (ESC 7) so apps can nest the two without either
+   * stomping the other. Our `savedState` handles DECSC only; this handles
+   * 1048 / the 1049 save-phase exclusively.
+   */
+  private savedState1048: InternalSavedState | null = null;
 
   private cursor: InternalCursor = {
     row: 0,
@@ -240,6 +313,16 @@ export class VtEmulator {
   /** Rows touched during the current feed() batch. */
   private dirtyRows = new Set<number>();
 
+  /**
+   * Mode transitions discovered during the current feed() batch, emitted
+   * BEFORE `grid_delta` / `cursor_moved` so downstream consumers know which
+   * buffer the subsequent rows belong to. RFC 0001 invariant: the mode
+   * flip must precede any row delta sourced from the new active buffer.
+   * We process mode changes inline (they flip `this.grid` / `this.active`)
+   * and defer only the *envelope* emission until `emitDirty()` time.
+   */
+  private pendingModeChanges: ModeChangeEntry[] = [];
+
   constructor(opts: VtEmulatorOptions) {
     this.sessionId = opts.sessionId ?? 'tui-local';
     this.onEnvelope = opts.onEnvelope;
@@ -251,11 +334,52 @@ export class VtEmulator {
     this.onBell = opts.onBell;
     this.rows_ = Math.max(1, opts.rows ?? DEFAULT_ROWS);
     this.cols_ = Math.max(1, opts.cols ?? DEFAULT_COLS);
+    // Clamp negative / non-integer scrollback settings to a sane floor;
+    // 0 is a valid "disabled" value and preserved as-is.
+    const rawCap = opts.scrollbackRows ?? DEFAULT_SCROLLBACK_ROWS;
+    const cap = Number.isFinite(rawCap) ? Math.max(0, Math.floor(rawCap)) : DEFAULT_SCROLLBACK_ROWS;
+    this.mainScrollback = {
+      maxRows: cap,
+      rows: [],
+      baseRowId: 0,
+      evictedCount: 0,
+      pinBlockedEvictions: 0,
+    };
     this.allocateGrid(this.rows_, this.cols_);
+    // Both buffers are shaped the same at construction; main starts active.
+    // The alt buffer stays dormant (blank) until the first 47/1047/1049.
+    this.mainBuffer = { grid: this.grid, rowRevisions: this.rowRevisions };
+    this.altBuffer = {
+      grid: VtEmulator.makeBlankGrid(this.rows_, this.cols_),
+      rowRevisions: new Uint32Array(this.rows_),
+    };
     this.scrollRegion = { top: 0, bottom: this.rows_ - 1 };
     this.cursorAtFeedStart = { ...this.cursor };
     // Emit initial snapshot so downstream mirror is seeded.
     this.emitSnapshot();
+  }
+
+  /**
+   * Read-only projection of the main-buffer scrollback ring, intended for
+   * tests and future renderers. The returned object is the live ring — the
+   * `readonly` annotations prevent typed mutation, but callers should treat
+   * it as a snapshot (stale after the next `feed()` / `resize()`).
+   */
+  getScrollback(): Readonly<Scrollback> {
+    return this.mainScrollback;
+  }
+
+  /**
+   * @internal test-only
+   *
+   * Pins the scrollback row at `index` so subsequent evictions pause when
+   * the head pointer reaches it. Exposed purely so the α3 test suite can
+   * exercise the pause-eviction policy without depending on the (not-yet-
+   * implemented) P1 block engine that will set `pinned` in production.
+   */
+  _debugPinScrollbackRow(index: number): void {
+    const row = this.mainScrollback.rows[index];
+    if (row !== undefined) row.pinned = true;
   }
 
   /** Public dimensions getter — handy for tests. */
@@ -341,19 +465,37 @@ export class VtEmulator {
     }
     const oldRows = this.rows_;
     const oldCols = this.cols_;
-    const oldGrid = this.grid;
+    // We'll reflow the main buffer (copy cells into the new grid) but
+    // *clear* the alt buffer — that matches xterm: apps on alt are
+    // expected to redraw on SIGWINCH, and keeping stale alt cells at new
+    // dimensions would leak garbage on re-entry.
+    const oldMainGrid = this.mainBuffer.grid;
     this.rows_ = newRows;
     this.cols_ = newCols;
-    this.allocateGrid(newRows, newCols);
+
+    // Build fresh grids for both buffers at the new dimensions.
+    const newMainGrid = VtEmulator.makeBlankGrid(newRows, newCols);
     const copyRows = Math.min(oldRows, newRows);
     const copyCols = Math.min(oldCols, newCols);
     for (let r = 0; r < copyRows; r += 1) {
-      const src = oldGrid[r]!;
-      const dst = this.grid[r]!;
+      const src = oldMainGrid[r]!;
+      const dst = newMainGrid[r]!;
       for (let c = 0; c < copyCols; c += 1) {
         dst[c] = { ...(src[c] ?? blankCell()) };
       }
     }
+    this.mainBuffer = {
+      grid: newMainGrid,
+      rowRevisions: new Uint32Array(newRows),
+    };
+    this.altBuffer = {
+      grid: VtEmulator.makeBlankGrid(newRows, newCols),
+      rowRevisions: new Uint32Array(newRows),
+    };
+    const activeBuffer = this.active === 'main' ? this.mainBuffer : this.altBuffer;
+    this.grid = activeBuffer.grid;
+    this.rowRevisions = activeBuffer.rowRevisions;
+
     // Cursor clamp.
     this.cursor.row = Math.min(this.cursor.row, newRows - 1);
     this.cursor.col = Math.min(this.cursor.col, newCols - 1);
@@ -379,6 +521,22 @@ export class VtEmulator {
       pendingWrap: false,
     };
     this.allocateGrid(this.rows_, this.cols_);
+    // RIS blanks BOTH buffers and forces main active — otherwise a
+    // post-reset app would still be writing into a dormant alt screen.
+    this.mainBuffer = { grid: this.grid, rowRevisions: this.rowRevisions };
+    this.altBuffer = {
+      grid: VtEmulator.makeBlankGrid(this.rows_, this.cols_),
+      rowRevisions: new Uint32Array(this.rows_),
+    };
+    this.active = 'main';
+    // Scrollback is cleared on RIS — a hard reset wipes history the same
+    // way it wipes the grid. `maxRows` is preserved so downstream
+    // configuration (tiny-shell tests, CI buffers) survives the reset.
+    this.mainScrollback.rows.length = 0;
+    this.mainScrollback.baseRowId = 0;
+    this.mainScrollback.evictedCount = 0;
+    this.mainScrollback.pinBlockedEvictions = 0;
+    this.savedState1048 = null;
     this.scrollRegion = { top: 0, bottom: this.rows_ - 1 };
     this.savedState = null;
     this.autoWrap = true;
@@ -389,6 +547,7 @@ export class VtEmulator {
     this.oscEscPending = false;
     this.cursorAtFeedStart = { ...this.cursor };
     this.dirtyRows.clear();
+    this.pendingModeChanges.length = 0;
     const hadKittyFlags = this.currentKittyFlags() !== 0;
     this.kittyFlagStack = [0];
     if (hadKittyFlags) this.onKittyKeyboardFlagsChanged?.(0);
@@ -1318,6 +1477,18 @@ export class VtEmulator {
   private scrollUpRegion(n: number): void {
     const { top, bottom } = this.scrollRegion;
     const count = Math.max(1, Math.min(n, bottom - top + 1));
+    // Capture rows about to fall off the top into the main-buffer scrollback
+    // ring — but ONLY when the scroll region starts at row 0 AND we're on
+    // the main buffer. A scroll region pinned to a sub-rectangle (e.g.
+    // `less -N`, which sets DECSTBM to protect a status line) is an
+    // app-managed working region; those rows are not user history and
+    // don't belong in scrollback. Alt buffer scroll-offs never capture.
+    if (this.active === 'main' && top === 0 && this.mainScrollback.maxRows > 0) {
+      for (let r = top; r < top + count; r += 1) {
+        const src = this.grid[r];
+        if (src !== undefined) this.captureToScrollback(src);
+      }
+    }
     for (let r = top; r + count <= bottom; r += 1) {
       const src = this.grid[r + count];
       if (src !== undefined) this.grid[r] = src.map((c) => ({ ...c }));
@@ -1326,6 +1497,51 @@ export class VtEmulator {
     for (let r = bottom - count + 1; r <= bottom; r += 1) {
       this.grid[r] = this.blankRow();
       this.markDirty(r);
+    }
+  }
+
+  /**
+   * Clone `cells` into the main-buffer scrollback ring, then enforce the
+   * bounded-cap policy.
+   *
+   * Eviction walks from index 0 (oldest). If the head row is `pinned`,
+   * eviction PAUSES — the ring is allowed to grow past `maxRows` until an
+   * unpinned row reaches the head. This preserves the invariant that a P1
+   * block whose start row has been pinned can always look up that row by
+   * id, regardless of how much traffic has scrolled past. Once the block
+   * completes and the pin is released, the next capture will flush the
+   * accumulated backlog down to the cap.
+   *
+   * `pinBlockedEvictions` counts eviction attempts that paused — useful as
+   * a canary in tests and, later, as a telemetry signal if users report
+   * runaway memory during very-long-running block executions.
+   */
+  private captureToScrollback(cells: readonly InternalCell[]): void {
+    const ring = this.mainScrollback;
+    if (ring.maxRows === 0) return;
+    const clonedCells: InternalCell[] = new Array(cells.length);
+    for (let i = 0; i < cells.length; i += 1) {
+      // Spread keeps the plain-object shape so V8 can keep the hidden-class
+      // stable across scrollback rows — faster than a hand-rolled copier
+      // at this call frequency (≤ 1 row per LF).
+      clonedCells[i] = { ...cells[i]! };
+    }
+    const row: ScrollbackRow = { cells: clonedCells };
+    ring.rows.push(row);
+    // Evict down to cap. If the head is pinned, stop — we'll try again on
+    // the next capture. Unpinned rows at the head shift off normally and
+    // bump both `evictedCount` (diagnostic) and `baseRowId` (so external
+    // row-id refs stay monotonic).
+    while (ring.rows.length > ring.maxRows) {
+      const head = ring.rows[0];
+      if (head === undefined) break;
+      if (head.pinned === true) {
+        ring.pinBlockedEvictions += 1;
+        break;
+      }
+      ring.rows.shift();
+      ring.evictedCount += 1;
+      ring.baseRowId += 1;
     }
   }
 
@@ -1410,18 +1626,175 @@ export class VtEmulator {
         case 25:
           this.cursor.visible = enable;
           break;
-        case 1049:
-        case 1047:
         case 47:
-          // Alt-screen flip — our scope deliberately doesn't model it. The
-          // orchestrator (e.g. AnsiParser.onMode or the TUI router) handles
-          // the screen swap. Here we just swallow.
+          // DECSET 47 (h) / DECRESET 47 (l): legacy alt-buffer toggle.
+          // Does NOT save the cursor and does NOT clear the buffer on
+          // entry — apps that used `47` managed cursor saves themselves
+          // via DECSC. This is the least-common-denominator form.
+          this.swapAlt(enable, /*clearOnEnter=*/ false);
+          break;
+        case 1047:
+          // DECSET 1047 (h): enter alt, CLEAR alt on entry. DECRESET 1047
+          // (l): switch back to main. xterm quirk — when exiting 1047 it
+          // also ED(2)-erases the alt buffer so the next re-entry starts
+          // clean without the app having to ask. We mirror that quirk by
+          // clearing alt on *both* entry and transition back when already
+          // on alt.
+          if (enable) {
+            this.swapAlt(true, /*clearOnEnter=*/ true);
+          } else {
+            if (this.active === 'alt') this.clearActiveGrid();
+            this.swapAlt(false, /*clearOnEnter=*/ false);
+          }
+          break;
+        case 1048:
+          // DECSET 1048 (h) — save cursor + SGR + autoWrap (like DECSC
+          // but into a SEPARATE slot so DECSC state isn't stomped).
+          // DECRESET 1048 (l) — restore.
+          if (enable) this.saveCursor1048();
+          else this.restoreCursor1048();
+          break;
+        case 1049:
+          // DECSET 1049 (h) — combined: save cursor (1048 slot), swap to
+          // alt, clear alt. This is the sequence vim / htop / less use on
+          // entry. DECRESET 1049 (l) — swap back to main, restore cursor.
+          if (enable) {
+            this.saveCursor1048();
+            this.swapAlt(true, /*clearOnEnter=*/ true);
+          } else {
+            this.swapAlt(false, /*clearOnEnter=*/ false);
+            this.restoreCursor1048();
+          }
           break;
         default:
           // Unknown / unsupported — drop silently.
           break;
       }
     }
+  }
+
+  /**
+   * Core alt/main flip. Swaps `grid` + `rowRevisions` pointers between the
+   * active buffer and its dormant counterpart, optionally clearing the
+   * newly-active buffer on entry (1047 / 1049 semantics; 47 skips this).
+   *
+   * No-op when `toAlt` matches the current active buffer, matching the
+   * xterm behaviour that successive `CSI ?1049h` within the same alt
+   * session are idempotent. When the flip actually happens, emits a
+   * `ModeChanged` envelope synchronously — BEFORE any grid delta for the
+   * newly-active buffer. We also clear any row-level dirtiness that was
+   * accumulated for the old active buffer; those rows belong to a buffer
+   * the downstream mirror is about to leave, and re-emitting them after
+   * the mode flip would attribute stale main content to the alt buffer.
+   */
+  private swapAlt(toAlt: boolean, clearOnEnter: boolean): void {
+    const target: BufferKind = toAlt ? 'alt' : 'main';
+    if (this.active === target) return;
+
+    // Flush pending dirty rows of the currently-active buffer — they are
+    // still attributable to the OLD buffer, so we emit the delta first,
+    // then flip. This keeps the "mode flip precedes deltas for the NEW
+    // buffer" invariant intact.
+    this.flushPendingDeltaForCurrentBuffer();
+
+    // Persist current grid back into whichever buffer slot is losing focus.
+    if (this.active === 'main') {
+      this.mainBuffer.grid = this.grid;
+      this.mainBuffer.rowRevisions = this.rowRevisions;
+    } else {
+      this.altBuffer.grid = this.grid;
+      this.altBuffer.rowRevisions = this.rowRevisions;
+    }
+
+    const nextBuffer = toAlt ? this.altBuffer : this.mainBuffer;
+    this.grid = nextBuffer.grid;
+    this.rowRevisions = nextBuffer.rowRevisions;
+    this.active = target;
+    if (clearOnEnter) {
+      this.clearActiveGrid();
+    }
+    this.pendingModeChanges.push({ mode: 'alt_screen', value: toAlt });
+    // Emit the mode-change envelope immediately so downstream sees the
+    // flip before any subsequent delta/cursor event sourced from the new
+    // buffer. Any dirty rows on the NEW buffer (e.g. from clearOnEnter)
+    // will be emitted at feed-end via emitDirty().
+    this.emitPendingModeChanges();
+    // Clear feed-start cursor so a follow-up cursor_moved emission
+    // doesn't fire spuriously just because the cursor "moved" relative
+    // to pre-swap state on the previous buffer.
+    this.cursorAtFeedStart = { ...this.cursor };
+  }
+
+  /**
+   * Mid-feed flush of any cell mutations accumulated for the *current*
+   * active buffer before it's about to be swapped out. This runs the
+   * normal emitDirty path but preserves the cursor-at-feed-start
+   * bookkeeping so the post-swap batch picks up where we left off.
+   */
+  private flushPendingDeltaForCurrentBuffer(): void {
+    if (this.dirtyRows.size === 0 && cursorEqual(this.cursorAtFeedStart, this.cursor)) {
+      return;
+    }
+    this.emitDirty();
+  }
+
+  /** Blank every cell of the currently-active grid and mark all rows dirty. */
+  private clearActiveGrid(): void {
+    for (let r = 0; r < this.rows_; r += 1) {
+      const row = this.grid[r];
+      if (row === undefined) continue;
+      for (let c = 0; c < this.cols_; c += 1) {
+        row[c] = blankCell();
+      }
+      this.markDirty(r);
+    }
+  }
+
+  /** DECSET 1048 save slot. Distinct from DECSC. */
+  private saveCursor1048(): void {
+    this.savedState1048 = {
+      cursor: { ...this.cursor },
+      sgr: { ...this.sgr },
+      autoWrap: this.autoWrap,
+    };
+  }
+
+  /**
+   * DECRESET 1048 / 1049 restore. Per xterm, an unsaved restore homes the
+   * cursor; we mirror that so tests don't accidentally rely on stale state.
+   */
+  private restoreCursor1048(): void {
+    if (!this.savedState1048) {
+      this.cursor.row = 0;
+      this.cursor.col = 0;
+      this.cursor.pendingWrap = false;
+      return;
+    }
+    this.cursor = { ...this.savedState1048.cursor };
+    // Clamp to current dimensions — a resize between save and restore
+    // could have shrunk the grid under us.
+    this.cursor.row = Math.min(this.cursor.row, this.rows_ - 1);
+    this.cursor.col = Math.min(this.cursor.col, this.cols_ - 1);
+    this.cursor.pendingWrap = false;
+    this.sgr = { ...this.savedState1048.sgr };
+    this.autoWrap = this.savedState1048.autoWrap;
+  }
+
+  /**
+   * Emit any `ModeChanged` envelopes that accumulated since the last
+   * flush. Called from `swapAlt` (for immediate visibility) and from
+   * `emitDirty` (defensive — should be a no-op there in the normal path).
+   */
+  private emitPendingModeChanges(): void {
+    if (this.pendingModeChanges.length === 0) return;
+    const changes = this.pendingModeChanges.slice();
+    this.pendingModeChanges.length = 0;
+    const payload: ModeChangedPayload = {
+      kind: 'mode_changed',
+      changes,
+      state: this.buildModeState(),
+    };
+    this.emit(payload);
   }
 
   /* ------------------------- SGR ------------------------- */
@@ -1520,14 +1893,23 @@ export class VtEmulator {
   /* ------------------------- Grid helpers ------------------------- */
 
   private allocateGrid(rows: number, cols: number): void {
-    this.grid = new Array<InternalCell[]>(rows);
-    for (let r = 0; r < rows; r += 1) {
-      this.grid[r] = new Array<InternalCell>(cols);
-      for (let c = 0; c < cols; c += 1) {
-        this.grid[r]![c] = blankCell();
-      }
-    }
+    this.grid = VtEmulator.makeBlankGrid(rows, cols);
     this.rowRevisions = new Uint32Array(rows);
+  }
+
+  /**
+   * Allocate a fresh grid of blank cells. Factored out so both buffers
+   * (main + alt) share one allocator — and so `resize()` / `reset()` can
+   * build a new grid without accidentally aliasing `this.grid`.
+   */
+  private static makeBlankGrid(rows: number, cols: number): InternalCell[][] {
+    const grid = new Array<InternalCell[]>(rows);
+    for (let r = 0; r < rows; r += 1) {
+      const row = new Array<InternalCell>(cols);
+      for (let c = 0; c < cols; c += 1) row[c] = blankCell();
+      grid[r] = row;
+    }
+    return grid;
   }
 
   private blankRow(): InternalCell[] {
@@ -1574,7 +1956,7 @@ export class VtEmulator {
       kind: 'grid_snapshot',
       rows: this.rows_,
       cols: this.cols_,
-      buffer_kind: 'main',
+      buffer_kind: this.active,
       row_deltas,
       cursor: this.buildCursorState(),
       mode_state: this.buildModeState(),
@@ -1586,6 +1968,10 @@ export class VtEmulator {
   }
 
   private emitDirty(): void {
+    // Defensive: mode changes should have been drained at the point of
+    // the swap, but if a caller ever deferred them we emit now BEFORE any
+    // grid delta so the "mode first, deltas second" invariant holds.
+    this.emitPendingModeChanges();
     if (this.dirtyRows.size === 0) {
       // Cursor-only change?
       if (!cursorEqual(this.cursorAtFeedStart, this.cursor)) {
@@ -1633,7 +2019,7 @@ export class VtEmulator {
       grid_epoch: this.epoch,
       sequence_no: this.sequenceNo,
       resize_generation: this.resizeGeneration,
-      buffer_kind: 'main',
+      buffer_kind: this.active,
       payload,
     };
     this.onEnvelope(env);
@@ -1652,7 +2038,7 @@ export class VtEmulator {
 
   private buildModeState(): TerminalModeState {
     return {
-      alt_screen: false,
+      alt_screen: this.active === 'alt',
     };
   }
 }

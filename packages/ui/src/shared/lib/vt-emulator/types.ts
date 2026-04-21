@@ -72,6 +72,78 @@ export interface InternalSavedState {
   autoWrap: boolean;
 }
 
+/**
+ * A screen buffer — either the main (scrollable, reflows on resize) or the
+ * alt buffer (no scrollback, clears on resize). Alt-buffer entry/exit is
+ * driven by DEC private modes 47 / 1047 / 1049; we keep the inactive buffer
+ * in a dormant field (`dormant` on `VtEmulator`) and swap pointers on
+ * transition so all write ops always target whichever buffer is active.
+ *
+ * `rowRevisions` is a `Uint32Array` sized to `grid.length`. It is
+ * per-buffer so cross-buffer deltas never collide on the same row number.
+ *
+ * Scrollback (plan-0005 α3) is attached to the emulator's main-buffer state
+ * only; see `Scrollback` below. Alt buffer contributes nothing to scrollback.
+ */
+export interface Buffer {
+  grid: InternalCell[][];
+  rowRevisions: Uint32Array;
+}
+
+/**
+ * A single row held in the bounded scrollback ring.
+ *
+ * `cells` is a cloned snapshot at capture time — mutating the live grid
+ * afterwards must NOT alter the captured row (the scrollback is what the
+ * user scrolled past, not a live reference).
+ *
+ * `pinned` is reserved for P1 block-boundary bookkeeping: when a "running
+ * block" starts at a row that has since been evicted off the top of the
+ * screen, the block engine will set `pinned = true` on that row so the
+ * bounded ring refuses to drop it even if the cap is exceeded. In P0 nothing
+ * pins — the marker exists purely as a hook for the future block overlay.
+ */
+export interface ScrollbackRow {
+  readonly cells: readonly InternalCell[];
+  /** Set when this row is the start row of a "running" block; eviction
+   *  refuses to cross this marker. In P0 default, nothing pins — the
+   *  marker exists for P1 block-boundary use. */
+  pinned?: boolean;
+}
+
+/**
+ * Bounded circular scrollback attached to the main buffer.
+ *
+ * `maxRows === 0` disables capture entirely (used by tiny-shell tests and
+ * situations where the caller prefers a fixed-size memory footprint).
+ *
+ * `rows` stores oldest-first; eviction walks from index 0. When the head
+ * candidate is `pinned`, eviction PAUSES (the ring may grow past `maxRows`).
+ * This preserves the block-start-row invariant: if a block engine in P1
+ * pinned the row, discarding it would invalidate the block's row-range ref.
+ * Pause-eviction is strictly safer than dropping pinned rows because the
+ * steady-state memory footprint still tops out at `maxRows + <live pins>`,
+ * and live pins are bounded by the number of in-flight running blocks.
+ *
+ * `baseRowId` is the monotonic id of the oldest surviving row. IDs advance
+ * only when eviction occurs, so external callers can reliably identify a
+ * scrollback row across appends even as the head shifts.
+ */
+export interface Scrollback {
+  /** Configured max rows. 0 means disabled. */
+  readonly maxRows: number;
+  /** Current rows, oldest first. */
+  readonly rows: ScrollbackRow[];
+  /** Monotonic rowId given to the oldest surviving row; rowIds grow
+   *  upwards as rows are appended. Useful for P1 row-range refs. */
+  baseRowId: number;
+  /** Total rows evicted since creation. Diagnostic counter. */
+  evictedCount: number;
+  /** Count of eviction attempts skipped because the head row was pinned.
+   *  Diagnostic only — surfaced in tests and optionally future telemetry. */
+  pinBlockedEvictions: number;
+}
+
 export function defaultSgr(): InternalSgrStyle {
   return {
     fg: 'default',

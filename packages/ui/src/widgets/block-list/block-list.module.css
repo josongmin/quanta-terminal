@@ -36,22 +36,34 @@
 .inner {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   width: 100%;
-  min-height: 100%;
+}
+
+/* Footer slot — composer lives here, right after the last block.
+   No margin-top:auto — content flows naturally so the prompt appears
+   immediately after the last command output, not at the viewport bottom. */
+.footer {
+  padding-top: var(--q-space-2);
 }
 
 .row {
   width: 100%;
 }
 
+.emptyInner {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
 .empty {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--q-space-2);
-  height: 100%;
   padding: var(--q-space-6);
   color: var(--q-fg-faint);
   font-family: var(--q-font-sans);
@@ -83,7 +95,7 @@
   background: var(--q-bg-elev-3);
   border: 1px solid var(--q-border-strong);
   border-radius: 15px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(107, 163, 255, 0.1);
+  box-shadow: none;
   cursor: pointer;
   color: var(--q-fg-muted);
   font-family: var(--q-font-sans);
@@ -101,7 +113,7 @@
   background: rgba(107, 163, 255, 0.12);
   border-color: var(--q-accent);
   color: var(--q-fg);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(107, 163, 255, 0.25);
+  box-shadow: none;
   outline: none;
 }
 .scrollDownBtn:active {

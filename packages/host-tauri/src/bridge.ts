@@ -15,6 +15,7 @@ import type {
   AiSuggestion,
   AiSuggestOptions,
   BlockId,
+  CompletionEntry,
   GitStatus,
   GitStatusOptions,
   HostBridge,
@@ -22,6 +23,7 @@ import type {
   HostEventListener,
   InstallShellIntegrationOptions,
   InstallShellIntegrationReply,
+  ListCompletionsOptions,
   NotifyOptions,
   OpenInEditorOptions,
   ReadTextFileOptions,
@@ -427,6 +429,16 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         return reply.path ?? null;
       } catch {
         return null;
+      }
+    },
+
+    async listCompletions(options: ListCompletionsOptions): Promise<CompletionEntry[]> {
+      try {
+        const args = { prefix: options.prefix, cwd: options.cwd };
+        const entries = await invokeStructured<CompletionEntry[]>('quanta_list_completions', { args });
+        return entries;
+      } catch {
+        return [];
       }
     },
 

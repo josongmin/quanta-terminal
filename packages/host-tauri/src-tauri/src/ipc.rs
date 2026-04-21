@@ -816,6 +816,146 @@ async fn quanta_ai_suggest_impl(
     quanta_ai_suggest_with_provider(args, provider).await
 }
 
+/* -------------------- list_completions -------------------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ListCompletionsArgs {
+    pub prefix: String,
+    pub cwd: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct CompletionEntry {
+    pub name: String,
+    pub insert: String,
+    pub kind: String,
+}
+
+#[tauri::command]
+pub async fn quanta_list_completions(
+    args: ListCompletionsArgs,
+) -> Result<Vec<CompletionEntry>, TauriError> {
+    tokio::task::spawn_blocking(move || list_completions_impl(&args.prefix, &args.cwd))
+        .await
+        .map_err(|e| TauriError::bridge_internal(format!("list-completions: join error ({e})")))
+}
+
+fn expand_home_prefix(s: &str) -> String {
+    #[allow(deprecated)]
+    let home = std::env::home_dir();
+    if s == "~" || s == "~/" {
+        return home
+            .map(|h| format!("{}/", h.to_string_lossy()))
+            .unwrap_or_else(|| s.to_string());
+    }
+    if s.starts_with("~/") {
+        if let Some(h) = home {
+            return format!("{}/{}", h.to_string_lossy(), &s[2..]);
+        }
+    }
+    s.to_string()
+}
+
+fn list_completions_impl(prefix: &str, cwd: &str) -> Vec<CompletionEntry> {
+    let (orig_dir_part, name_prefix) = if let Some(idx) = prefix.rfind('/') {
+        (&prefix[..=idx], &prefix[idx + 1..])
+    } else {
+        ("", prefix)
+    };
+
+    let expanded_dir = expand_home_prefix(orig_dir_part);
+
+    let dir_abs = if expanded_dir.is_empty() {
+        PathBuf::from(cwd)
+    } else if expanded_dir.starts_with('/') {
+        PathBuf::from(&expanded_dir)
+    } else {
+        PathBuf::from(cwd).join(&expanded_dir)
+    };
+
+    let read_dir = match std::fs::read_dir(&dir_abs) {
+        Ok(rd) => rd,
+        Err(_) => return vec![],
+    };
+
+    let name_lower = name_prefix.to_lowercase();
+    let show_hidden = name_prefix.starts_with('.');
+
+    let mut dirs: Vec<CompletionEntry> = vec![];
+    let mut files: Vec<CompletionEntry> = vec![];
+
+    for entry in read_dir.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().to_string();
+
+        if name.starts_with('.') && !show_hidden {
+            continue;
+        }
+        if !name.to_lowercase().starts_with(&name_lower) {
+            continue;
+        }
+
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+
+        let is_dir = if file_type.is_symlink() {
+            entry.path().is_dir()
+        } else {
+            file_type.is_dir()
+        };
+
+        let kind: &str = if is_dir {
+            "dir"
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if entry
+                    .metadata()
+                    .map(|m| m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+                {
+                    "exec"
+                } else {
+                    "file"
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                "file"
+            }
+        };
+
+        let insert = if is_dir {
+            format!("{orig_dir_part}{name}/")
+        } else {
+            format!("{orig_dir_part}{name}")
+        };
+
+        let completion = CompletionEntry {
+            name,
+            insert,
+            kind: kind.to_string(),
+        };
+
+        if is_dir {
+            dirs.push(completion);
+        } else {
+            files.push(completion);
+        }
+    }
+
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.extend(files);
+    dirs.truncate(64);
+    dirs
+}
+
 /* -------------------- read_text_file -------------------- */
 
 /// Hard absolute cap on `ReadTextFileArgs::max_bytes`. Callers can request

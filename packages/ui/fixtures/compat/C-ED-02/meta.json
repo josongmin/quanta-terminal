@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 7,
+  "description": "nvim /tmp/hello.ts with LSP diagnostic overlay: alt-buffer paint, reverse-video status bar, inline SGR 48;5;203 marker preserved byte-for-byte across 1049 cycle.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

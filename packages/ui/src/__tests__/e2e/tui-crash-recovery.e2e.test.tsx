@@ -340,7 +340,7 @@ describe('TUI crash recovery — full page integration (e2e)', () => {
       __emitRawChunkForTests(ENTER_1049);
     });
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
-    expect(screen.getByTestId('tui-input-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
 
     // Simulate a PTY sidecar crash: bridge emits pty_exit with the crash signal
     // while the alt-screen is still open. The degraded-mode hook fires.
@@ -369,6 +369,9 @@ describe('TUI crash recovery — full page integration (e2e)', () => {
     expect(useTuiStore.getState().active).toBe(false);
     expect(useTuiStore.getState().depth).toBe(0);
     expect(screen.queryByTestId('tui-render-surface')).toBeNull();
-    expect(screen.queryByTestId('tui-input-surface')).toBeNull();
+    // Epic β: SessionInputSurface is always-on while a session is active.
+    // The crash recovery path restarts the session; the surface stays
+    // mounted throughout.
+    expect(screen.getByTestId('session-input-surface')).toBeInTheDocument();
   });
 });

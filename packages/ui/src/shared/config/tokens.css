@@ -102,104 +102,98 @@
   --q-palette-width: 700px;
   --q-palette-radius: 14px;
 
-  /* --- default (dark) palette — repeated below under [data-theme="dark"] so
-         an explicit switch stays consistent. These are here so the chrome has
-         colors even before the ThemeProvider applies `data-theme`. --- */
-  --q-bg:              #0D0E14;
-  --q-bg-elev-1:       #131420;
-  --q-bg-elev-2:       #1A1B2A;
-  --q-bg-elev-3:       #222338;
-  --q-bg-terminal:     #0D0E14;
-  --q-bg-titlebar:     #090A12;
-  --q-bg-muted:        #131420;
+  /* --- default (dark) palette — "Pure Terminal" —
+         macOS Terminal.app-inspired: pure black bg, pure white text, no
+         elevation surfaces (flat). Accent kept for selection / running dot
+         / syntax highlight so commands still read structured. --- */
+  --q-bg:              #000000;
+  --q-bg-elev-1:       #000000;
+  --q-bg-elev-2:       #0A0A0A;
+  --q-bg-elev-3:       #121212;
+  --q-bg-terminal:     #000000;
+  --q-bg-titlebar:     #000000;
+  --q-bg-muted:        #000000;
 
-  --q-border-subtle:   #1D1E2E;
-  --q-border-strong:   #2A2C40;
-  --q-border-focus:    #6BA3FF;
+  --q-border-subtle:   #1F1F1F;
+  --q-border-strong:   #2E2E2E;
+  --q-border-focus:    #8B5CF6;
 
-  --q-fg:              #C8CFE0;
-  --q-fg-muted:        #8A91A8;
-  --q-fg-faint:        #565C72;
-  --q-fg-on-accent:    #0D0E14;
+  --q-fg:              #FFFFFF;
+  --q-fg-muted:        #B8B8B8;
+  --q-fg-faint:        #6A6A6A;
+  --q-fg-on-accent:    #000000;
 
-  --q-accent:          #6BA3FF;
-  --q-accent-glow:     rgba(107, 163, 255, 0.15);
-  --q-success:         #4EC994;
-  --q-warning:         #E6B84A;
-  --q-warn:            #E6B84A;
-  --q-danger:          #FF5F5F;
+  --q-accent:          #8B5CF6;
+  --q-accent-glow:     transparent;
+  --q-success:         #34D399;
+  --q-warning:         #FBBF24;
+  --q-warn:            #FBBF24;
+  --q-danger:          #F87171;
 
-  --q-ansi-black:       #0B0C10;
-  --q-ansi-red:         #FF5C57;
-  --q-ansi-green:       #5AF78E;
-  --q-ansi-yellow:      #F3F99D;
-  --q-ansi-blue:        #57C7FF;
-  --q-ansi-magenta:     #FF6AC1;
-  --q-ansi-cyan:        #9AEDFE;
-  --q-ansi-white:       #E6E8EE;
-  --q-ansi-bright-black:   #4E5263;
-  --q-ansi-bright-red:     #FF6E67;
-  --q-ansi-bright-green:   #5AF78E;
-  --q-ansi-bright-yellow:  #F3F99D;
-  --q-ansi-bright-blue:    #71D1FF;
+  /* Dracula-inspired neon ANSI — punchy, high-contrast terminal output */
+  --q-ansi-black:       #08090F;
+  --q-ansi-red:         #FF5370;
+  --q-ansi-green:       #50FA7B;
+  --q-ansi-yellow:      #FFD866;
+  --q-ansi-blue:        #5AB4FF;
+  --q-ansi-magenta:     #FF79C6;
+  --q-ansi-cyan:        #5FFBDF;
+  --q-ansi-white:       #E0E4F0;
+  --q-ansi-bright-black:   #4A5080;
+  --q-ansi-bright-red:     #FF6E85;
+  --q-ansi-bright-green:   #69FF96;
+  --q-ansi-bright-yellow:  #FFEF99;
+  --q-ansi-bright-blue:    #82CFFF;
   --q-ansi-bright-magenta: #FF92D0;
-  --q-ansi-bright-cyan:    #B4F9FF;
+  --q-ansi-bright-cyan:    #A4FFEF;
   --q-ansi-bright-white:   #FFFFFF;
 
-  --q-term-cursor:          #7FB4FF;
-  --q-term-cursor-accent:   #0B0C10;
-  --q-term-selection:       rgba(94, 160, 255, 0.28);
+  --q-term-cursor:          #A78BFA;
+  --q-term-cursor-accent:   #08090F;
+  --q-term-selection:       rgba(139, 92, 246, 0.28);
 
-  --q-overlay-bg: rgba(6, 7, 14, 0.72);
+  --q-overlay-bg: rgba(4, 4, 12, 0.80);
 
-  --q-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
-  --q-shadow-pop: 0 4px 20px rgba(0, 0, 0, 0.5);
-  --q-shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.7);
-  --q-shadow-focus-inset: inset 0 1px 0 rgba(107, 163, 255, 0.3);
-  --q-shadow-focus-ring: 0 0 0 1px rgba(107, 163, 255, 0.5), 0 0 0 4px rgba(107, 163, 255, 0.1);
+  --q-shadow: none;
+  --q-shadow-pop: none;
+  --q-shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --q-shadow-focus-inset: none;
+  --q-shadow-focus-ring: none;
 
-  /* --- glassmorphism surfaces ---
-     Frosted-glass cards/overlays: semi-transparent bg + backdrop-filter blur.
-     Use on floating menus, palette, and tooltip cards for modern depth. */
-  --q-glass-bg:          rgba(19, 20, 32, 0.85);
-  --q-glass-bg-strong:   rgba(13, 14, 20, 0.92);
-  --q-glass-border:      rgba(255, 255, 255, 0.06);
-  --q-glass-blur:        blur(20px) saturate(1.4);
-  --q-glass-blur-heavy:  blur(40px) saturate(1.6);
+  /* --- glassmorphism surfaces — flat on terminal look --- */
+  --q-glass-bg:          #0A0A0A;
+  --q-glass-bg-strong:   #000000;
+  --q-glass-border:      #1F1F1F;
+  --q-glass-blur:        none;
+  --q-glass-blur-heavy:  none;
 
-  /* --- elevation shadows (colored depth system) ---
-     Each level adds a tinted glow to separate layers perceptually from the
-     base surface without relying solely on background lightness. */
-  --q-shadow-elev-1: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --q-shadow-elev-2: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --q-shadow-elev-3: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.07),
-                     0 0 40px rgba(107, 163, 255, 0.04);
-  --q-shadow-elev-4: 0 24px 80px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08),
-                     0 0 60px rgba(107, 163, 255, 0.06);
-  /* Inset top-edge highlight simulates a light source from above */
-  --q-shadow-inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* --- elevation shadows — flat: no drop shadows, just a 1px hairline --- */
+  --q-shadow-elev-1: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --q-shadow-elev-2: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --q-shadow-elev-3: 0 0 0 1px rgba(255, 255, 255, 0.10);
+  --q-shadow-elev-4: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  --q-shadow-inset-top: none;
 
-  /* --- accent glow tokens --- */
-  --q-glow-accent:       0 0 12px rgba(107, 163, 255, 0.35);
-  --q-glow-accent-soft:  0 0 24px rgba(107, 163, 255, 0.15);
-  --q-glow-success:      0 0 12px rgba(78, 201, 148, 0.3);
-  --q-glow-danger:       0 0 12px rgba(255, 95, 95, 0.3);
+  /* --- glow tokens disabled (terminals don't glow) --- */
+  --q-glow-accent:       none;
+  --q-glow-accent-soft:  none;
+  --q-glow-success:      none;
+  --q-glow-danger:       none;
 
-  /* --- semantic surface tokens ---
-     Prefer these over raw --q-bg-elev-* in new components so intent is clear. */
+  /* --- semantic surface tokens --- */
   --q-surface-base:      var(--q-bg);
   --q-surface-card:      var(--q-bg-elev-1);
   --q-surface-raised:    var(--q-bg-elev-2);
   --q-surface-overlay:   var(--q-bg-elev-3);
-  --q-surface-inset:     rgba(0, 0, 0, 0.2);
+  --q-surface-inset:     rgba(0, 0, 0, 0.25);
 
   /* --- block card component tokens --- */
   --q-block-bg:          var(--q-bg-elev-1);
   --q-block-border:      var(--q-border-subtle);
-  --q-block-border-active: var(--q-border-strong);
-  --q-block-bg-selected: rgba(107, 163, 255, 0.06);
+  --q-block-border-active: rgba(139, 92, 246, 0.40);
+  --q-block-bg-selected: rgba(139, 92, 246, 0.06);
   --q-block-radius:      var(--q-radius-lg);
-  --q-block-prompt:      var(--q-accent);
+  --q-block-prompt:      #A78BFA;
   --q-block-output-dim:  0.88;
   --q-block-exit-ok:     var(--q-success);
   --q-block-exit-err:    var(--q-danger);
@@ -211,7 +205,7 @@
   --q-palette-backdrop:  var(--q-glass-blur-heavy);
   --q-palette-border:    var(--q-glass-border);
   --q-palette-shadow:    var(--q-shadow-elev-4);
-  --q-palette-item-active: rgba(107, 163, 255, 0.10);
+  --q-palette-item-active: rgba(139, 92, 246, 0.12);
   --q-palette-item-hover:  rgba(255, 255, 255, 0.04);
 
   /* --- composer component tokens --- */
@@ -221,131 +215,125 @@
   --q-composer-shadow-focus: var(--q-shadow-focus-ring);
 
   /* --- tab strip component tokens --- */
-  --q-tab-bg-active:     rgba(255, 255, 255, 0.06);
-  --q-tab-bg-hover:      rgba(255, 255, 255, 0.04);
+  --q-tab-bg-active:     rgba(139, 92, 246, 0.10);
+  --q-tab-bg-hover:      rgba(139, 92, 246, 0.05);
   --q-tab-accent-line:   var(--q-accent);
-  --q-tab-activity-dot:  var(--q-accent);
+  --q-tab-activity-dot:  #50FA7B;
 
-  /* --- animation easing presets ---
-     Spring-like overshoot (0.34, 1.56, 0.64, 1) for menu pop-in. */
+  /* --- animation easing presets --- */
   --q-ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
   --q-ease-decel:   cubic-bezier(0.0, 0.0, 0.2, 1);
   --q-ease-accel:   cubic-bezier(0.4, 0.0, 1.0, 1);
   --q-dur-instant:  60ms;
   --q-dur-xslow:    400ms;
 
-  /* --- shell-syntax highlighting ---
-     Aliased to the existing ANSI palette so the highlighter palette stays
-     consistent with terminal output colors. Override per-theme below if a
-     specific hue doesn't contrast well against the Composer card surface. */
-  --color-syntax-command-known:   var(--q-ansi-blue);
-  --color-syntax-command-unknown: var(--q-ansi-red);
-  --color-syntax-flag:            var(--q-ansi-cyan);
-  --color-syntax-string:          var(--q-ansi-green);
-  --color-syntax-path:            var(--q-ansi-magenta);
-  --color-syntax-var:             var(--q-ansi-yellow);
-  --color-syntax-operator:        var(--q-warning);
-  --color-syntax-subshell:        var(--q-ansi-bright-white);
-  --color-syntax-comment:         var(--q-fg-faint);
+  /* --- shell-syntax highlighting — vivid on the dark surface --- */
+  --color-syntax-command-known:   #5AB4FF;
+  --color-syntax-command-unknown: #FF5370;
+  --color-syntax-flag:            #5FFBDF;
+  --color-syntax-string:          #50FA7B;
+  --color-syntax-path:            #FF79C6;
+  --color-syntax-var:             #FFD866;
+  --color-syntax-operator:        #FBBF24;
+  --color-syntax-subshell:        #E0E4F0;
+  --color-syntax-comment:         #3E4468;
 }
 
 /*
- * DARK theme
+ * DARK theme — "Quanta Void"
  *
- * Contrast check against --q-bg #0B0C10:
- *   --q-fg        #E6E8EE  → 13.8:1  (AAA body / AAA large)
- *   --q-fg-muted  #A6ACBA  →  8.7:1  (AAA body)
- *   --q-fg-faint  #747B8D  →  5.0:1  (AA  body)
- *   --q-accent    #5EA0FF  →  6.3:1  (AA  body)
- *   --q-danger    #FF6B6B  →  6.7:1  (AA  body)
+ * Contrast check against --q-bg #08090F:
+ *   --q-fg        #E0E4F0  → 14.2:1  (AAA body / AAA large)
+ *   --q-fg-muted  #7880A8  →  5.6:1  (AA  body)
+ *   --q-fg-faint  #3E4468  →  2.8:1  (decorative / placeholder only)
+ *   --q-accent    #8B5CF6  →  5.9:1  (AA  body)
+ *   --q-danger    #F87171  →  7.1:1  (AA  body)
  */
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --q-bg:              #0D0E14;
-  --q-bg-elev-1:       #131420;
-  --q-bg-elev-2:       #1A1B2A;
-  --q-bg-elev-3:       #222338;
-  --q-bg-terminal:     #0D0E14;
-  --q-bg-titlebar:     #090A12;
-  --q-bg-muted:        #131420;
+  --q-bg:              #000000;
+  --q-bg-elev-1:       #000000;
+  --q-bg-elev-2:       #0A0A0A;
+  --q-bg-elev-3:       #121212;
+  --q-bg-terminal:     #000000;
+  --q-bg-titlebar:     #000000;
+  --q-bg-muted:        #000000;
 
-  --q-border-subtle:   #1D1E2E;
-  --q-border-strong:   #2A2C40;
-  --q-border-focus:    #6BA3FF;
+  --q-border-subtle:   #1F1F1F;
+  --q-border-strong:   #2E2E2E;
+  --q-border-focus:    #8B5CF6;
 
-  --q-fg:              #C8CFE0;
-  --q-fg-muted:        #8A91A8;
-  --q-fg-faint:        #565C72;
-  --q-fg-on-accent:    #0D0E14;
+  --q-fg:              #FFFFFF;
+  --q-fg-muted:        #B8B8B8;
+  --q-fg-faint:        #6A6A6A;
+  --q-fg-on-accent:    #000000;
 
-  --q-accent:          #6BA3FF;
-  --q-accent-glow:     rgba(107, 163, 255, 0.15);
-  --q-success:         #4EC994;
-  --q-warning:         #E6B84A;
-  --q-warn:            #E6B84A;
-  --q-danger:          #FF5F5F;
+  --q-accent:          #8B5CF6;
+  --q-accent-glow:     transparent;
+  --q-success:         #34D399;
+  --q-warning:         #FBBF24;
+  --q-warn:            #FBBF24;
+  --q-danger:          #F87171;
 
-  --q-ansi-black:       #0D0E14;
-  --q-ansi-red:         #FF5C57;
-  --q-ansi-green:       #50E990;
-  --q-ansi-yellow:      #F3F99D;
-  --q-ansi-blue:        #57C7FF;
-  --q-ansi-magenta:     #FF6AC1;
-  --q-ansi-cyan:        #9AEDFE;
-  --q-ansi-white:       #C8CFE0;
-  --q-ansi-bright-black:   #4A5068;
-  --q-ansi-bright-red:     #FF6E67;
-  --q-ansi-bright-green:   #50E990;
-  --q-ansi-bright-yellow:  #F3F99D;
-  --q-ansi-bright-blue:    #71D1FF;
+  --q-ansi-black:       #08090F;
+  --q-ansi-red:         #FF5370;
+  --q-ansi-green:       #50FA7B;
+  --q-ansi-yellow:      #FFD866;
+  --q-ansi-blue:        #5AB4FF;
+  --q-ansi-magenta:     #FF79C6;
+  --q-ansi-cyan:        #5FFBDF;
+  --q-ansi-white:       #E0E4F0;
+  --q-ansi-bright-black:   #4A5080;
+  --q-ansi-bright-red:     #FF6E85;
+  --q-ansi-bright-green:   #69FF96;
+  --q-ansi-bright-yellow:  #FFEF99;
+  --q-ansi-bright-blue:    #82CFFF;
   --q-ansi-bright-magenta: #FF92D0;
-  --q-ansi-bright-cyan:    #B4F9FF;
+  --q-ansi-bright-cyan:    #A4FFEF;
   --q-ansi-bright-white:   #FFFFFF;
 
-  --q-term-cursor:          #7EB8FF;
-  --q-term-cursor-accent:   #0D0E14;
-  --q-term-selection:       rgba(107, 163, 255, 0.25);
+  --q-term-cursor:          #A78BFA;
+  --q-term-cursor-accent:   #08090F;
+  --q-term-selection:       rgba(139, 92, 246, 0.28);
 
-  --q-overlay-bg: rgba(6, 7, 14, 0.72);
+  --q-overlay-bg: rgba(4, 4, 12, 0.80);
 
-  --q-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
-  --q-shadow-pop: 0 4px 20px rgba(0, 0, 0, 0.5);
-  --q-shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.7);
-  --q-shadow-focus-inset: inset 0 1px 0 rgba(107, 163, 255, 0.3);
-  --q-shadow-focus-ring: 0 0 0 1px rgba(107, 163, 255, 0.5), 0 0 0 4px rgba(107, 163, 255, 0.1);
+  --q-shadow: none;
+  --q-shadow-pop: none;
+  --q-shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --q-shadow-focus-inset: none;
+  --q-shadow-focus-ring: none;
 
-  --q-glass-bg:          rgba(19, 20, 32, 0.85);
-  --q-glass-bg-strong:   rgba(13, 14, 20, 0.92);
-  --q-glass-border:      rgba(255, 255, 255, 0.06);
-  --q-glass-blur:        blur(20px) saturate(1.4);
-  --q-glass-blur-heavy:  blur(40px) saturate(1.6);
+  --q-glass-bg:          #0A0A0A;
+  --q-glass-bg-strong:   #000000;
+  --q-glass-border:      #1F1F1F;
+  --q-glass-blur:        none;
+  --q-glass-blur-heavy:  none;
 
-  --q-shadow-elev-1: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --q-shadow-elev-2: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --q-shadow-elev-3: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.07),
-                     0 0 40px rgba(107, 163, 255, 0.04);
-  --q-shadow-elev-4: 0 24px 80px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08),
-                     0 0 60px rgba(107, 163, 255, 0.06);
-  --q-shadow-inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --q-shadow-elev-1: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --q-shadow-elev-2: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --q-shadow-elev-3: 0 0 0 1px rgba(255, 255, 255, 0.10);
+  --q-shadow-elev-4: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  --q-shadow-inset-top: none;
 
-  --q-glow-accent:       0 0 12px rgba(107, 163, 255, 0.35);
-  --q-glow-accent-soft:  0 0 24px rgba(107, 163, 255, 0.15);
-  --q-glow-success:      0 0 12px rgba(78, 201, 148, 0.3);
-  --q-glow-danger:       0 0 12px rgba(255, 95, 95, 0.3);
+  --q-glow-accent:       none;
+  --q-glow-accent-soft:  none;
+  --q-glow-success:      none;
+  --q-glow-danger:       none;
 
   --q-surface-base:      var(--q-bg);
   --q-surface-card:      var(--q-bg-elev-1);
   --q-surface-raised:    var(--q-bg-elev-2);
   --q-surface-overlay:   var(--q-bg-elev-3);
-  --q-surface-inset:     rgba(0, 0, 0, 0.2);
+  --q-surface-inset:     rgba(0, 0, 0, 0.25);
 
   --q-block-bg:          var(--q-bg-elev-1);
   --q-block-border:      var(--q-border-subtle);
-  --q-block-border-active: var(--q-border-strong);
-  --q-block-bg-selected: rgba(107, 163, 255, 0.06);
+  --q-block-border-active: rgba(139, 92, 246, 0.40);
+  --q-block-bg-selected: rgba(139, 92, 246, 0.06);
   --q-block-radius:      var(--q-radius-lg);
-  --q-block-prompt:      var(--q-accent);
+  --q-block-prompt:      #A78BFA;
   --q-block-output-dim:  0.88;
   --q-block-exit-ok:     var(--q-success);
   --q-block-exit-err:    var(--q-danger);
@@ -356,7 +344,7 @@
   --q-palette-backdrop:  var(--q-glass-blur-heavy);
   --q-palette-border:    var(--q-glass-border);
   --q-palette-shadow:    var(--q-shadow-elev-4);
-  --q-palette-item-active: rgba(107, 163, 255, 0.10);
+  --q-palette-item-active: rgba(139, 92, 246, 0.12);
   --q-palette-item-hover:  rgba(255, 255, 255, 0.04);
 
   --q-composer-bg:       var(--q-bg-elev-1);
@@ -364,10 +352,10 @@
   --q-composer-border-focus: var(--q-border-focus);
   --q-composer-shadow-focus: var(--q-shadow-focus-ring);
 
-  --q-tab-bg-active:     rgba(255, 255, 255, 0.06);
-  --q-tab-bg-hover:      rgba(255, 255, 255, 0.04);
+  --q-tab-bg-active:     rgba(139, 92, 246, 0.10);
+  --q-tab-bg-hover:      rgba(139, 92, 246, 0.05);
   --q-tab-accent-line:   var(--q-accent);
-  --q-tab-activity-dot:  var(--q-accent);
+  --q-tab-activity-dot:  #50FA7B;
 
   --q-ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
   --q-ease-decel:   cubic-bezier(0.0, 0.0, 0.2, 1);
@@ -375,15 +363,15 @@
   --q-dur-instant:  60ms;
   --q-dur-xslow:    400ms;
 
-  --color-syntax-command-known:   var(--q-ansi-blue);
-  --color-syntax-command-unknown: var(--q-ansi-red);
-  --color-syntax-flag:            var(--q-ansi-cyan);
-  --color-syntax-string:          var(--q-ansi-green);
-  --color-syntax-path:            var(--q-ansi-magenta);
-  --color-syntax-var:             var(--q-ansi-yellow);
-  --color-syntax-operator:        var(--q-warning);
-  --color-syntax-subshell:        var(--q-ansi-bright-white);
-  --color-syntax-comment:         var(--q-fg-faint);
+  --color-syntax-command-known:   #5AB4FF;
+  --color-syntax-command-unknown: #FF5370;
+  --color-syntax-flag:            #5FFBDF;
+  --color-syntax-string:          #50FA7B;
+  --color-syntax-path:            #FF79C6;
+  --color-syntax-var:             #FFD866;
+  --color-syntax-operator:        #FBBF24;
+  --color-syntax-subshell:        #E0E4F0;
+  --color-syntax-comment:         #3E4468;
 }
 
 /*
@@ -446,31 +434,28 @@
 
   --q-overlay-bg: rgba(20, 22, 28, 0.28);
 
-  --q-shadow: 0 4px 16px rgba(15, 17, 23, 0.12);
-  --q-shadow-pop: 0 4px 16px rgba(15, 17, 23, 0.12);
-  --q-shadow-overlay: 0 24px 64px rgba(15, 17, 23, 0.18);
-  --q-shadow-focus-inset: inset 0 1px 0 rgba(37, 99, 235, 0.35);
-  --q-shadow-focus-ring:
-    0 0 0 1px rgba(37, 99, 235, 0.55), 0 0 0 4px rgba(37, 99, 235, 0.15);
+  --q-shadow: none;
+  --q-shadow-pop: none;
+  --q-shadow-overlay: 0 4px 16px rgba(15, 17, 23, 0.10);
+  --q-shadow-focus-inset: none;
+  --q-shadow-focus-ring: none;
 
-  --q-glass-bg:          rgba(248, 249, 252, 0.88);
-  --q-glass-bg-strong:   rgba(253, 253, 254, 0.95);
-  --q-glass-border:      rgba(0, 0, 0, 0.07);
-  --q-glass-blur:        blur(20px) saturate(1.3);
-  --q-glass-blur-heavy:  blur(40px) saturate(1.5);
+  --q-glass-bg:          #FDFDFE;
+  --q-glass-bg-strong:   #FFFFFF;
+  --q-glass-border:      #E1E3E9;
+  --q-glass-blur:        none;
+  --q-glass-blur-heavy:  none;
 
-  --q-shadow-elev-1: 0 1px 3px rgba(15, 17, 23, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
-  --q-shadow-elev-2: 0 4px 16px rgba(15, 17, 23, 0.10), 0 0 0 1px rgba(0, 0, 0, 0.06);
-  --q-shadow-elev-3: 0 8px 32px rgba(15, 17, 23, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.07),
-                     0 0 40px rgba(37, 99, 235, 0.04);
-  --q-shadow-elev-4: 0 24px 64px rgba(15, 17, 23, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.08),
-                     0 0 60px rgba(37, 99, 235, 0.06);
-  --q-shadow-inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --q-shadow-elev-1: 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --q-shadow-elev-2: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --q-shadow-elev-3: 0 0 0 1px rgba(0, 0, 0, 0.10);
+  --q-shadow-elev-4: 0 0 0 1px rgba(0, 0, 0, 0.12);
+  --q-shadow-inset-top: none;
 
-  --q-glow-accent:       0 0 12px rgba(37, 99, 235, 0.25);
-  --q-glow-accent-soft:  0 0 24px rgba(37, 99, 235, 0.12);
-  --q-glow-success:      0 0 12px rgba(15, 138, 95, 0.2);
-  --q-glow-danger:       0 0 12px rgba(214, 59, 59, 0.2);
+  --q-glow-accent:       none;
+  --q-glow-accent-soft:  none;
+  --q-glow-success:      none;
+  --q-glow-danger:       none;
 
   --q-surface-base:      var(--q-bg);
   --q-surface-card:      var(--q-bg-elev-1);

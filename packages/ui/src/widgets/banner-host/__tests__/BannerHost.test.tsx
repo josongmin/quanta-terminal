@@ -3,6 +3,18 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { useBannerStore } from '../../../entities/banner/index.js';
 import { raiseSyntheticBanner, clearSyntheticBanner } from '../../../features/banner/index.js';
 import { BannerHost } from '../BannerHost.js';
+import { getFeatureFlag } from '../../../shared/config/feature-flags.js';
+
+/**
+ * Plan 0005 Epic δ: the `shell_integration` banner is a block-UX affordance
+ * (it nags the user to install the OSC 133 integration script so block
+ * boundaries work). When `flag.blockUx` is off the production `BannerHost`
+ * filters shell_integration out of the visible list (see `BannerHost.tsx`
+ * line 94), so the tests below that assert shell_integration rendering are
+ * P1-gated. Other banners (crash/quota/secret_rescan) surface in P0 too
+ * and their tests run unconditionally.
+ */
+const itP1 = getFeatureFlag('blockUx') ? it : it.skip;
 
 beforeEach(() => {
   useBannerStore.getState().resetAll();
@@ -14,7 +26,7 @@ describe('<BannerHost />', () => {
     expect(screen.queryByTestId('banner-host')).toBeNull();
   });
 
-  it('renders the shell_integration banner copy when the condition is active', () => {
+  itP1('renders the shell_integration banner copy when the condition is active [P1 blockUx]', () => {
     act(() => {
       raiseSyntheticBanner('shell_integration');
     });

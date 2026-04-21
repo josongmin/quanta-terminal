@@ -1,0 +1,100 @@
+/**
+ * Compat-fixture registry.
+ *
+ * Plan 0005 P0 Epic ε — scaffolding.
+ *
+ * Central record of every compat fixture shipped in-tree. Lets the
+ * replay runner enumerate fixtures, lets tooling reference them by id,
+ * and gives reviewers one place to see what's covered vs. what's still
+ * a gap in the matrix.
+ *
+ * Full expected list of IDs lives in
+ * `docs/plans/0005-sota-convergence/test-strategy.md` §1 (compat
+ * matrix). Today only C-ED-01 is shipped; new fixtures are added here
+ * as they land.
+ */
+
+export type CompatCategory =
+  /** `C-ED-*` — interactive editors (vim, nvim, nano, helix). */
+  | 'editor'
+  /** `C-INT-*` — interactive REPLs (python, node, psql, ssh). */
+  | 'interactive'
+  /** `C-PG-*` — pagers (less, more, man, git log). */
+  | 'pager'
+  /** `C-TUI-*` — full-screen TUIs (htop, btop, k9s, fzf). */
+  | 'tui';
+
+export interface CompatFixture {
+  readonly id: string;
+  readonly category: CompatCategory;
+  readonly fixtureDir: string;
+  readonly description: string;
+  /**
+   * When true, the fixture is RED by design — pending another epic's
+   * work. The integration test uses `test.fails(...)` instead of
+   * `test(...)` for these.
+   */
+  readonly pending?: {
+    readonly blockingEpic: string;
+    readonly note: string;
+  };
+}
+
+/**
+ * Fixture registry. Keys are compat IDs.
+ *
+ * Note on `fixtureDir`: paths are relative to the repo root. The replay
+ * harness resolves them against an absolute root at call time, so
+ * consumers that want the full path should `path.resolve(repoRoot,
+ * fixture.fixtureDir)`.
+ */
+export const COMPAT_FIXTURES: Readonly<Record<string, CompatFixture>> = {
+  'C-ED-01': {
+    id: 'C-ED-01',
+    category: 'editor',
+    fixtureDir: 'packages/ui/fixtures/compat/C-ED-01',
+    description:
+      'vim round-trip: main buffer byte-exact across DECSET 1049 alt-screen cycle. Green post Epic α.',
+  },
+  'C-PG-01': {
+    id: 'C-PG-01',
+    category: 'pager',
+    fixtureDir: 'packages/ui/fixtures/compat/C-PG-01',
+    description:
+      'less /etc/passwd: alt-screen paint, scroll-down repaint, jump-to-end (END) status, clean 1049l exit restoring the main-buffer prompt.',
+  },
+  'C-MON-01': {
+    id: 'C-MON-01',
+    category: 'tui',
+    fixtureDir: 'packages/ui/fixtures/compat/C-MON-01',
+    description:
+      'top 30s-style session: three alt-buffer repaint frames, clean 1049l exit. Scrollback ring stays at zero rows across the cycle (alt paints never leak into main scrollback).',
+  },
+  'C-ED-02': {
+    id: 'C-ED-02',
+    category: 'editor',
+    fixtureDir: 'packages/ui/fixtures/compat/C-ED-02',
+    description:
+      'nvim with LSP diagnostic overlay: alt-buffer paint, status line SGR, inline-red marker preserved byte-for-byte across 1049 cycle.',
+  },
+  'C-MUX-01': {
+    // `mux` isn't a category in the `CompatCategory` enum — tmux is
+    // bucketed under `tui` (it is a full-screen TUI that happens to
+    // manage panes). The fixture ID prefix keeps the matrix readable.
+    id: 'C-MUX-01',
+    category: 'tui',
+    fixtureDir: 'packages/ui/fixtures/compat/C-MUX-01',
+    description:
+      'tmux new + split-horizontal + detach: alt-buffer cycle with status line SGR and inner-pane prompt after split paint.',
+  },
+  'C-IME-01': {
+    id: 'C-IME-01',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-IME-01',
+    description:
+      'Korean 2-set IME commit: CJK grapheme cluster renders as width-2 leading + width-0 continuation; cursor advances by 2 per hangul.',
+  },
+};
+
+/** All IDs in insertion order — handy for `describe.each`-style runners. */
+export const COMPAT_FIXTURE_IDS: readonly string[] = Object.keys(COMPAT_FIXTURES);

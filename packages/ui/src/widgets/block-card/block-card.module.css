@@ -1,47 +1,45 @@
 /*
- * BlockCard — Warp-style command block card.
+ * BlockCard — Warp-style inline block.
  *
- * Key design decisions:
- *  - Minimal left stripe for status (running/error/canceled).
- *  - Action buttons float in the top-right on card hover.
- *  - Output body uses the terminal background for a seamless feel.
- *  - Rounded card with subtle border and depth shadow.
+ * Design:
+ *  - No card chrome: no border-box, no radius, no shadow, no bg fill.
+ *  - Blocks are separated by a single thin horizontal line (border-top).
+ *  - Header shows a compact "cwd (duration)" meta row above the command,
+ *    matching the reference Warp layout.
+ *  - Action buttons float top-right, revealed on hover.
  */
 
 .card {
   position: relative;
-  display: grid;
-  grid-template-columns: 3px 1fr;
-  grid-template-rows: auto auto;
-  background: var(--q-block-bg);
-  border: 1px solid var(--q-block-border);
-  border-radius: var(--q-block-radius);
-  overflow: hidden;
+  display: block;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--q-border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+  padding: var(--q-space-4) var(--q-space-2) var(--q-space-4) var(--q-space-2);
   font-family: var(--q-font-sans);
   color: var(--q-fg);
-  box-shadow: var(--q-block-shadow);
+  overflow: visible;
   transition:
-    border-color var(--q-dur-fast) var(--q-ease-out),
-    box-shadow var(--q-dur-fast) var(--q-ease-out),
     background var(--q-dur-fast) var(--q-ease-out),
-    padding 160ms var(--q-ease-out),
     opacity 160ms var(--q-ease-out);
 }
+.card:first-child {
+  border-top: none;
+}
 .card:hover {
-  border-color: var(--q-block-border-active);
-  box-shadow: var(--q-block-shadow-active);
+  background: transparent;
 }
 .card[data-selected='true'] {
   background: var(--q-block-bg-selected);
-  border-color: var(--q-block-border-active);
-  box-shadow: var(--q-block-shadow-active);
 }
 
 /* Alt-screen chrome collapse */
-.card.altScreenCollapsed .header {
-  padding-top: 2px;
-  padding-bottom: 2px;
-  opacity: 0.4;
+.card.altScreenCollapsed {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  opacity: 0.55;
 }
 .card.altScreenCollapsed .body,
 .card.altScreenCollapsed .peek {
@@ -52,68 +50,68 @@
 }
 
 .card.altScreenCrashed {
-  border-color: var(--q-danger);
+  border-top-color: var(--q-danger);
+}
+
+/* Preamble blocks have no command — render only their body (shell greeting
+   + initial prompt) with no chrome, no separator, no padding. Makes the
+   first session output look like a native Terminal launch. */
+.card.preamble {
+  border-top: none;
+  padding: 0;
+}
+.card.preamble .header {
+  display: none;
+}
+.card.preamble .body {
+  padding: 0 var(--q-space-2);
+}
+.card.preamble .peek {
+  padding: 0 var(--q-space-2);
+}
+.card.preamble .empty {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .card {
     transition: none;
   }
-  .card.altScreenCollapsed .header {
-    transition: none;
-  }
 }
 
-/* Left status stripe */
+/* Status stripe — hidden; status is carried by the dot + running state */
 .stripe {
-  grid-row: 1 / span 2;
-  grid-column: 1;
-  background: transparent;
-  transition: background var(--q-dur-fast) var(--q-ease-out);
-}
-.card[data-status='running'] .stripe {
-  background: var(--q-accent);
-  animation: q-stripe-pulse 2s var(--q-ease-in-out) infinite;
-}
-.card[data-status='error'] .stripe {
-  background: var(--q-danger);
-}
-.card[data-status='canceled'] .stripe {
-  background: var(--q-warning);
+  display: none;
 }
 
-@keyframes q-stripe-pulse {
-  0%, 100% { opacity: 0.9; }
-  50% { opacity: 0.35; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .card[data-status='running'] .stripe { animation: none; }
-}
-
-/* Header row */
+/* Header — grid so "cwd (duration)" sits above the command, with the
+   actions block pinned to the right across both rows. */
 .header {
-  grid-row: 1;
-  grid-column: 2;
-  display: flex;
-  align-items: center;
-  gap: var(--q-space-2);
-  padding: 9px var(--q-space-3);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "dot  meta    actions"
+    "dot  command actions";
+  column-gap: var(--q-space-2);
+  row-gap: 2px;
+  align-items: start;
+  padding: 0;
   min-width: 0;
   cursor: pointer;
   user-select: none;
 }
-.card[data-collapsed='true'] .header {
-  padding-top: 7px;
-  padding-bottom: 7px;
-}
 
-/* Status dot */
+/* Status dot — small, placed on the left of both rows */
 .dot {
+  grid-area: dot;
+  align-self: center;
   flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--q-fg-faint);
+  margin-top: 2px;
 }
 .card[data-status='running'] .dot {
   background: var(--q-accent);
@@ -125,16 +123,15 @@
 .card[data-status='canceled'] .dot { background: var(--q-warning); }
 
 @keyframes q-dot-pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(107, 163, 255, 0.6); }
-  70%  { box-shadow: 0 0 0 4px rgba(107, 163, 255, 0);   }
-  100% { box-shadow: 0 0 0 0   rgba(107, 163, 255, 0);   }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
 }
 @media (prefers-reduced-motion: reduce) {
   .card[data-status='running'] .dot { animation: none; }
 }
 
 .command {
-  flex: 1 1 auto;
+  grid-area: command;
   min-width: 0;
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-md);
@@ -157,28 +154,28 @@
 .hlComment        { color: var(--color-syntax-comment); font-style: italic; }
 
 .meta {
-  flex: 0 0 auto;
+  grid-area: meta;
   display: flex;
   align-items: center;
-  gap: var(--q-space-2);
-  color: var(--q-fg-muted);
+  gap: 6px;
+  color: var(--q-fg-faint);
   font-family: var(--q-font-mono);
-  font-size: var(--q-font-size-sm);
+  font-size: 11px;
 }
 
 .exit {
   font-variant-numeric: tabular-nums;
   font-size: 11px;
-  padding: 1px 5px;
+  padding: 0 4px;
   border-radius: var(--q-radius-sm);
 }
 .exit[data-nonzero='true'] {
   color: var(--q-danger);
-  background: rgba(255, 95, 95, 0.1);
+  background: rgba(248, 113, 113, 0.10);
 }
 .exit[data-nonzero='false'] {
   color: var(--q-success);
-  background: rgba(78, 201, 148, 0.08);
+  background: transparent;
 }
 
 .duration {
@@ -187,8 +184,20 @@
   font-size: 11px;
 }
 
+.cwd {
+  color: var(--q-fg-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Action buttons — hidden by default, revealed on card hover */
 .actions {
+  grid-area: actions;
+  align-self: start;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -216,7 +225,7 @@
 }
 .iconButton:hover,
 .iconButton:focus-visible {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--q-fg);
   outline: none;
 }
@@ -235,7 +244,6 @@
   color: var(--q-fg-faint);
 }
 
-/* Floating copy button — prominent on hover, positioned over top-right of body */
 .iconButton[data-testid*='copy'] {
   color: var(--q-fg-muted);
 }
@@ -294,32 +302,20 @@
 }
 
 .caret {
-  display: inline-flex;
-  color: var(--q-fg-faint);
-  transition: transform var(--q-dur-fast) var(--q-ease-out);
-}
-.card[data-collapsed='true'] .caret {
-  transform: rotate(-90deg);
+  display: none;
 }
 
-/* Body */
+/* Body — no border-top, no bg, no padding frame. Flush under the header. */
 .body {
-  grid-row: 2;
-  grid-column: 2;
-  padding: 0 var(--q-space-3) var(--q-space-3) var(--q-space-3);
-  border-top: 1px solid var(--q-border-subtle);
-  background: var(--q-bg);
+  padding: 6px 0 0 calc(6px + var(--q-space-2));
+  border: none;
+  background: transparent;
   position: relative;
-}
-
-/* Floating copy-all button that appears on body hover */
-.body::after {
-  content: '';
 }
 
 .output {
   margin: 0;
-  padding: 8px 0 0 0;
+  padding: 0;
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-term);
   font-feature-settings: var(--q-font-features, normal);
@@ -346,18 +342,16 @@
   padding: var(--q-space-2) 0;
 }
 
-/* Collapsed peek row */
+/* Collapsed peek row — inline, no border */
 .peek {
-  grid-row: 2;
-  grid-column: 2;
-  padding: 0 var(--q-space-3) 8px var(--q-space-3);
+  padding: 4px 0 0 calc(6px + var(--q-space-2));
   display: flex;
   align-items: center;
   gap: var(--q-space-2);
   color: var(--q-fg-muted);
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-sm);
-  border-top: 1px solid var(--q-border-subtle);
+  border: none;
 }
 .peekSummary {
   flex: 0 0 auto;

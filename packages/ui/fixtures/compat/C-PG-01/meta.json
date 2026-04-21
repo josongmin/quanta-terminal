@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "less /etc/passwd: DECSET 1049h → initial paint → scroll-down repaint → jump-to-end `(END)` → DECSET 1049l → main buffer restored.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

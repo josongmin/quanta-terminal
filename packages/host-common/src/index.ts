@@ -26,6 +26,8 @@ export type {
   ReadTextFileOptions,
   GitStatusOptions,
   GitStatus,
+  ListCompletionsOptions,
+  CompletionEntry,
   HostBridgeError,
   HostBridgeErrorCode,
 } from './bridge.js';

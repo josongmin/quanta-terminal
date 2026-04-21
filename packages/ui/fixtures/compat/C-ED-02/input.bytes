@@ -1,0 +1,2 @@
+$ nvim /tmp/hello.ts
+[?1049h[2J[H[1;1H// hello.ts[2;1H[3;1Hconst x: string = 42;[4;1H[5;1Hconsole.log(x);[3;19H[48;5;203m4[0m[7;1H[7m/tmp/hello.ts[0m[?1049l$ 

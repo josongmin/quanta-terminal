@@ -18,6 +18,10 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
     "check:layering": "node tools/check-fsd-layers.mjs",
     "check:layering:selftest": "node tools/__tests__/check-fsd-layers.test.mjs",
+    "check:render-path": "node tools/check-one-render-path/index.mjs",
+    "check:input-path": "node tools/check-one-input-path/index.mjs",
+    "check:no-block-chunks": "node tools/check-no-block-chunks-in-render/index.mjs",
+    "check:all": "pnpm -r --parallel run check && pnpm check:render-path && pnpm check:input-path && pnpm check:no-block-chunks",
     "package-sidecar": "./scripts/package-sidecar.sh",
     "generate-icons": "./scripts/generate-icons.sh"
   },

@@ -17,7 +17,7 @@ import { create } from 'zustand';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
-const STORAGE_KEY = 'quanta:theme';
+const STORAGE_KEY = 'quanta:theme:v2';
 const VALID: readonly ThemePreference[] = ['light', 'dark', 'system'];
 
 export interface ThemeStore {
@@ -43,8 +43,8 @@ export function readStoredTheme(
   } catch {
     return 'system';
   }
-  if (raw === null) return 'system';
-  return (VALID as readonly string[]).includes(raw) ? (raw as ThemePreference) : 'system';
+  if (raw === null) return 'light';
+  return (VALID as readonly string[]).includes(raw) ? (raw as ThemePreference) : 'light';
 }
 
 function writeStoredTheme(next: ThemePreference): void {

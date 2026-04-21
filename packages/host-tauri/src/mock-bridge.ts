@@ -11,6 +11,7 @@ import type {
   AiSuggestOptions,
   AiSuggestion,
   BlockId,
+  CompletionEntry,
   GitStatus,
   GitStatusOptions,
   HostBridge,
@@ -18,6 +19,7 @@ import type {
   HostEventListener,
   InstallShellIntegrationOptions,
   InstallShellIntegrationReply,
+  ListCompletionsOptions,
   NotifyOptions,
   OpenInEditorOptions,
   ReadTextFileOptions,
@@ -236,6 +238,10 @@ export function createMockHostBridge(): HostBridge {
       // still lets the user paste paths or trigger re-import if we grow
       // that affordance; the mock just can't find the files for them.
       return Promise.resolve(null);
+    },
+
+    listCompletions(_options: ListCompletionsOptions): Promise<CompletionEntry[]> {
+      return Promise.resolve([]);
     },
 
     aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {

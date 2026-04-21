@@ -153,6 +153,16 @@ export async function submitCommand(
   if (options.rerunOf !== undefined) startOptions.rerunOf = options.rerunOf;
   const blockId = blockStore.startBlock(normalized, cwd, startOptions);
 
+  // Optimistic cwd tracking for `cd <path>`. Without shell integration the
+  // shell changes its working dir but the UI has no way to observe it; we
+  // parse the common cases (absolute, ~/, relative, ..) and patch the
+  // session store. Shell integration, when installed, overwrites this with
+  // the authoritative value on the next prompt.
+  const nextCwd = predictCwdAfter(normalized, cwd);
+  if (nextCwd !== null && nextCwd !== cwd) {
+    useSessionStore.getState().setSession({ cwd: nextCwd });
+  }
+
   // Append newline if the user hasn't already, so the pty treats it as a
   // complete command.
   const payload = normalized.endsWith('\n') ? normalized : normalized + '\n';
@@ -168,4 +178,77 @@ export async function submitCommand(
     blockStore.errorBlock(blockId, `bridge.write failed: ${error.message}`);
     return { ok: false, reason: 'write-failed', blockId, error };
   }
+}
+
+/**
+ * Predict the cwd after executing a `cd`-only command line. Returns the new
+ * absolute path when the command is a plain `cd <arg>` we can resolve, or
+ * `null` when the command is not a cd / can't be resolved deterministically.
+ *
+ * Supported inputs (all single-line):
+ *   cd            → $HOME
+ *   cd ~          → $HOME
+ *   cd ~/a/b      → $HOME/a/b
+ *   cd /abs/path  → /abs/path
+ *   cd rel/path   → normalize(currentCwd/rel/path)
+ *   cd ..         → parent(currentCwd)
+ *
+ * Explicitly returns null for: `cd -`, `cd $VAR`, command chains (`cd && ls`),
+ * quoted paths (conservative), anything that's not exactly `cd ...`.
+ */
+export function predictCwdAfter(command: string, currentCwd: string): string | null {
+  const line = command.trim();
+  if (line.length === 0) return null;
+  if (line !== line.split('\n')[0]) return null;
+  // Reject anything with command separators — we only predict single cds.
+  if (/[;&|]|\n/u.test(line)) return null;
+  const m = line.match(/^cd(?:\s+(.+))?$/u);
+  if (!m) return null;
+  const rawArg = (m[1] ?? '').trim();
+  if (rawArg === '-') return null;
+  if (rawArg.includes('$')) return null;
+  // Strip surrounding quotes if present (single or double).
+  let arg = rawArg;
+  if (
+    (arg.startsWith('"') && arg.endsWith('"')) ||
+    (arg.startsWith("'") && arg.endsWith("'"))
+  ) {
+    arg = arg.slice(1, -1);
+  }
+  const home = getHome();
+  if (arg === '' || arg === '~') return home ?? currentCwd;
+  if (arg.startsWith('~/')) {
+    if (home === null) return null;
+    return normalizePath(home + '/' + arg.slice(2));
+  }
+  if (arg.startsWith('/')) return normalizePath(arg);
+  // Relative — resolve against currentCwd.
+  if (!currentCwd.startsWith('/')) return null;
+  return normalizePath(currentCwd + '/' + arg);
+}
+
+function getHome(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = (globalThis as any).process;
+    if (p && typeof p.env?.HOME === 'string' && p.env.HOME.length > 0) {
+      return p.env.HOME;
+    }
+  } catch {
+    // Swallow — browser env without a process shim.
+  }
+  return null;
+}
+
+function normalizePath(p: string): string {
+  const segments: string[] = [];
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      segments.pop();
+      continue;
+    }
+    segments.push(part);
+  }
+  return '/' + segments.join('/');
 }

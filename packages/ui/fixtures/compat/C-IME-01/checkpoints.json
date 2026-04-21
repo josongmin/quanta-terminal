@@ -1,0 +1,332 @@
+[
+  {
+    "at_byte_offset": 7,
+    "description": "After `$ echo ` (7 narrow ASCII chars) — cursor at row 0 col 7, row 0 holds the prompt text.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 7
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 10,
+    "description": "After first hangul `안` — row 0 col 7 is width-2 leading (grapheme `안`); col 8 is width-0 continuation; cursor advances to col 9.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 9
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo 안",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 22,
+    "description": "After all 5 hangul `안녕하세요` — cursor col = 7 + 5*2 = 17; each hangul occupies a width-2/width-0 pair.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 17
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo 안녕하세요",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 23,
+    "description": "After narrow `!` — `!` is at col 17 width 1; cursor at col 18. Width boundary is respected: narrow cell after width-0 continuation.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 18
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo 안녕하세요!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 43,
+    "description": "After newline + echo output — row 0 unchanged; row 1 holds `안녕하세요!` output (all wide cells); cursor on row 2.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo 안녕하세요!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "안녕하세요!",
+          "widths": [
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

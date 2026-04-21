@@ -49,6 +49,12 @@ import {
   takeConnection,
 } from './connection-map.js';
 import { createLogger } from '../../shared/lib/logger.js';
+// Plan 0005 Epic δ: startup commands are a block-UX-only affordance —
+// they feed through `submitCommand` which expects the block surface. In P0
+// default the submission would write to the PTY without producing any
+// visible block, so we skip entirely when the flag is off. Re-enabled the
+// moment `flag.blockUx` flips on (next session spawn picks it up).
+import { getFeatureFlag } from '../../shared/config/feature-flags.js';
 
 const log = createLogger('session-tabs.actions');
 
@@ -130,8 +136,15 @@ export async function createSession(
   // exactly as if the user typed them. A small inter-command gap prevents
   // the shell from coalescing two lines into a single prompt and lets each
   // block's boundary-detector latch.
+  // Epic δ P0 gate: startup commands flow through `submitCommand`, which
+  // requires the block surface. Skip them silently when the flag is off —
+  // the user-visible effect is "startup commands wait for P1 (blockUx)".
   const startupCommands = resolvedProfile.startupCommands;
-  if (startupCommands && startupCommands.length > 0) {
+  if (
+    startupCommands &&
+    startupCommands.length > 0 &&
+    getFeatureFlag('blockUx')
+  ) {
     void runStartupCommands(bridge, connection.sessionId, startupCommands);
   }
   return { sessionId: connection.sessionId, connection };
