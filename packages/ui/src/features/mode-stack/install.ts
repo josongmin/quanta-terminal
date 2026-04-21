@@ -35,6 +35,7 @@ import type { SessionId } from '@quanta/host-common';
 import {
   useModeStackStore,
   type ModeStack,
+  type ModeLayer,
 } from './mode-stack-store.js';
 import { createAltScreenDriver } from './drivers/alt-screen-driver.js';
 import {
@@ -153,6 +154,36 @@ export function installModeStack(
     }
   });
 
+  // Bridge the alt-screen driver's pushes/pops into the pager driver so the
+  // pager's "alt-screen active" precondition fires without every caller
+  // wiring it by hand. We observe the store itself (not the alt-screen
+  // driver's internal depth) so pushes from ANY source — hand-crafted tests,
+  // future drivers — still gate the pager correctly. The subscription counts
+  // `tui` layers and invokes `onAltScreenEnter()` / `onAltScreenExit()` on
+  // each delta. Tracking depth instead of presence matches the alt-screen
+  // driver's semantics (nested alt-screen enters stack).
+  let prevTuiDepth = 0;
+  for (const layer of store.layers) if (layer.kind === 'tui') prevTuiDepth += 1;
+  const unsubAltBridge =
+    pager !== null
+      ? useModeStackStore.subscribe(
+          (s) => s.layers,
+          (layers: readonly ModeLayer[]) => {
+            let depth = 0;
+            for (const layer of layers) if (layer.kind === 'tui') depth += 1;
+            while (depth > prevTuiDepth) {
+              pager.onAltScreenEnter();
+              prevTuiDepth += 1;
+            }
+            while (depth < prevTuiDepth) {
+              pager.onAltScreenExit();
+              prevTuiDepth -= 1;
+            }
+          },
+        )
+      : null;
+
+  let disposed = false;
   return {
     store,
     drivers: {
@@ -163,7 +194,11 @@ export function installModeStack(
       nestedShell,
     },
     dispose: () => {
+      // Idempotent per §SOTA++ quality bar: calling dispose() twice is safe.
+      if (disposed) return;
+      disposed = true;
       unsubscribe();
+      if (unsubAltBridge !== null) unsubAltBridge();
       for (const d of active) {
         try {
           d.dispose();

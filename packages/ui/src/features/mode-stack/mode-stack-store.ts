@@ -163,19 +163,53 @@ function makeLayerId(kind: LayerKind): string {
   return `${kind}-${nextIdSeq.toString(36)}`;
 }
 
+/**
+ * Concurrent-epoch tiebreak (P1-D §D5 audit). Drivers that observe the SAME
+ * output row can both fire on the same PTY chunk — e.g. a `>>> ` line both
+ * satisfies the REPL primary-prompt regex AND the pager bytes-fallback
+ * `--More--` buffer when a user runs `less` on a python session log. Without
+ * arbitration the stack gains two layers for one semantic mode.
+ *
+ * Rule — "already-existing top wins, new push coalesces":
+ *   If the topmost layer was pushed in the IMMEDIATELY-prior op
+ *   (`top.enteredAt === prev.epoch`) AND both layers are drawn from the
+ *   competing set {`pager`, `repl`} AND they are different kinds, coalesce
+ *   the incoming push — return the existing id, stack unchanged. This is
+ *   deliberately narrow: nesting cases (vim-inside-tmux, ssh-inside-tmux)
+ *   land in separate dispatch ticks and are NEVER coalesced.
+ */
+const CONCURRENT_TIEBREAK_KINDS: ReadonlySet<LayerKind> = new Set([
+  'pager',
+  'repl',
+]);
+
 export const useModeStackStore = create<ModeStack>()(
   subscribeWithSelector((set, get) => ({
     ...INITIAL,
     push(layer) {
+      // Concurrent-epoch tiebreak (pager/repl only): when both fire on the
+      // same chunk, the first-wins; the second push coalesces to the same id.
+      // See `CONCURRENT_TIEBREAK_KINDS` doc for the full rationale.
+      const prev = get();
+      const top = prev.layers[prev.layers.length - 1];
+      if (
+        top !== undefined &&
+        top.enteredAt === prev.epoch &&
+        CONCURRENT_TIEBREAK_KINDS.has(top.kind) &&
+        CONCURRENT_TIEBREAK_KINDS.has(layer.kind) &&
+        top.kind !== layer.kind
+      ) {
+        return top.id;
+      }
       const id = makeLayerId(layer.kind);
-      set((prev) => {
-        const epoch = prev.epoch + 1;
+      set((p) => {
+        const epoch = p.epoch + 1;
         const next: ModeLayer = {
           ...layer,
           id,
           enteredAt: epoch,
         };
-        return { ...prev, layers: [...prev.layers, next], epoch };
+        return { ...p, layers: [...p.layers, next], epoch };
       });
       return id;
     },

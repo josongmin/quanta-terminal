@@ -61,6 +61,43 @@ describe('multiplexer-driver', () => {
     ).toHaveLength(1);
   });
 
+  it('§D3: DA2 reply with leading `>1;` pushes tmux layer (CSI >q interpretation)', () => {
+    const driver = createMultiplexerDriver({
+      stack: useModeStackStore.getState(),
+    });
+    // Tmux's DA2 response: `ESC [ > 1 ; <version> ; 0 c`.
+    driver.feed(new TextEncoder().encode('\x1b[>1;95;0c'));
+    const layers = useModeStackStore.getState().layers;
+    expect(layers.map((l) => l.kind)).toEqual(['shell', 'multiplexer']);
+    expect(layers[1]?.hints?.multiplexer).toBe('tmux');
+  });
+
+  it('§D3: XTVERSION DCS reply `>|tmux 3.4` pushes tmux layer', () => {
+    const driver = createMultiplexerDriver({
+      stack: useModeStackStore.getState(),
+    });
+    driver.feed(new TextEncoder().encode('\x1bP>|tmux 3.4\x1b\\'));
+    const layers = useModeStackStore.getState().layers;
+    expect(layers).toHaveLength(2);
+    expect(layers[1]?.hints?.multiplexer).toBe('tmux');
+  });
+
+  it('§D3: CSI >q inbound request also triggers tmux detection', () => {
+    const driver = createMultiplexerDriver({
+      stack: useModeStackStore.getState(),
+    });
+    driver.feed(new TextEncoder().encode('\x1b[>q'));
+    expect(useModeStackStore.getState().layers).toHaveLength(2);
+  });
+
+  it('unrelated CSI sequences (SGR, cursor move) do NOT trigger multiplexer push', () => {
+    const driver = createMultiplexerDriver({
+      stack: useModeStackStore.getState(),
+    });
+    driver.feed(new TextEncoder().encode('\x1b[31mred\x1b[0m\x1b[2;3H'));
+    expect(useModeStackStore.getState().layers).toHaveLength(1);
+  });
+
   it('exit() removes the multiplexer layer; dispose resets FSM', () => {
     const driver = createMultiplexerDriver({
       stack: useModeStackStore.getState(),

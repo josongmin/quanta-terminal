@@ -119,6 +119,14 @@ import { getFeatureFlag } from '../../shared/config/feature-flags.js';
 // a sibling module so the hot path here stays tight — the auto-install is
 // pure policy + IPC that never blocks the returned `ConnectedSession`.
 import { maybeAutoInstallShellIntegration } from './shell-install.js';
+// Plan 0005 P1-D wave 1 — ModeStack installer. Production entry point that
+// wires the five mode-layer drivers to the engine's raw-byte tap so
+// alt-screen / pager / REPL / multiplexer / nested-shell detection actually
+// populates `useModeStackStore` for GhostHint and downstream consumers.
+import {
+  installModeStack,
+  type ModeStackInstallHandle,
+} from '../mode-stack/install.js'; // FIXME(fsd-layer-skip): session installs ModeStack drivers against its own engine; same cross-slice handoff pattern as the route-output / block-boundary-listener wiring above.
 
 const log = createLogger('session.connect');
 
@@ -241,6 +249,12 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // scrollback pin port. `undefined` when `flag.blockUx` is off (the router
   // is not installed either, so there's nothing to listen to).
   let boundaryListener: BoundaryListenerHandle | undefined;
+  // Plan 0005 P1-D wave 1 — ModeStack installer handle. Drivers subscribe to
+  // `engine.onRawByte` for alt-screen / pager / REPL / multiplexer / nested-
+  // shell detection. Installed after spawn() so the sessionId is known
+  // (carried for future per-session stacks) and disposed alongside the
+  // boundary listener in `close()`.
+  let modeStackHandle: ModeStackInstallHandle | undefined;
 
   const subscription = bridge.subscribe((event) => {
     if (closed) return;
@@ -408,6 +422,17 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     }
   }
 
+  // Plan 0005 P1-D wave 1 — install the ModeStack drivers against the engine
+  // so every PTY chunk feeds alt-screen / pager / REPL / multiplexer /
+  // nested-shell detection. The installer subscribes via `engine.onRawByte`,
+  // which fires BEFORE the frame-skip batcher so the drivers see every chunk
+  // in order independently of rAF coalescing. Orthogonal to `flag.blockUx`:
+  // the ModeStack populates the GhostHint pill + status-bar chrome regardless
+  // of the block-list feature flag, and is safe to run in both modes (the
+  // drivers are pure observers — they only push/pop layers on
+  // `useModeStackStore`, never touching the block store).
+  modeStackHandle = installModeStack({ sessionId, engine });
+
   // Seed the entity in the collection. `addSession` is a no-op if the id is
   // already known, so double-mount or late replay stays idempotent. We
   // deliberately pass `health: 'ready'` — the spawn has returned, the PTY is
@@ -528,6 +553,16 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
       if (boundaryListener !== undefined) {
         boundaryListener.dispose();
         boundaryListener = undefined;
+      }
+      // Plan 0005 P1-D wave 1 — dispose the ModeStack installer. The engine
+      // has already been disposed above which detaches the raw-byte bus, but
+      // the installer's own dispose is still required to pop any owned
+      // layers and release its alt-screen → pager bridge subscription. Safe
+      // to call on an undefined handle; `installModeStack` guards against
+      // double-dispose internally.
+      if (modeStackHandle !== undefined) {
+        modeStackHandle.dispose();
+        modeStackHandle = undefined;
       }
       try {
         await bridge.close(sessionId);

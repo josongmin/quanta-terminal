@@ -160,6 +160,103 @@ describe('installModeStack', () => {
     expect(snapshotShim()).toEqual({ active: true, depth: 2 });
   });
 
+  it('alt-screen → pager bridge: less bytes fed through engine push a pager layer with hints.pagerApp', () => {
+    const { engine } = makeEngine();
+    const handle = installModeStack({ sessionId: SESSION_ID, engine });
+
+    // Enter alt-screen first (what `less` does on startup).
+    engine.feed(enc.encode('\x1b[?1049h'));
+    // Now the pager driver needs a process hint. In production this arrives
+    // via OSC 7 / OSC 133 C parsing handed to `setProcessHint`; for the
+    // integration test we exercise that seam directly to confirm the
+    // installer-owned driver instance is the one receiving the signal.
+    handle.drivers.pager?.setProcessHint('less');
+
+    const layers = useModeStackStore.getState().layers;
+    expect(layers.map((l) => l.kind)).toEqual(['shell', 'tui', 'pager']);
+    const pagerLayer = layers.find((l) => l.kind === 'pager');
+    expect(pagerLayer?.hints?.pagerApp).toBe('less');
+
+    // Exit alt-screen → installer's store-subscribed bridge calls
+    // `pager.onAltScreenExit()` automatically, popping the pager layer too.
+    engine.feed(enc.encode('\x1b[?1049l'));
+    expect(
+      useModeStackStore.getState().layers.some((l) => l.kind === 'pager'),
+    ).toBe(false);
+
+    handle.dispose();
+    engine.dispose();
+  });
+
+  it('dispose() is idempotent — calling it twice is a safe no-op', () => {
+    const { engine } = makeEngine();
+    const handle = installModeStack({ sessionId: SESSION_ID, engine });
+    engine.feed(enc.encode('\x1b[?1049h'));
+    expect(useModeStackStore.getState().layers).toHaveLength(2);
+
+    handle.dispose();
+    // Second call must not throw and must not re-pop (the tui layer is
+    // already gone; a naive impl that calls driver.dispose() again could
+    // trip internal id assertions).
+    expect(() => handle.dispose()).not.toThrow();
+    expect(useModeStackStore.getState().layers).toHaveLength(1);
+
+    engine.dispose();
+  });
+
+  it('concurrent-epoch tiebreak: pager and repl fire on the same chunk → only first lands', () => {
+    // Use the raw store handle with two drivers racing on the same epoch.
+    // The pager driver is stubbed via direct `stack.push` because its
+    // byte-path requires an alt-screen precondition that's orthogonal to
+    // the tiebreak rule we're pinning here.
+    useModeStackStore.getState().reset();
+    const s = useModeStackStore.getState();
+
+    // Simulate pager-first, then repl — same chunk, no intervening ops.
+    const pagerId = s.push({
+      kind: 'pager',
+      hints: { pagerApp: 'less' },
+      inputPolicy: 'intercept_prefix',
+      mousePolicy: 'dropped',
+      renderHint: 'ghost',
+    });
+    const replId = s.push({
+      kind: 'repl',
+      hints: { replShell: 'python' },
+      inputPolicy: 'line_edit',
+      mousePolicy: 'dropped',
+      renderHint: 'ghost',
+    });
+
+    // Tiebreak: the existing pager layer wins; the repl push coalesces.
+    expect(replId).toBe(pagerId);
+    const layers = useModeStackStore.getState().layers;
+    expect(layers.map((l) => l.kind)).toEqual(['shell', 'pager']);
+  });
+
+  it('concurrent-epoch tiebreak does NOT break nesting (tui on top of multiplexer still stacks)', () => {
+    // Non-competing kinds (tui, multiplexer, nested-shell) must never
+    // coalesce even on back-to-back pushes — only the {pager, repl}
+    // competition triggers the tiebreak.
+    useModeStackStore.getState().reset();
+    const s = useModeStackStore.getState();
+    s.push({
+      kind: 'multiplexer',
+      hints: { multiplexer: 'tmux' },
+      inputPolicy: 'intercept_prefix',
+      mousePolicy: 'outermost_wins',
+      renderHint: 'chrome',
+    });
+    s.push({
+      kind: 'tui',
+      inputPolicy: 'passthrough',
+      mousePolicy: 'innermost_wins',
+      renderHint: 'chrome',
+    });
+    const kinds = useModeStackStore.getState().layers.map((l) => l.kind);
+    expect(kinds).toEqual(['shell', 'multiplexer', 'tui']);
+  });
+
   it('regression canary (C-MUX-03 flavour): tmux → ssh(SHLVL 2) → vim still stacks and resolves innermost-wins', () => {
     // Mirrors `features/mode-stack/__tests__/integration/mode-stack-depth-3.test.tsx`
     // but with ALL drivers wired via `installModeStack`, to guarantee the

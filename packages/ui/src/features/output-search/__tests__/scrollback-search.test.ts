@@ -291,15 +291,42 @@ describe('searchGrid', () => {
       else lines.push('lorem ipsum dolor sit amet');
     }
     const em = makeEmulator({ scrollbackLines: lines, cols: 80 });
+    // Warm-up pass — ensure V8 has specialized the hot shapes before the
+    // timed measurement.
+    {
+      const warm = new IncrementalSearchCache();
+      warm.resolve(em, {
+        text: 'tar',
+        regex: false,
+        caseSensitive: false,
+        wholeWord: false,
+      });
+      warm.resolve(em, {
+        text: 'targ',
+        regex: false,
+        caseSensitive: false,
+        wholeWord: false,
+      });
+    }
     const cache = new IncrementalSearchCache();
-    // First keystroke — cold.
+    // Time the cold path so we can measure **relative** speedup. Absolute
+    // timings are flaky under vitest parallel load (worker contention
+    // drags a 0.5 ms refinement into the 20-30 ms range on a busy CI),
+    // but the relative speedup (cold / refinement) is stable — if
+    // refinement is truly O(rows-with-hits) instead of O(all-rows) it
+    // will clear cold-time/10 comfortably.
+    const coldStart =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     cache.resolve(em, {
       text: 'tar',
       regex: false,
       caseSensitive: false,
       wholeWord: false,
     });
-    // Second keystroke — refinement. Timed in isolation.
+    const coldElapsed =
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+      coldStart;
+    // Refinement — timed in isolation.
     const start =
       typeof performance !== 'undefined' ? performance.now() : Date.now();
     const refined = cache.resolve(em, {
@@ -313,8 +340,14 @@ describe('searchGrid', () => {
       start;
     expect(refined.matches.length).toBeGreaterThan(25);
     expect(refined.matches.length).toBeLessThan(40);
-    // Cache-hit budget — much tighter than the 50 ms cold-path budget.
-    expect(elapsed).toBeLessThan(5);
+    // Cache-hit absolute ceiling — 5 ms on isolated runs, 30 ms under
+    // parallel-worker contention. Either way we're well under the
+    // 50 ms cold-path ceiling asserted by the test below.
+    expect(elapsed).toBeLessThan(30);
+    // Relative speedup — the refinement walk touches ~30 rows, the cold
+    // walk touches 10k. A 5× speedup is a conservative lower bound that
+    // still fails loudly if someone regresses the cache to a full re-scan.
+    expect(elapsed * 5).toBeLessThan(coldElapsed);
   });
 
   it('incremental cache: mode-toggle invalidates the fast-path', () => {

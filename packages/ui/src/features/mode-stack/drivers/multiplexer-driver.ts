@@ -2,7 +2,7 @@
  * multiplexer-driver — pushes a `multiplexer` layer when tmux or screen is
  * detected in the stream.
  *
- * Detection strategy (per P1-D §D2):
+ * Detection strategy (per P1-D §D2 / §D3):
  *   - Primary: DCS pass-through wrapper. tmux wraps its OSC traffic in
  *     `ESC P tmux; ESC ... ESC \`; screen does similarly with
  *     `ESC P ... ESC \`. Spotting any DCS-with-`tmux;` prefix is a near-
@@ -12,6 +12,13 @@
  *     with a tmux-specific `CurrentDir` reply we also push.
  *   - XTGETTCAP response (DCS 1 + r <payload> ST) is recognized as a
  *     positive multiplexer signal — only tmux/screen reply to the query.
+ *   - §D3 XTVERSION reply: DCS `>|tmux <version> ST` — tmux's canonical
+ *     response to the CSI `>q` (XTVERSION) request — is an unambiguous
+ *     positive. Screen replies similarly with `>|screen`.
+ *   - §D3 DA2 (secondary DA) reply: CSI `> <pid>;<version>;<kbd> c`. tmux
+ *     answers DA2 with a leading `1` in the first parameter (`\x1b[>1;Nv;0c`
+ *     or `\x1b[>1;...c`); matching that pretend-identity is a weaker but
+ *     useful signal in sessions where DCS pass-through isn't enabled.
  *
  * The driver pushes at most one layer per "detection event" and re-arms
  * after a quiescent period. tmux's DCS wrapping is continuous during a
@@ -31,7 +38,7 @@ import type { ModeLayerHints } from '../mode-stack-store.js';
 const ESC = 0x1b;
 const BEL = 0x07;
 
-type FsmState = 'Ground' | 'Escape' | 'Dcs' | 'Osc';
+type FsmState = 'Ground' | 'Escape' | 'Dcs' | 'Osc' | 'Csi';
 
 export interface MultiplexerDriver extends Driver {
   /** Explicitly pop the current multiplexer layer (e.g. detach). */
@@ -52,6 +59,8 @@ export function createMultiplexerDriver(
   let state: FsmState = 'Ground';
   let buf = '';
   let stEscPending = false;
+  // CSI accumulator (parameters + intermediates, without the final byte).
+  let csiBuf = '';
 
   const push = (kind: NonNullable<ModeLayerHints['multiplexer']>): void => {
     if (layerId !== null && detectedKind === kind) return;
@@ -95,6 +104,17 @@ export function createMultiplexerDriver(
         push('tmux');
         return true;
       }
+      // §D3 XTVERSION reply: DCS `>|tmux <version> ST`. Screen answers
+      // `>|screen <version>`. A leading `>|` + one of those program names
+      // is an unambiguous multiplexer signal.
+      if (/^>\|tmux\b/i.test(payload)) {
+        push('tmux');
+        return true;
+      }
+      if (/^>\|screen\b/i.test(payload)) {
+        push('screen');
+        return true;
+      }
     }
     if (kind === 'osc') {
       // tmux forwards OSC 1337;CurrentDir=... from its panes when
@@ -103,6 +123,33 @@ export function createMultiplexerDriver(
         push('tmux');
         return true;
       }
+    }
+    return false;
+  };
+
+  /**
+   * §D3 DA2 / CSI `>q` interpretation. The CSI accumulator already strips the
+   * `[` and stops at the final byte. We match:
+   *   - `>...c` → DA2 response. tmux advertises itself with a leading `1` in
+   *     the first parameter (`>1;<version>;<kbd>c`). Any DA2 with a `>`
+   *     prefix and leading `1` is treated as tmux-pretend.
+   *   - `>q`    → the XTVERSION *request* (outbound from some terminals).
+   *     Inbound `>q` from the host is rare but indicates a multiplexer
+   *     probing us back; same semantic — mark tmux.
+   * Final byte is passed in separately because it's consumed as the CSI
+   * terminator (not included in `csiBuf`).
+   */
+  const matchCsi = (payloadWithFinal: string): boolean => {
+    // DA2 response: `>1;...c`.
+    if (/^>1(?:;[0-9]*)*c$/.test(payloadWithFinal)) {
+      push('tmux');
+      return true;
+    }
+    // CSI `>q` — XTVERSION query. Inbound indicates a pass-through
+    // multiplexer is probing the terminal.
+    if (/^>q$/.test(payloadWithFinal)) {
+      push('tmux');
+      return true;
     }
     return false;
   };
@@ -124,10 +171,35 @@ export function createMultiplexerDriver(
             buf = '';
             stEscPending = false;
             return;
+          case 0x5b /* [ */:
+            state = 'Csi';
+            csiBuf = '';
+            return;
           default:
             state = 'Ground';
             return;
         }
+      case 'Csi': {
+        // CSI: parameter bytes 0x30..0x3f, intermediate bytes 0x20..0x2f,
+        // final byte 0x40..0x7e. Anything else aborts.
+        if (b >= 0x30 && b <= 0x3f) {
+          if (csiBuf.length < 64) csiBuf += String.fromCharCode(b);
+          return;
+        }
+        if (b >= 0x20 && b <= 0x2f) {
+          if (csiBuf.length < 64) csiBuf += String.fromCharCode(b);
+          return;
+        }
+        if (b >= 0x40 && b <= 0x7e) {
+          matchCsi(csiBuf + String.fromCharCode(b));
+          state = 'Ground';
+          csiBuf = '';
+          return;
+        }
+        state = 'Ground';
+        csiBuf = '';
+        return;
+      }
       case 'Dcs':
       case 'Osc': {
         if (stEscPending) {
@@ -191,6 +263,7 @@ export function createMultiplexerDriver(
       pop();
       state = 'Ground';
       buf = '';
+      csiBuf = '';
       stEscPending = false;
     },
   };
