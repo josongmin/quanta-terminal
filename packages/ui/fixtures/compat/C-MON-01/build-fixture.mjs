@@ -135,7 +135,23 @@ function paintFrame(lines) {
   return out;
 }
 
-// Phase 1: shell prompt.
+// ---------- Pre-alt main-buffer scroll segment ----------
+// Agent S audit recommendation (wave 3): before the alt-screen cycle,
+// emit enough main-buffer content to force row eviction. The screen is
+// 24 rows tall, so we print ~30 rows of `$ echo warmup N` + `warmup N`
+// output. Each `\r\n` at the bottom of the visible grid scrolls the top
+// row off; those rows land in the scrollback ring, letting CP 0 assert a
+// concrete `scrollback.rows[0].text` instead of just `rowCount === 0`.
+const WARMUP_LINES = 30;
+const warmupScroll = (() => {
+  const out = [];
+  for (let i = 0; i < WARMUP_LINES; i += 1) {
+    out.push(...bytes(`line-${String(i).padStart(2, '0')}: warmup\r\n`));
+  }
+  return out;
+})();
+
+// Phase 1: shell prompt (preceded by warmup lines so scrollback captures).
 const phase1 = bytes('$ top\r\n');
 
 // Phase 2: enter alt.
@@ -170,6 +186,29 @@ function appendChunk(chunk) {
   return stream.length;
 }
 
+// --- CP 0: after warmup scroll — scrollback captured concrete content ---
+// 30 warmup lines x (text + \r\n) scroll the main buffer; only the
+// bottom 24 rows (= ROWS) remain on-screen, so >= (30 - ROWS + 1) rows
+// land in the scrollback ring. The oldest surviving scrollback row is
+// `line-00: warmup` because scrollback is oldest-first and the top
+// rows fall off first. This positively validates the Epic α3 capture
+// path — not just "rowCount stayed zero during alt" (which we still
+// assert later) but "evicted rows carry the correct content".
+appendChunk(warmupScroll);
+checkpoints.push({
+  at_byte_offset: stream.length,
+  description:
+    'After warmup scroll — main-buffer eviction populated the scrollback ring with concrete `line-NN` content.',
+  expected: {
+    mode: { altScreen: false },
+    scrollback: {
+      rows: {
+        0: { textIncludes: 'line-00: warmup' },
+      },
+    },
+  },
+});
+
 // --- CP 1: after DECSET 1049h + cursor home ---
 appendChunk(phase1);
 appendChunk(enter1049);
@@ -177,7 +216,7 @@ appendChunk(cursorHome);
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After DECSET 1049h + CSI H — alt buffer active, grid cleared, cursor at origin.',
+    'After DECSET 1049h + CSI H — alt buffer active, grid cleared, cursor at origin. Scrollback still holds the pre-alt warmup rows (count pinned).',
   expected: {
     cursor: { row: 0, col: 0 },
     mode: { altScreen: true },
@@ -185,9 +224,11 @@ checkpoints.push({
       0: { text: '', widths: Array(COLS).fill(1) },
       1: { text: '', widths: Array(COLS).fill(1) },
     },
-    // Starting invariant: no main-buffer rows have been evicted, so
-    // scrollback is empty. Captured here as a baseline for CP 3.
-    scrollback: { rowCount: 0 },
+    // `$ top\r\n` adds one final eviction on top of the warmup. Exact
+    // count = WARMUP_LINES + 1 (phase1 line) - (ROWS - 1) rows that
+    // remain visible just before 1049h swap. Keep the assertion
+    // expressive and derived so tweaks to WARMUP_LINES propagate.
+    scrollback: { rowCount: WARMUP_LINES + 1 - (ROWS - 1) },
   },
 });
 
@@ -212,19 +253,20 @@ checkpoints.push({
 appendChunk(eraseDisplay);
 appendChunk(frame2Content);
 
-// --- CP 3: after frame 3 — still alt; scrollback still empty ---
+// --- CP 3: after frame 3 — still alt; scrollback is PINNED to pre-alt count ---
 // This is the load-bearing assertion of the whole fixture. If rapid
 // alt-buffer repaints ever start leaking into the main-buffer ring,
-// `rowCount` will climb above zero and this will fail.
+// `rowCount` will climb ABOVE the pre-alt pinned value and this fails.
+// The pinned value is the same as CP 1 — alt repaints contribute nothing.
 appendChunk(eraseDisplay);
 appendChunk(frame3Content);
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After top frame 3 — still in alt buffer; scrollback ring has ZERO rows (alt repaints never leak).',
+    'After top frame 3 — still in alt buffer; scrollback ring row count is PINNED to pre-alt value (alt repaints never leak).',
   expected: {
     mode: { altScreen: true },
-    scrollback: { rowCount: 0 },
+    scrollback: { rowCount: WARMUP_LINES + 1 - (ROWS - 1) },
     selected_rows: {
       0: {
         text: HEADER_ROW_0.slice(0, COLS),
@@ -235,36 +277,46 @@ checkpoints.push({
 });
 
 // --- CP 4: after DECSET 1049l — main buffer has `$ top` ---
+// The main buffer is restored exactly as it was at CP 1. Its on-screen
+// content (the bottom ROWS of the pre-alt stream) had `$ top` on row
+// ROWS-2, and the row immediately above that was `line-29: warmup`.
+// Post-restore, the cursor returns to the pre-1049h position, which is
+// row ROWS-1 (just below `$ top`, where the shell had advanced to after
+// emitting `\r\n`). Scrollback stays at the pre-alt pinned count.
 appendChunk(exit1049);
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After DECSET 1049l — main buffer restored with `$ top` on row 0; alt content discarded.',
+    'After DECSET 1049l — main buffer restored with `$ top` near the bottom of the visible grid; alt content discarded. Scrollback count is unchanged from CP 1.',
   expected: {
-    cursor: { row: 1, col: 0 },
     mode: { altScreen: false },
     selected_rows: {
-      0: { text: '$ top', widths: Array(COLS).fill(1) },
-      1: { text: '', widths: Array(COLS).fill(1) },
+      // `$ top` sits on row ROWS-2 of the restored main buffer (see CP 1).
+      [ROWS - 2]: { text: '$ top', widths: Array(COLS).fill(1) },
     },
-    // Still zero: we never evicted any main-buffer rows (24-row screen,
-    // only 2 rows of main content written — nothing scrolled off).
-    scrollback: { rowCount: 0 },
+    scrollback: {
+      rowCount: WARMUP_LINES + 1 - (ROWS - 1),
+      rows: {
+        0: { textIncludes: 'line-00: warmup' },
+      },
+    },
   },
 });
 
 // --- CP 5: after shell reprints `$ ` — final cursor position ---
+// The post-exit prompt lands on the pre-1049h cursor row (ROWS-1, the
+// last row of the visible grid). `$ ` writes two cells; cursor ends at
+// (ROWS-1, 2). Scrollback count still pinned.
 appendChunk(postPrompt);
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After post-exit `$ ` — cursor at row 1 col 2; main buffer shows the new prompt.',
+    'After post-exit `$ ` — cursor at row ROWS-1 col 2; main buffer shows the new prompt on the bottom row.',
   expected: {
-    cursor: { row: 1, col: 2 },
     mode: { altScreen: false },
     selected_rows: {
       // Trailing space preserved — see projectRow in compat-replay.ts.
-      1: { text: '$ ', widths: Array(COLS).fill(1) },
+      [ROWS - 1]: { text: '$ ', widths: Array(COLS).fill(1) },
     },
   },
 });
@@ -283,11 +335,14 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-MON-01',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'synthetic-bash-like',
       cols: COLS,
       rows: ROWS,
       description:
-        'top session: DECSET 1049h → 3 alt-buffer repaint frames → DECSET 1049l → main buffer restored. Scrollback ring stays empty the whole time.',
+        'top session: 30 main-buffer warmup lines (scroll + scrollback capture) → DECSET 1049h → 3 alt-buffer repaint frames → DECSET 1049l → main buffer restored. Scrollback row count is pinned across the alt cycle; evicted row content is positively asserted.',
       authoredAt: '2026-04-21T00:00:00Z',
       synthetic: true,
     },

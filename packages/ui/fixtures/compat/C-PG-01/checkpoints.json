@@ -548,7 +548,7 @@
   },
   {
     "at_byte_offset": 4008,
-    "description": "After `G` jump-to-end — status line now reads `(END)`; row 0 shows `daemon:`.",
+    "description": "After `G` jump-to-end — status line now reads `(END)`; row 0 shows `daemon:`. sgrDigest pins the reverse-video attribute on the status marker.",
     "expected": {
       "mode": {
         "altScreen": true
@@ -722,7 +722,8 @@
             1,
             1,
             1
-          ]
+          ],
+          "sgrDigest": "e6a6af9888d0d0d896d37f1331a8e3b169b5bca35dced6deaac2d0899f897dac"
         }
       }
     }

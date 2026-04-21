@@ -97,6 +97,24 @@
 | Agent-R | (partial — limit) | Input audit: +new tests across focus-reporting, input-host-interleaving, keystroke-encoding, mouse-tracking, paste-encoding edge cases. Session edge-resize-clamp | ✓ tests landed |
 | Agent-S | (merged) | Compat harness audit + enhancements: byteAccounting on CompatReport, COMPAT_SNAPSHOT_FORMAT_VERSION meta guard, id/kind validation, scrollback.rows projection. 13 audit invariants in harness-audit.test.ts | ✓ |
 
+## Wave 4 (resumed after 1am token reset)
+
+| Agent | Scope | Status |
+|-------|-------|--------|
+| T | 5 compat fixtures — C-NET-01/02 (ssh), C-RP-01/02/03 (python/node/psql). 10 tests | ✓ merged |
+| U | 8 compat fixtures — C-STRESS-01/02/03, C-UX-01/03 (02/04 dedup'd), C-COMB-01/02/03 + `stress` category. 10 tests | ✓ merged (limit-hit but delivered) |
+| V | CI workflows — `.github/workflows/compat.yml`, `perf.yml`/`perf-budget.yml`, `grep-rules.yml`. | ✓ merged (limit-hit but delivered) |
+| W | C-IME-04 dead-key + C-PG-03 more + checkpoint upgrades (C-IME-01, C-ED-01, C-PG-01, C-MON-01) + meta.json upgrades (id/kind/snapshotFormatVersion across all 19 existing fixtures) | ✓ merged (limit-hit but delivered) |
+| X | VT audit follow-up — charset-switching, decsc-decrc-edge, deccolm, insert-mode, tab-stops, grapheme-combining, device-attributes, osc-title (8 files, 60 tests). VtEmulator 207 → 267 | ✓ merged |
+| Y | Input audit follow-up — kitty-keyboard-edge, modifier-composition, function-keys-edge, edit-keys-edge, paste-ime-mouse-interleaving, degraded-input (6 files) | ✓ merged (degraded-input tests describe.skip'd — impl gap noted as P1 follow-up) |
+| Z | Ship gate sign-off | ⏳ not delivered (limit hit early) |
+
+**Wave 4 totals: 125 files, +80830/-141** (huge from 30+ new fixtures + 14 new test files + CI workflows)
+
+**Final UI test suite: 4681 / 4702 pass, 0 fail, 21 skipped**
+**Compat fixtures: 30 shipped** (from the 32-row target matrix in test-strategy.md §1)
+**VtEmulator: 267 tests** (from 153 baseline — +114 across Q+X audits)
+
 **Wave 3 totals: 110 files, +17024/-39 lines**
 
 **Full UI test suite: 4502 / 4518 pass (0 fail, 16 skipped)** — up from 4305 after wave 2 (+197 net tests).

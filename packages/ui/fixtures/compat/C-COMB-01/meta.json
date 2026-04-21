@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "`git log | less | head -20`: pipe + pager + head combinator. less enters alt, paints 20 commit rows, exits on EOF. Asserts alt-buffer content never leaks to scrollback — the foundational pager invariant, repeated for a PIPED less.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

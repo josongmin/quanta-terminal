@@ -1,4 +1,7 @@
 {
+  "id": "C-PG-01",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
   "shell": "synthetic-bash-like",
   "cols": 80,
   "rows": 24,

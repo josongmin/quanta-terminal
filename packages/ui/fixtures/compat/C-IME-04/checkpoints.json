@@ -1,0 +1,227 @@
+[
+  {
+    "at_byte_offset": 7,
+    "description": "After `$ echo ` (7 narrow ASCII chars) — cursor at row 0 col 7.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 7
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 21,
+    "description": "After `café résumé` — all é are width-1 BMP Latin-1 graphemes; row 0 widths are all 1s; cursor at col 18 (7 prompt + 11 phrase).",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 18
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo café résumé",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 39,
+    "description": "After newline + echo — row 1 holds the echoed `café résumé` (same narrow classification); cursor on row 2.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo café résumé",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "café résumé",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 39,
+    "description": "Free alt-screen assertion — Latin-1 echo never enters alt buffer; `mode.altScreen` stays false.",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      }
+    }
+  }
+]

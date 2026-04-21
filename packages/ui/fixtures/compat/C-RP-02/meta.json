@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-node",
+  "cols": 60,
+  "rows": 12,
+  "description": "node REPL multi-line paste: bracketed-paste delimiters (CSI 200~ / CSI 201~) are silently consumed by the parser, the pasted arrow-function definition lands inline on rows 3-6, result `5` on row 7, next `> ` on row 8, clean `.exit`. Canary for future bracketed-paste state tracking (must not regress visible transcript).",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-RP-02",
+  "snapshotFormatVersion": 1
+}

@@ -214,6 +214,22 @@ checkpoints.push({
   },
 });
 
+// --- CP 6: free assertion — `echo` with CJK never triggers alt-screen ---
+// Agent S audit recommendation (wave 3): adding a `mode.altScreen: false`
+// checkpoint here costs nothing (the stream contains no DECSET 1049h) and
+// gives us a tripwire if a regression ever causes a spurious alt-buffer
+// enter during wide-cell processing. Anchor offset is stream.length (same
+// as CP 5) — the emulator's mode-state is read, not the grid, so two
+// checkpoints at the same offset are cheap and independent.
+checkpoints.push({
+  at_byte_offset: stream.length,
+  description:
+    'Free alt-screen assertion — CJK echo session never enters alt buffer; `mode.altScreen` stays false throughout.',
+  expected: {
+    mode: { altScreen: false },
+  },
+});
+
 // ---------- Write artifacts ----------
 const inputPath = join(__dirname, 'input.bytes');
 const checkpointsPath = join(__dirname, 'checkpoints.json');
@@ -228,6 +244,9 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-IME-01',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'zsh',
       cols: COLS,
       rows: ROWS,

@@ -1,0 +1,77 @@
+[
+  {
+    "at_byte_offset": 150020,
+    "description": "After 50 000 × `y\\r\\n` — scrollback ring sits at its 10 000-row cap (eviction enforced; ring never grows past capacity).",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 10000
+      }
+    }
+  },
+  {
+    "at_byte_offset": 150022,
+    "description": "After final `$ ` — scrollback still at cap; altScreen still false. Even with 5× more content than ring capacity, the cap holds.",
+    "expected": {
+      "cursor": {
+        "row": 11,
+        "col": 2
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 10000
+      },
+      "selected_rows": {
+        "11": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

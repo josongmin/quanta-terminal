@@ -1,0 +1,126 @@
+[
+  {
+    "at_byte_offset": 180022,
+    "description": "After 15 000 rows emitted — scrollback ring is at its 10 000-row cap; the head has been evicted as new rows pushed past capacity.",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 10000
+      }
+    }
+  },
+  {
+    "at_byte_offset": 180022,
+    "description": "altScreen invariant — main-buffer cat never enters alt.",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      }
+    }
+  },
+  {
+    "at_byte_offset": 180024,
+    "description": "After final prompt — scrollback still at cap; viewport row 23 holds `$ `.",
+    "expected": {
+      "cursor": {
+        "row": 23,
+        "col": 2
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 10000
+      },
+      "selected_rows": {
+        "23": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

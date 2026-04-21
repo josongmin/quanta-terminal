@@ -17,12 +17,27 @@
 export type CompatCategory =
   /** `C-ED-*` — interactive editors (vim, nvim, nano, helix). */
   | 'editor'
-  /** `C-INT-*` — interactive REPLs (python, node, psql, ssh). */
+  /**
+   * `C-INT-*` + `C-IME-*` + `C-UX-*` + `C-COMB-*` — interactive REPLs
+   * (python, node, psql, ssh), IME commits, UX contracts (clear,
+   * bracketed paste), and multi-stage combinator pipelines
+   * (`git log | less | head`, `find /`, `yes | head`). All share the
+   * "interactive byte-stream" engine path; grouping them under one
+   * category keeps the matrix readable without adding narrow buckets.
+   */
   | 'interactive'
   /** `C-PG-*` — pagers (less, more, man, git log). */
   | 'pager'
   /** `C-SH-*` — shell loops (bash, zsh, fish) — pure main-buffer transcripts. */
   | 'shell'
+  /**
+   * `C-STRESS-*` — engine stress fixtures. Heavy main-buffer volume
+   * (tail/base64, cat, ls transcripts) that forces scrollback-ring
+   * growth and eviction + DPR-change sanity. Distinct from `shell`
+   * (baseline correctness) and `tui` (alt-buffer behaviour) — stress
+   * fixtures assert the RING itself stays bounded under load.
+   */
+  | 'stress'
   /** `C-TUI-*` — full-screen TUIs (htop, btop, k9s, fzf). */
   | 'tui';
 
@@ -172,6 +187,123 @@ export const COMPAT_FIXTURES: Readonly<Record<string, CompatFixture>> = {
     fixtureDir: 'packages/ui/fixtures/compat/C-IME-03',
     description:
       'Chinese pinyin IME commit: 你好世界! — 4 CJK characters (each width-2) + ASCII ! (width-1). Echoed on row 2 with identical widths.',
+  },
+  'C-IME-04': {
+    id: 'C-IME-04',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-IME-04',
+    description:
+      'Dead-key European composition: `$ echo café résumé` — é (UTF-8 0xC3 0xA9) classified as BMP Latin-1 width-1, NOT wide. Sanity check for width classifier BMP fallback.',
+  },
+  'C-PG-03': {
+    id: 'C-PG-03',
+    category: 'pager',
+    fixtureDir: 'packages/ui/fixtures/compat/C-PG-03',
+    description:
+      'more /etc/hosts: main-buffer-only pager (no DECSET 1049), reverse-video --More-- status, clean CSI K exit. Contrasts with C-PG-01 (less, alt-buffer pager).',
+  },
+  'C-NET-01': {
+    id: 'C-NET-01',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-NET-01',
+    description:
+      'ssh localhost echo hi: non-interactive SSH round-trip — local prompt → ssh command → remote `hi` output → clean disconnect → local prompt. Engine sees ssh as a transparent byte stream; altScreen stays false throughout.',
+  },
+  'C-NET-02': {
+    id: 'C-NET-02',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-NET-02',
+    description:
+      'Remote bash over ssh with `cd /etc; ls`: multi-turn interactive session, MOTD banner, `user@host:` prompt shape, cwd-via-prompt heuristic on `cd /etc`, `ls` output containing `passwd`, clean `exit`. P1-SI replaces the prompt-match cwd check with OSC 7.',
+  },
+  'C-RP-01': {
+    id: 'C-RP-01',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-RP-01',
+    description:
+      'python3 multi-line `def` block: primary `>>> ` + continuation `... ` prompt cycle, function call + `42` result, clean `exit()`. Banner trimmed to fit 60 cols without wrap.',
+  },
+  'C-RP-02': {
+    id: 'C-RP-02',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-RP-02',
+    description:
+      'node REPL bracketed-paste block: `CSI 200~`/`CSI 201~` delimiters silently consumed by the parser, pasted arrow-function + call land inline on rows 3-6, result `5` on row 7, clean `.exit`. Canary for future bracketed-paste state tracking.',
+  },
+  'C-RP-03': {
+    id: 'C-RP-03',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-RP-03',
+    description:
+      'psql `mydb=> ` prompt shape + `SELECT 1;` round-trip: banner, idle prompt, result table (header/rule/value/row count), clean `\\q`. Transaction-aware prompt variants (`=*`, `->`) deferred to P1.',
+  },
+  // ---- Plan 0005 P0 Gate #6 batch: stress / UX / combinator fixtures. ----
+  // Categories: C-STRESS-* → `stress` (new — eviction-ring focus); C-UX-*
+  // + C-COMB-* → `interactive` (reuse — see CompatCategory jsdoc).
+  //
+  // Skipped from the original gate-#6 slate:
+  //   - C-UX-02 (resize 200×50 ↔ 80×24, 10 cycles) — the compat harness
+  //     only drives `emulator.feed()`; resize is a side-channel call.
+  //     Covered instead by resize-focused tests in the VtEmulator suite
+  //     (`vt-emulator/__tests__/resize.test.ts` et al.).
+  //   - C-UX-04 (split pane) — a true multi-pane scenario needs two
+  //     independent sessions; the "alt-buffer split" variant is already
+  //     covered by C-MUX-01 + C-MUX-02.
+  'C-STRESS-01': {
+    id: 'C-STRESS-01',
+    category: 'stress',
+    fixtureDir: 'packages/ui/fixtures/compat/C-STRESS-01',
+    description:
+      '`tail -f /dev/urandom | base64` 30s-style stress: 100 base64-lookalike rows (~7.8 KB) force the main-buffer scroll-up path + scrollback-ring growth. droppedBytes stays 0 (enforced globally by harness-audit).',
+  },
+  'C-STRESS-02': {
+    id: 'C-STRESS-02',
+    category: 'stress',
+    fixtureDir: 'packages/ui/fixtures/compat/C-STRESS-02',
+    description:
+      '`cat /tmp/100mb.log` with 15 000 rows forces scrollback eviction past the 10 000-row default cap. rowCount pinned at the cap; evictedCount ≈ 4 978 at fixture end.',
+  },
+  'C-STRESS-03': {
+    id: 'C-STRESS-03',
+    category: 'stress',
+    fixtureDir: 'packages/ui/fixtures/compat/C-STRESS-03',
+    description:
+      'DPR-change mid-session sanity: emulator state (cursor, widths, SGR) is unaffected by hypothetical device-pixel-ratio transitions. Real atlas-invalidation lives in FontAtlas tests; this fixture locks the engine baseline with a minimal `ls --color=auto` transcript.',
+  },
+  'C-UX-01': {
+    id: 'C-UX-01',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-UX-01',
+    description:
+      '`clear` behaviour: CSI H + CSI 2J wipes the visible grid and homes the cursor. Scrollback survives (no CSI 3J emitted). Verifies the baseline `clear` contract used by every shell + bash-in-SSH deployment.',
+  },
+  'C-UX-03': {
+    id: 'C-UX-03',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-UX-03',
+    description:
+      'Bracketed-paste (DECSET 2004) round-trip: `CSI 200 ~` + `hello world!` + `CSI 201 ~`. Pasted text renders normally; the markers are consumed as control bytes and never appear in the grid.',
+  },
+  'C-COMB-01': {
+    id: 'C-COMB-01',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-COMB-01',
+    description:
+      '`git log | less | head -20`: pipe + pager + head combinator. less enters alt, paints 20 commit rows, exits on EOF. Alt-buffer content never leaks to the scrollback ring.',
+  },
+  'C-COMB-02': {
+    id: 'C-COMB-02',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-COMB-02',
+    description:
+      '`find / 2>/dev/null` timeboxed to 800 pathnames: main-buffer scroll-up + scrollback-ring stress. altScreen stays false; ring captures ~778 rows without emergency drops.',
+  },
+  'C-COMB-03': {
+    id: 'C-COMB-03',
+    category: 'interactive',
+    fixtureDir: 'packages/ui/fixtures/compat/C-COMB-03',
+    description:
+      '`yes | head -c 1G` lightweight (50 000 × `y\\r\\n`): scrollback-ring cap under 5× overflow. rowCount pinned at 10 000; droppedBytes stays 0.',
   },
 };
 

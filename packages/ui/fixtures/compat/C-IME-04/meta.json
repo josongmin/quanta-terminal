@@ -1,0 +1,11 @@
+{
+  "id": "C-IME-04",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
+  "shell": "zsh",
+  "cols": 40,
+  "rows": 4,
+  "description": "Dead-key European composition: `$ echo café résumé` — `é` (UTF-8 0xC3 0xA9) must classify as BMP Latin-1 width-1, NOT wide. All row-0 widths are 1s across the phrase.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

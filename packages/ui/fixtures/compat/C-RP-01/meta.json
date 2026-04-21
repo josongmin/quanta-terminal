@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-python3",
+  "cols": 60,
+  "rows": 14,
+  "description": "python3 multi-line `def` block: primary `>>> ` + continuation `... ` prompt cycle, function call + `42` result, clean `exit()`. Banner lines trimmed vs. real CPython so the fixture fits in 60 cols without wrap.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-RP-01",
+  "snapshotFormatVersion": 1
+}

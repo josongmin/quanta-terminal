@@ -28,6 +28,7 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -169,10 +170,16 @@ appendChunk(tildes);
 appendChunk(statusBar);
 // Cursor is parked at the end of the status bar on the last row; insert
 // moves it back to row 1 col 1 next.
+//
+// Agent S audit recommendation (wave 3): attach `sgrDigest` to the status
+// row so drift in the reverse-video attribute (SGR 7 → inverse bit) or
+// on the character range is caught here. Label is 12 graphemes
+// (`-- INSERT --`), each with inverse ON (flags bit 3 = 0x08); remaining
+// cells default.
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After vim-like initial paint: tildes on rows 1..4, reverse-video status bar on row 5.',
+    'After vim-like initial paint: tildes on rows 1..4, reverse-video status bar on row 5. sgrDigest pins the inverse attribute across the label range.',
   expected: {
     mode: { altScreen: true },
     selected_rows: {
@@ -183,6 +190,7 @@ checkpoints.push({
       5: {
         text: '-- INSERT --',
         widths: Array(COLS).fill(1),
+        sgrDigest: computeInsertStatusDigest(),
       },
     },
   },
@@ -229,6 +237,9 @@ checkpoints.push({
 });
 
 // --- CP 5: after shell reprints "$ " ---
+// Trailing space is preserved in the projection — `$ ` writes two cells
+// (`$` then ` `) and both have non-empty graphemes. Matches the
+// C-PG-01 / C-MON-01 convention.
 appendChunk(postPrompt);
 checkpoints.push({
   at_byte_offset: stream.length,
@@ -239,12 +250,33 @@ checkpoints.push({
     mode: { altScreen: false },
     selected_rows: {
       1: {
-        text: '$',
+        text: '$ ',
         widths: Array(COLS).fill(1),
       },
     },
   },
 });
+
+// ---------- SGR digest helper (mirrors compat-replay.ts:sgrTupleFor) ----------
+/**
+ * Build the SHA-256 digest over per-cell SGR tuples for the status row.
+ * The row contains `-- INSERT --` (12 graphemes) painted with SGR 7
+ * (inverse) active; cells beyond the label are default. SGR 7 maps to
+ * flags bit 3 (0x08) in `sgrTupleFor`.
+ */
+function computeInsertStatusDigest() {
+  const parts = [];
+  const LABEL = '-- INSERT --';
+  for (let c = 0; c < COLS; c += 1) {
+    if (c < LABEL.length) {
+      // fg=default, bg=default, flags=0x08 (inverse)
+      parts.push('d,d,8');
+    } else {
+      parts.push('d,d,0');
+    }
+  }
+  return createHash('sha256').update(parts.join('|')).digest('hex');
+}
 
 // ---------- Write artifacts ----------
 const inputPath = join(__dirname, 'input.bytes');
@@ -260,6 +292,9 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-ED-01',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'synthetic-bash-like',
       cols: COLS,
       rows: ROWS,

@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-bash-ssh",
+  "cols": 60,
+  "rows": 8,
+  "description": "ssh localhost echo hi: non-interactive one-shot round-trip over SSH. Local prompt → ssh command → remote `hi` output → clean disconnect → local prompt. Pure main-buffer transcript; engine sees ssh as a transparent byte stream.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-NET-01",
+  "snapshotFormatVersion": 1
+}

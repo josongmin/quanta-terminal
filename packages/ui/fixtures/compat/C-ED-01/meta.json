@@ -1,4 +1,7 @@
 {
+  "id": "C-ED-01",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
   "shell": "synthetic-bash-like",
   "cols": 40,
   "rows": 6,

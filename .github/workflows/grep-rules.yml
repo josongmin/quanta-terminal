@@ -1,0 +1,58 @@
+name: grep-rules
+
+# Plan 0005 P0 Gate #7 — enforce the three grep-level invariants that keep the
+# terminal render / input paths single-sourced:
+#
+#   I-11  one render path      → tools/check-one-render-path
+#   I-12  one input path       → tools/check-one-input-path
+#   I-??  no block-chunks in render path → tools/check-no-block-chunks-in-render
+#
+# The first two rules are enforced in default (non-strict) mode, which tolerates
+# the DEFERRED allowlist for Epic δ's P1 block-UX migration work (see each
+# tool's README). The no-block-chunks rule runs in STRICT mode — the Epic δ
+# allowlist there now covers every P1 block-UX slice, so `--strict` should be
+# green on `main`. If a new block-UX consumer lands outside the allowlist, the
+# check will fail here before it reaches the test suite.
+#
+# Self-tests (node:test) are also run so a bad rule edit is caught — each
+# `tools/check-*/__tests__/rule.test.mjs` exercises the audit logic against
+# synthetic fixtures that do NOT depend on the live tree.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: grep-rules-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    name: grep rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: check-one-render-path
+        run: node tools/check-one-render-path/index.mjs
+
+      - name: check-one-input-path
+        run: node tools/check-one-input-path/index.mjs
+
+      - name: check-no-block-chunks-in-render (strict)
+        run: node tools/check-no-block-chunks-in-render/index.mjs --strict
+
+      - name: grep-rule self-tests
+        run: |
+          node --test tools/check-one-render-path/__tests__/rule.test.mjs
+          node --test tools/check-one-input-path/__tests__/rule.test.mjs
+          node --test tools/check-no-block-chunks-in-render/__tests__/rule.test.mjs

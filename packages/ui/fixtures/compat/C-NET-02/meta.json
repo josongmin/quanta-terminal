@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-bash-ssh-interactive",
+  "cols": 60,
+  "rows": 12,
+  "description": "Interactive remote bash over ssh: cd /etc + ls + exit. Tests multi-turn ssh transcript, cwd-via-prompt heuristic, and clean ssh disconnect back to local prompt. P1-SI will replace the prompt-match cwd check with an authoritative OSC 7 read.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-NET-02",
+  "snapshotFormatVersion": 1
+}

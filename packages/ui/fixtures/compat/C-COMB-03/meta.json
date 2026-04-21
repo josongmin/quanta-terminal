@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 12,
+  "description": "`yes | head -c 1G` lightweight (50 000 × `y\\r\\n`): exercises the scrollback-ring cap under 5× overflow. rowCount pinned at 10 000; droppedBytes is still 0 (enforced by harness-audit globally).",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

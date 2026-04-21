@@ -1,0 +1,60 @@
+name: compat
+
+# Plan 0005 P0 Gate #7 — compat matrix enforcement.
+#
+# Runs the `packages/ui` compat suite (golden-stream fixture tests) on both
+# Linux and macOS so platform-specific regressions in the VT engine / scrollback
+# / alt-buffer paths surface immediately. The compat corpus lives at
+# `packages/ui/src/__tests__/compat/`; see `docs/plans/0005-sota-convergence/test-strategy.md` §1.
+#
+# Runner choice:
+#   - ubuntu-latest + macos-latest form the P0 ship gate matrix.
+#   - Windows compat is tracked separately under nightly (RFC 0001 Epic K).
+#
+# If the compat corpus grows large enough that this duplicates the main `ci.yml`
+# `ts` job's coverage, fold the compat-specific coverage back into `ci.yml` and
+# keep this file as a thin alias. For now the split makes the plan-0005 gate
+# visible as its own PR check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: '9.12.0'
+
+jobs:
+  compat:
+    name: compat (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm --filter @quanta/ui test:compat
+        run: pnpm --filter @quanta/ui test:compat

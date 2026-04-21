@@ -1,0 +1,11 @@
+{
+  "id": "C-PG-03",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "more /etc/hosts: main-buffer-only pager (no DECSET 1049), reverse-video `--More--(END)` status, clean exit via CSI K + CR. Contrasts with C-PG-01 (less, alt-buffer pager).",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

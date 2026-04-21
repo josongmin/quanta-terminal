@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 10,
+  "description": "DPR change mid-session sanity. Emulator state (grid, widths, SGR) is unaffected by hypothetical device-pixel-ratio transitions — real atlas-invalidation lives in FontAtlas tests. This fixture is a minimal `ls --color=auto` transcript that locks the engine baseline.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

@@ -36,6 +36,7 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -246,13 +247,17 @@ checkpoints.push({
 });
 
 // --- CP 4: after `G` jump-to-end repaint — status line shows `(END)` ---
+// Agent S audit recommendation (wave 3): attach `sgrDigest` to the `(END)`
+// row so drift in the reverse-video attribute on the status marker is
+// caught. `(END)` is 5 graphemes, each with SGR 7 (inverse, flags 0x08);
+// cells beyond the label are default.
 appendChunk(eraseDisplay);
 appendChunk(frame3Content);
 appendChunk(frame3Status);
 checkpoints.push({
   at_byte_offset: stream.length,
   description:
-    'After `G` jump-to-end — status line now reads `(END)`; row 0 shows `daemon:`.',
+    'After `G` jump-to-end — status line now reads `(END)`; row 0 shows `daemon:`. sgrDigest pins the reverse-video attribute on the status marker.',
   expected: {
     mode: { altScreen: true },
     selected_rows: {
@@ -263,6 +268,7 @@ checkpoints.push({
       23: {
         text: '(END)',
         widths: Array(COLS).fill(1),
+        sgrDigest: computeEndStatusDigest(),
       },
     },
   },
@@ -309,6 +315,24 @@ checkpoints.push({
   },
 });
 
+// ---------- SGR digest helper (mirrors compat-replay.ts:sgrTupleFor) ----------
+/**
+ * Digest the status-row SGR tuples for the `(END)` marker. 5 inverse
+ * cells (flags 0x08), rest default.
+ */
+function computeEndStatusDigest() {
+  const parts = [];
+  const LABEL = '(END)';
+  for (let c = 0; c < COLS; c += 1) {
+    if (c < LABEL.length) {
+      parts.push('d,d,8');
+    } else {
+      parts.push('d,d,0');
+    }
+  }
+  return createHash('sha256').update(parts.join('|')).digest('hex');
+}
+
 // ---------- Write artifacts ----------
 const inputPath = join(__dirname, 'input.bytes');
 const checkpointsPath = join(__dirname, 'checkpoints.json');
@@ -323,6 +347,9 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-PG-01',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'synthetic-bash-like',
       cols: COLS,
       rows: ROWS,

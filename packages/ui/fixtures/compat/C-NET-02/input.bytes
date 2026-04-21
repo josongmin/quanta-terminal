@@ -1,0 +1,7 @@
+$ ssh localhost
+Last login: Sat Jan  1 12:34:00 2022 from 127.0.0.1
+user@host:/home/user$ cd /etc
+user@host:/etc$ ls
+hosts  motd  passwd  resolv.conf  shadow
+user@host:/etc$ exit
+$ 

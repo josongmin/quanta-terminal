@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 12,
+  "description": "`clear` behavior: CSI H + CSI 2J wipes the visible grid and homes the cursor without emitting CSI 3J, so the scrollback ring survives. Verifies the baseline `clear` contract used by every shell + bash-in-SSH deployment.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

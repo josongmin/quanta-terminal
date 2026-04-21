@@ -1,0 +1,275 @@
+[
+  {
+    "at_byte_offset": 19,
+    "description": "After `ls --color=auto\\r\\n` — row 0 shows the command, cursor at row 1.",
+    "expected": {
+      "cursor": {
+        "row": 1,
+        "col": 0
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ ls --color=auto",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 44,
+    "description": "After styled ls output — row 1 reads `src  README.md` with SGR 34 on the `src` prefix and default on the rest.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "1": {
+          "text": "src  README.md",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 46,
+    "description": "Final `$ ` prompt parked at row 2. Engine state (cursor, widths, SGR) is unchanged by any renderer-level DPR flip; real atlas-invalidation tests live elsewhere.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 2
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 0
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ ls --color=auto",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "src  README.md",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "2": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

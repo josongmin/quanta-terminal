@@ -1,0 +1,120 @@
+name: perf-budget
+
+# Plan 0005 P0 Gate #7 / #10 — JavaScript-side perf-budget harness.
+#
+# This workflow is distinct from the existing `perf.yml` (which runs the
+# Rust `quanta-perf-harness` criterion benches). The two complement each
+# other:
+#
+#   perf.yml         — Rust benches on hot VT / proto paths (criterion).
+#   perf-budget.yml  — End-to-end JS harness through `VtEmulator` +
+#                      `createFrameSkipBatcher`, enforcing the four
+#                      user-visible budgets (top / watch / yes / resize).
+#
+# Budgets and measurement methodology:
+#   - See `packages/ui/src/__tests__/perf/perf-budget.ts` for the ceilings.
+#   - See `docs/plans/0005-sota-convergence/perf-baselines.md` for the
+#     recorded baseline numbers on the reference Apple Silicon runner.
+#   - The runner (`tools/run-perf-budget.mjs`) applies a 10% WARN tolerance
+#     above each budget — only overshoots > 10% fail the spec.
+#
+# Noise and retry policy:
+#   Perf budgets are inherently noisy on shared CI hardware (shared cores,
+#   GC pauses, kernel preemption). Our policy:
+#     - Pin to `ubuntu-24.04` — an explicit image keeps runner drift small.
+#     - Run the full suite up to 3 times via `retries`. We accept the run
+#       as passing if at least 2 of 3 attempts pass (majority judge).
+#     - Upload the `artifacts/perf/<timestamp>.json` report unconditionally
+#       so regressions can be triaged without a re-run.
+#
+# IMPORTANT: single-runner only. The macOS runner (macos-latest) is NOT in
+# this matrix — hardware variance between macos-13 and macos-14 images has
+# been large enough to cause spurious red builds. The Rust criterion
+# benches (perf.yml) cover Apple Silicon signal.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/ui/src/__tests__/perf/**'
+      - 'packages/ui/src/shared/lib/vt-emulator/**'
+      - 'packages/ui/src/shared/lib/write-batcher-frame-skip.ts'
+      - 'packages/ui/src/shared/lib/scrollback/**'
+      - 'tools/run-perf-budget.mjs'
+      - '.github/workflows/perf-budget.yml'
+      - 'docs/plans/0005-sota-convergence/perf-baselines.md'
+  push:
+    branches: [main]
+
+concurrency:
+  group: perf-budget-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: '9.12.0'
+
+jobs:
+  budget:
+    name: perf-budget (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      # Retry up to 3 times; the majority-judge policy lives in the runner
+      # command itself (best-2-of-3). Each attempt emits a fresh artefact.
+      # We use a shell loop rather than nick3c's retry action to keep the
+      # dependency surface minimal.
+      - name: Run perf-budget harness (best 2-of-3)
+        id: bench
+        shell: bash
+        run: |
+          set -o pipefail
+          PASSES=0
+          FAILS=0
+          for ATTEMPT in 1 2 3; do
+            echo "::group::perf-budget attempt ${ATTEMPT}"
+            if pnpm test:perf; then
+              PASSES=$((PASSES + 1))
+              echo "attempt ${ATTEMPT}: PASS"
+            else
+              FAILS=$((FAILS + 1))
+              echo "attempt ${ATTEMPT}: FAIL"
+            fi
+            echo "::endgroup::"
+            if [ "${PASSES}" -ge 2 ]; then
+              echo "majority PASS reached after ${ATTEMPT} attempt(s)"
+              exit 0
+            fi
+            if [ "${FAILS}" -ge 2 ]; then
+              echo "majority FAIL reached after ${ATTEMPT} attempt(s)" >&2
+              exit 1
+            fi
+          done
+          echo "inconclusive after 3 attempts" >&2
+          exit 1
+
+      # Always upload — even on failure the JSON report is diagnostic gold.
+      - name: Upload perf artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-budget-reports
+          path: artifacts/perf/
+          if-no-files-found: warn
+          retention-days: 30

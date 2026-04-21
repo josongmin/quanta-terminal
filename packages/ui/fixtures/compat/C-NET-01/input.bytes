@@ -1,0 +1,3 @@
+$ ssh localhost echo hi
+hi
+$ 

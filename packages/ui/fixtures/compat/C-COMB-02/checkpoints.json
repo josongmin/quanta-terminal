@@ -1,0 +1,120 @@
+[
+  {
+    "at_byte_offset": 30422,
+    "description": "After 800 pathname rows — altScreen is false (find never enters alt).",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      }
+    }
+  },
+  {
+    "at_byte_offset": 30422,
+    "description": "After 800 pathname rows — scrollback ring has ~778 rows (> 700); main-buffer scroll-up captured them correctly.",
+    "expected": {
+      "scrollback": {
+        "rowCount": 778
+      }
+    }
+  },
+  {
+    "at_byte_offset": 30424,
+    "description": "After final `$ ` — viewport bottom row holds the prompt; altScreen still false.",
+    "expected": {
+      "cursor": {
+        "row": 23,
+        "col": 2
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "23": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

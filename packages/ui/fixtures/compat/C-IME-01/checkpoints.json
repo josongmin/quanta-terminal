@@ -328,5 +328,14 @@
         }
       }
     }
+  },
+  {
+    "at_byte_offset": 43,
+    "description": "Free alt-screen assertion — CJK echo session never enters alt buffer; `mode.altScreen` stays false throughout.",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      }
+    }
   }
 ]

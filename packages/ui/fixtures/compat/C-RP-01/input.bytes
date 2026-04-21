@@ -1,0 +1,10 @@
+$ python3
+Python 3.11.5 (main, Aug 24 2023) on darwin
+Type "help", "copyright" or "license" for info.
+>>> def foo():
+...     return 42
+... 
+>>> foo()
+42
+>>> exit()
+$ 

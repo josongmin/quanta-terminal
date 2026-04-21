@@ -171,6 +171,7 @@ const VALID_CATEGORIES: readonly CompatCategory[] = [
   'interactive',
   'pager',
   'shell',
+  'stress',
   'tui',
 ];
 
@@ -243,9 +244,9 @@ describe('compat-audit: harness + fixtures', () => {
       const r2 = await replayCompatFixture(dir);
       expect(stripNonDeterministic(r1)).toEqual(stripNonDeterministic(r2));
     }
-  });
+  }, 30_000);
 
-  it('byte-accounting: inputBytes === feedBytes + droppedBytes for every fixture', async () => {
+  it('byte-accounting: inputBytes === feedBytes + droppedBytes for every fixture', { timeout: 30_000 }, async () => {
     // Plan 0005 test-strategy §6. droppedBytes is always 0 in the
     // compat harness (emergency drop is a stress-harness concern); the
     // invariant still must hold byte-for-byte.

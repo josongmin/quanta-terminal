@@ -1,0 +1,10 @@
+{
+  "shell": "synthetic-psql",
+  "cols": 40,
+  "rows": 16,
+  "description": "psql `mydb=> ` prompt shape + `SELECT 1;` round-trip: banner + idle prompt + result table (header / rule / value / row count) + clean `\\q`. Real psql banner and transaction-aware prompt variants (`=*`, `->`) vary by version and are out of scope.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic",
+  "id": "C-RP-03",
+  "snapshotFormatVersion": 1
+}

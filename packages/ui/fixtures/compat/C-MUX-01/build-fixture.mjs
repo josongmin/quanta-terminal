@@ -292,6 +292,9 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-MUX-01',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'synthetic-bash-like',
       cols: COLS,
       rows: ROWS,

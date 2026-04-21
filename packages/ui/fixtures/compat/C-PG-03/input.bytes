@@ -1,0 +1,21 @@
+$ more /etc/hosts
+127.0.0.1       localhost
+127.0.1.1       quanta-dev
+
+# The following lines are desirable for IPv6 capable hosts
+::1             localhost ip6-localhost ip6-loopback
+ff02::1         ip6-allnodes
+ff02::2         ip6-allrouters
+
+# Private LAN
+192.168.1.10    router.lan
+192.168.1.20    nas.lan
+192.168.1.30    printer.lan
+
+# VPN overlays
+10.8.0.1        vpn-gw
+10.8.0.2        vpn-peer-a
+10.8.0.3        vpn-peer-b
+10.8.0.4        vpn-peer-c
+[7m--More--(END)[0m[K
+$ 

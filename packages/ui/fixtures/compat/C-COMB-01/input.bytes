@@ -1,0 +1,22 @@
+$ git log | less | head -20
+[?1049h[2J[Habc1234 2026-04-20 commit subject 0
+abcb06b 2026-04-20 commit subject 1
+abd4ea2 2026-04-20 commit subject 2
+abdecd9 2026-04-20 commit subject 3
+abe8b10 2026-04-20 commit subject 4
+abf2947 2026-04-20 commit subject 5
+abfc77e 2026-04-20 commit subject 6
+ac065b5 2026-04-20 commit subject 7
+ac103ec 2026-04-20 commit subject 8
+ac1a223 2026-04-20 commit subject 9
+ac2405a 2026-04-20 commit subject 10
+ac2de91 2026-04-20 commit subject 11
+ac37cc8 2026-04-20 commit subject 12
+ac41aff 2026-04-20 commit subject 13
+ac4b936 2026-04-20 commit subject 14
+ac5576d 2026-04-20 commit subject 15
+ac5f5a4 2026-04-20 commit subject 16
+ac693db 2026-04-20 commit subject 17
+ac73212 2026-04-20 commit subject 18
+ac7d049 2026-04-20 commit subject 19
+[?1049l$ 

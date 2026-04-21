@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "cat /tmp/100mb.log → 15 000 rows of `line NNNNN` output. Forces scrollback-ring eviction past the 10 000-row default cap; verifies the ring stays at cap and old rows are dropped (no unbounded growth under heavy main-buffer flow).",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

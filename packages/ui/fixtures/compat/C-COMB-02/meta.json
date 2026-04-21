@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "`find / 2>/dev/null` (timeboxed to 800 pathnames): main-buffer scroll-up + scrollback-ring stress. Asserts altScreen stays false and the ring captures ~778 rows without emergency drops.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 24,
+  "description": "tail -f /dev/urandom | base64 30s-style stress: ~30 KB of continuous main-buffer output, 100 rows of base64-lookalike text. Exercises scrollback-ring growth + byte-accounting invariant under steady volume. ^C restores prompt.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 10,
+  "description": "Bracketed-paste (DECSET 2004) round-trip: `CSI 200 ~` + `hello world!` + `CSI 201 ~`. Pasted text renders normally; the markers MUST be consumed as control bytes and never appear in the grid.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "kind": "synthetic"
+}

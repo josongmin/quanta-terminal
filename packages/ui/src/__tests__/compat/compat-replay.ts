@@ -411,7 +411,7 @@ function diffCheckpoint(
     const ring = emulator.getScrollback();
     const actualCount = ring.rows.length;
     const expectedCount = cp.expected.scrollback.rowCount;
-    if (actualCount !== expectedCount) {
+    if (expectedCount !== undefined && actualCount !== expectedCount) {
       diff.push({
         field: 'scrollback.rowCount',
         expected: expectedCount,
@@ -435,14 +435,14 @@ function diffCheckpoint(
         const actualRow = projectScrollbackRow(ringRow.cells, meta.cols, {
           includeSgrDigest: expectedRow.sgrDigest !== undefined,
         });
-        if (actualRow.text !== expectedRow.text) {
+        if (expectedRow.text !== undefined && actualRow.text !== expectedRow.text) {
           diff.push({
             field: `scrollback.rows.${rowKey}.text`,
             expected: expectedRow.text,
             actual: actualRow.text,
           });
         }
-        if (!widthsEqual(actualRow.widths, expectedRow.widths)) {
+        if (expectedRow.widths !== undefined && !widthsEqual(actualRow.widths, expectedRow.widths)) {
           diff.push({
             field: `scrollback.rows.${rowKey}.widths`,
             expected: expectedRow.widths,

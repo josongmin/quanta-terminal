@@ -1,8 +1,11 @@
 {
+  "id": "C-MON-01",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
   "shell": "synthetic-bash-like",
   "cols": 80,
   "rows": 24,
-  "description": "top session: DECSET 1049h → 3 alt-buffer repaint frames → DECSET 1049l → main buffer restored. Scrollback ring stays empty the whole time.",
+  "description": "top session: 30 main-buffer warmup lines (scroll + scrollback capture) → DECSET 1049h → 3 alt-buffer repaint frames → DECSET 1049l → main buffer restored. Scrollback row count is pinned across the alt cycle; evicted row content is positively asserted.",
   "authoredAt": "2026-04-21T00:00:00Z",
   "synthetic": true
 }

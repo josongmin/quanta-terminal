@@ -1,0 +1,10 @@
+$ node
+Welcome to Node.js v20.9.0.
+Type ".help" for more information.
+> [200~const add = (a, b) => {
+  return a + b;
+};
+add(2, 3)
+[201~5
+> .exit
+$ 

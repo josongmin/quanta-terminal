@@ -346,6 +346,9 @@ writeFileSync(
   metaPath,
   JSON.stringify(
     {
+      id: 'C-ED-02',
+      kind: 'synthetic',
+      snapshotFormatVersion: 1,
       shell: 'synthetic-bash-like',
       cols: COLS,
       rows: ROWS,

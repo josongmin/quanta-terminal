@@ -1,0 +1,275 @@
+[
+  {
+    "at_byte_offset": 33,
+    "description": "After paste end — row 0 shows `$ echo hello world!`; the CSI 200 ~ and CSI 201 ~ markers must NOT appear as printable cells.",
+    "expected": {
+      "cursor": {
+        "row": 1,
+        "col": 0
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo hello world!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 47,
+    "description": "After shell echo — row 1 contains the echoed `hello world!`; the paste payload round-trips cleanly.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo hello world!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "hello world!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 49,
+    "description": "Final `$ ` at row 2. altScreen stays false throughout — bracketed paste is an input-side mode, not a buffer switch.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 2
+      },
+      "mode": {
+        "altScreen": false
+      },
+      "scrollback": {
+        "rowCount": 0
+      },
+      "selected_rows": {
+        "2": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

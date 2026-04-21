@@ -1,4 +1,7 @@
 {
+  "id": "C-IME-01",
+  "kind": "synthetic",
+  "snapshotFormatVersion": 1,
   "shell": "zsh",
   "cols": 40,
   "rows": 4,
