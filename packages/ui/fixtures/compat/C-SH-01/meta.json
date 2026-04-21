@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash",
+  "cols": 40,
+  "rows": 12,
+  "description": "bash: ls, cd /tmp, pwd, echo $? — pure main-buffer shell loop with no alt-screen, no SGR. Exercises the plain `\\r\\n` + printable code path and verifies cursor advancement across four command turns.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

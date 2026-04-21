@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 40,
+  "rows": 8,
+  "description": "vim :!bash nested subshell: outer DECSET 1049h puts the terminal in alt; inner bash runs inside vim's alt buffer (no nested 1049); vim repaints on bash exit; DECSET 1049l exits vim. alt_screen state flips exactly once.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

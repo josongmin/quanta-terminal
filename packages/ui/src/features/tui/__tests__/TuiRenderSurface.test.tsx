@@ -25,6 +25,7 @@ import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
 
 import { TuiRenderSurface } from '../TuiRenderSurface.js';
 import { useTuiStore } from '../../../entities/tui/index.js';
+import { __resetConnectionMapForTests } from '../../session-tabs/connection-map.js';
 
 interface FakeBridge extends HostBridge {
   emit(event: HostEvent): void;
@@ -127,6 +128,7 @@ function surfaceCanvas(): HTMLElement {
 
 beforeEach(() => {
   useTuiStore.getState().reset();
+  __resetConnectionMapForTests();
   // Force memory backend — Canvas2D's `getContext('2d')` returns null in jsdom.
   (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__ = 'memory';
 });
@@ -134,6 +136,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useTuiStore.getState().reset();
+  __resetConnectionMapForTests();
   delete (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__;
   vi.restoreAllMocks();
 });
@@ -181,6 +184,47 @@ describe('<TuiRenderSurface />', () => {
       });
     });
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
+  });
+
+  // Plan 0005 I-12 / Gate #2 regression: when the emulator answers a DSR
+  // cursor-position query (`CSI 6 n`), the response must flow through the
+  // allowlisted protocol-reply sink (`writeSessionResponse` →
+  // `ConnectedSession.write` if registered, else `bridge.write` as a
+  // fallback). This test proves the bytes reach the wire — and since no
+  // ConnectedSession is registered, they land on `bridge.write`. That is
+  // the fallback branch; the connection-preferring branch is covered in
+  // `features/session/__tests__/write-response.test.ts`.
+  it('routes DSR cursor-position replies to the bridge (protocol sink, not user input)', async () => {
+    const bridge = makeBridge();
+    const writeSpy = vi.spyOn(bridge, 'write');
+    const sid = 'sess-dsr' as SessionId;
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(<TuiRenderSurface sessionId={sid} bridge={bridge} />);
+
+    // Feed CSI 6 n (DSR cursor position query). The emulator must emit a
+    // reply of the form `CSI <row>;<col> R`; the surface's onRespond hook
+    // sends it via writeSessionResponse which, absent a registered
+    // ConnectedSession, falls through to bridge.write.
+    act(() => {
+      bridge.emit({
+        kind: 'pty_data',
+        sessionId: sid,
+        seq: 0,
+        bytesB64: textToB64('\x1b[6n'),
+      });
+    });
+
+    // writeSessionResponse is async; flush the microtask queue.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writeSpy).toHaveBeenCalled();
+    const [calledSid, payload] = writeSpy.mock.calls[0]!;
+    expect(calledSid).toBe(sid);
+    // Reply format: ESC `[` <row> `;` <col> `R`.
+    expect(payload).toMatch(/^\x1b\[\d+;\d+R$/u);
   });
 
   it('ignores pty_data for other sessions', () => {

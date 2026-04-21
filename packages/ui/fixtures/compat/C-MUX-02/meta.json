@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 60,
+  "rows": 10,
+  "description": "tmux-in-ssh: local bash + ssh to localhost + remote shell + tmux, then unwind. Tests a single alt-screen cycle (tmux) inside an ssh session; engine sees one flattened PTY byte stream, so nothing is exotic.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

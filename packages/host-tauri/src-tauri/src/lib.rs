@@ -76,6 +76,7 @@ mod sidecar_setup {
 
 mod crash;
 mod error;
+mod flow_control;
 mod ipc;
 mod shell_integration;
 
@@ -121,6 +122,8 @@ pub fn run() {
             ipc::quanta_resize,
             ipc::quanta_close,
             ipc::quanta_cancel_block,
+            ipc::quanta_pause_pty,
+            ipc::quanta_resume_pty,
             ipc::quanta_open_in_editor,
             ipc::quanta_ai_suggest,
             ipc::quanta_read_text_file,

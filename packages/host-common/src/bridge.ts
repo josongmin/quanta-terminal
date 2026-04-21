@@ -186,6 +186,20 @@ export interface SessionBridge {
   resize(sessionId: SessionId, cols: number, rows: number): Promise<void>;
   close(sessionId: SessionId): Promise<void>;
   cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void>;
+  /**
+   * Ask the host to park the PTY reader so the kernel PTY buffer fills up
+   * and backpressure propagates to the producer (Plan 0005 Epic γ). Invoked
+   * by the frame-skip batcher when its queued-bytes gauge crosses
+   * `softCapBytes`. Idempotent. See
+   * `packages/host-tauri/src-tauri/src/flow_control.rs` for the Rust end.
+   *
+   * OPTIONAL because not every adapter can park a PTY reader (mock bridge,
+   * VS Code webview). The batcher gracefully degrades to emergency-drop
+   * when the method is absent.
+   */
+  pausePty?(sessionId: SessionId): Promise<void>;
+  /** Inverse of {@link pausePty}. Idempotent. */
+  resumePty?(sessionId: SessionId): Promise<void>;
   subscribe(listener: HostEventListener): Subscription;
 }
 

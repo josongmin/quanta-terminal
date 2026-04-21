@@ -42,6 +42,12 @@ import { base64ToBytes } from '../../shared/lib/base64.js';
 import { useAltScreenMode } from '../../entities/tui/index.js';
 import { useBellStore } from '../../entities/bell/index.js';
 import { useSessionsStore } from '../../entities/session/index.js';
+// Protocol-reply routing (DSR / OSC color / primary DA) lives behind the
+// single allowlisted response sink in the session feature. TuiRenderSurface
+// never calls `bridge.write` directly (see Plan 0005 I-12 / Gate #2); the
+// DSR response bytes flow through `writeSessionResponse` so the rule
+// continues to see exactly one user-input path AND one protocol-reply path.
+import { writeSessionResponse } from '../session/write-response.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { t } from '../../shared/i18n/index.js';
 import styles from './tui-render-surface.module.css';
@@ -184,12 +190,19 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
       onChange: (dirty) => source.emit(dirty),
     });
     // Responses to DSR/DA and OSC 10/11 color queries flow straight back to
-    // the PTY so apps like vim / neovim see a well-formed terminal.
+    // the PTY so apps like vim / neovim see a well-formed terminal. Routing
+    // goes through `writeSessionResponse` (the single allowlisted
+    // protocol-reply sink in features/session/write-response.ts) so this
+    // surface never touches the raw bridge directly — Plan 0005 I-12
+    // ("one input path") stays intact because protocol bytes have their
+    // own named path and user-input bytes still funnel through
+    // SessionInputSurface. Fire-and-forget: writeSessionResponse swallows
+    // its own errors at debug; we still guard the rejection so an unhandled
+    // promise doesn't bubble.
     const respond = (bytes: Uint8Array): void => {
       if (bytes.length === 0) return;
-      const payload = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-      bridge.write(sessionId, payload).catch((err: unknown) => {
-        log.warn('tui-render-surface: bridge.write (query response) failed', err);
+      void writeSessionResponse(sessionId, bridge, bytes).catch((err: unknown) => {
+        log.warn('tui-render-surface: protocol response failed', err);
       });
     };
     const emulator = new VtEmulator({

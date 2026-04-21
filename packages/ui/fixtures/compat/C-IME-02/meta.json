@@ -1,0 +1,8 @@
+{
+  "shell": "zsh",
+  "cols": 40,
+  "rows": 4,
+  "description": "Japanese IME post-commit render: `$ echo こんにちは!` lands on row 0 with each hiragana at width-2/width-0; trailing `!` narrow. Mirrors C-IME-01 for the JP range.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

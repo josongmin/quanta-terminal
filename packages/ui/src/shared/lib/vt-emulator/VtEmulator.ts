@@ -296,6 +296,14 @@ export class VtEmulator {
   private resizeGeneration = 0;
   /** Monotonic within the process; never reset by `reset()`. */
   private epoch = 1;
+  /**
+   * Cumulative bytes accepted through `feed()`. Used by the perf-budget
+   * harness to verify byte-accounting invariants (every byte produced by
+   * the frame-skip batcher must either land here or be counted as an
+   * emergency drop). Monotonic across `reset()` to preserve the
+   * accounting chain. @internal test-only
+   */
+  private feedBytesTotal_ = 0;
 
   /** FSM state. */
   private state: FsmState = 'Ground';
@@ -402,7 +410,18 @@ export class VtEmulator {
     return this.scrollRegion;
   }
 
+  /**
+   * Cumulative count of bytes accepted via `feed()` since construction.
+   * Monotonic; NOT reset by `reset()`. Used by the perf-budget harness to
+   * verify byte-accounting (`feedBytesTotal === bytesOutTotal + droppedBytes`).
+   * @internal test-only
+   */
+  get feedBytesTotal(): number {
+    return this.feedBytesTotal_;
+  }
+
   feed(bytes: Uint8Array): void {
+    this.feedBytesTotal_ += bytes.byteLength;
     this.cursorAtFeedStart = { ...this.cursor };
     this.dirtyRows.clear();
     // Collected decoded text segments so we can feed the grid without
@@ -1327,7 +1346,15 @@ export class VtEmulator {
         break;
       }
       case 3: {
-        // Erase scrollback — no-op in our grid-only model.
+        // Erase scrollback (xterm `CSI 3 J`). Now that α3 owns a bounded
+        // ring, honour the contract by clearing saved-line history. The
+        // live grid is untouched — mode 3 is scrollback-only per spec.
+        // `baseRowId` / `evictedCount` / `pinBlockedEvictions` are NOT
+        // reset: a downstream block overlay relies on `baseRowId` being
+        // monotonic, and this is a history-wipe not a hard reset.
+        if (this.active === 'main') {
+          this.mainScrollback.rows.length = 0;
+        }
         break;
       }
       default:
@@ -2075,16 +2102,19 @@ function parseExtendedColor(
     // Also: when an emitter uses colon subparams `CSI 38:2::r:g:b m`
     // our CSI parser (stepCsi L438) folds `:` into `;`. The ECMA-48 /
     // ITU-T T.416 colon form carries an empty "colorspace" slot between
-    // `2` and `r`, which after collapse becomes `[38, 2, 0, r, g, b]`
-    // — indistinguishable from the 5-arg semicolon form. So the same
-    // heuristic handles both.
+    // `2` and `r`, which after collapse to `;` becomes
+    // `[38, 2, 0, r, g, b]` (6 params total — i.e. 4 params AFTER `2`),
+    // and is indistinguishable from the 5-arg semicolon form by shape.
     //
-    // Heuristic: if at least 5 params follow (`mode, a, b, c, d` after `i`),
-    // try the 5-arg form first (skip the colorspace). If only 4 follow,
-    // use them directly as r/g/b.
+    // Heuristic: when at least 4 params follow `2`, treat it as the
+    // 5-arg / colon form and skip the colorspace. When only 3 follow,
+    // treat it as the plain 4-arg xterm form. This matches all observed
+    // emitters (xterm's 4-arg, konsole's 5-arg, vim's ECMA-48 colon)
+    // and only misbehaves on the pathological `CSI 38;2;r;g;b;<k>m`
+    // chained-attribute form that nobody writes in practice.
     const avail = params.length - i - 1;
-    if (avail >= 5) {
-      // 5-arg form: skip [i+1] (colorspace), use [i+2..i+4] as r/g/b.
+    if (avail >= 4) {
+      // 5-arg / colon form: skip [i+1] (colorspace), use [i+2..i+4].
       const r = params[i + 2];
       const g = params[i + 3];
       const b = params[i + 4];

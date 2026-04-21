@@ -88,6 +88,18 @@
 | Agent-I | (merged) | Epic α6 AnsiParser migration → `shared/lib/text/project-output`; 7 migrations, 2 DEFER; render-path rule clean | ✓ landed staged |
 | Agent-J | (merged) | Epic δ `flag.blockUx` feature-flag + TerminalPage P0/P1 gate; 18 pre-existing failures resolved via flag-setup / itP1 pattern; no-block-chunks rule strict-clean | ✓ landed staged |
 | Agent-K | (merged) | 3 more compat fixtures: C-ED-02 nvim+LSP, C-MUX-01 tmux basic, C-IME-01 KR wide-cell | ✓ landed staged |
+| Agent-L | (merged) | TuiRenderSurface DSR → `writeSessionResponse`; check-one-input-path strict+DEFERRED (2 execute.ts hits). 4313/4313 UI green. | ✓ |
+| Agent-M | (partial — limit) | Perf harness: `tools/run-perf-budget.mjs`, `__tests__/perf/` (4 budget tests + perf-budget.ts/fixtures.ts), vitest.config VITEST_PERF opt-in. Tests not run at merge time | ✓ scaffolded |
+| Agent-N | (merged) | Rust `flow_control.rs` (AtomicBool + tokio Notify + Condvar) + Tauri IPC + TS bridge + 13 Rust + 5 TS wiring tests. Gate #11 ✓ | ✓ |
+| Agent-O | (merged) | 5 compat fixtures: C-SH-01 bash, C-SH-02 zsh-wrap, C-SH-03 fish-ghost, C-ED-03 vim-in-bash, C-PG-02 man. Added `shell` category | ✓ |
+| Agent-P | (merged) | 6 compat fixtures: C-MON-02 htop, C-MON-03 watch, C-MUX-02 tmux-ssh, C-MUX-03 tmux-ssh-tmux (depth-3 canary), C-IME-02 JP, C-IME-03 CN | ✓ |
+| Agent-Q | (partial — limit) | VT audit: +54 tests across altbuffer-edge, mode-event-edge, scrollback-edge, utf8-streaming-edge, vt-spec-compliance. Engine fixes: `feedBytesTotal` accumulator, CSI 3 J scrollback erase, SGR ext-color heuristic | ✓ tests landed |
+| Agent-R | (partial — limit) | Input audit: +new tests across focus-reporting, input-host-interleaving, keystroke-encoding, mouse-tracking, paste-encoding edge cases. Session edge-resize-clamp | ✓ tests landed |
+| Agent-S | (merged) | Compat harness audit + enhancements: byteAccounting on CompatReport, COMPAT_SNAPSHOT_FORMAT_VERSION meta guard, id/kind validation, scrollback.rows projection. 13 audit invariants in harness-audit.test.ts | ✓ |
+
+**Wave 3 totals: 110 files, +17024/-39 lines**
+
+**Full UI test suite: 4502 / 4518 pass (0 fail, 16 skipped)** — up from 4305 after wave 2 (+197 net tests).
 
 **P0 ship gate scorecard** (see README §13):
 

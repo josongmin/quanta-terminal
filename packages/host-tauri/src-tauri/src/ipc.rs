@@ -28,6 +28,7 @@ use tauri::{AppHandle, State};
 #[cfg_attr(not(test), allow(unused_imports))]
 use crate::error::ErrorCode;
 use crate::error::TauriError;
+use crate::flow_control::FlowControl;
 
 #[cfg(feature = "embedded-shell")]
 use crate::embedded_shell::{EmbeddedShell, SpawnedSession};
@@ -108,6 +109,13 @@ pub struct SessionHandle {
     pub cwd: String,
     #[cfg(feature = "embedded-shell")]
     pub embedded: Arc<SpawnedSession>,
+    /// Per-session PTY flow-control gate (Plan 0005 Epic γ). The embedded
+    /// shell reader thread calls `block_if_paused` before each `read`; the
+    /// `quanta_pause_pty` / `quanta_resume_pty` IPC commands flip the
+    /// underlying flag. Always present so the command handlers never have to
+    /// branch on "is there flow control" — unused in the sidecar path (the
+    /// sidecar owns its own byte pump) but zero-cost when not flipped.
+    pub flow_control: FlowControl,
 }
 
 /* -------------------- command payloads -------------------- */
@@ -226,6 +234,11 @@ pub async fn quanta_spawn_session(
             Arc::new(SessionHandle {
                 shell: shell.clone(),
                 cwd: cwd.clone(),
+                // Sidecar path: the sidecar owns its own byte pump, so this
+                // gate is never consulted. We still attach one so the IPC
+                // commands have a uniform target — flipping it is a no-op
+                // for the sidecar's read path but keeps the types clean.
+                flow_control: FlowControl::new(),
             }),
         );
         return Ok(SpawnReply {
@@ -254,8 +267,14 @@ pub async fn quanta_spawn_session(
         let shell = handle.shell_label.clone();
         let cwd = handle.cwd.clone();
         let spawned = Arc::new(handle);
+        let flow_control = FlowControl::new();
 
-        wire_events(app.clone(), session_id.clone(), spawned.clone());
+        wire_events(
+            app.clone(),
+            session_id.clone(),
+            spawned.clone(),
+            flow_control.clone(),
+        );
 
         state.sessions.lock().insert(
             session_id.clone(),
@@ -263,6 +282,7 @@ pub async fn quanta_spawn_session(
                 shell: shell.clone(),
                 cwd: cwd.clone(),
                 embedded: spawned,
+                flow_control,
             }),
         );
 
@@ -497,6 +517,82 @@ pub async fn quanta_close(
     Ok(())
 }
 
+/* -------------------- PTY flow control (Plan 0005 γ5) -------------------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PausePtyArgs {
+    /// The session whose reader we want to park. Looked up in `AppState.sessions`.
+    pub session_id: SessionId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumePtyArgs {
+    pub session_id: SessionId,
+}
+
+/// Signal the per-session PTY reader to pause.
+///
+/// Invoked from TS when the frame-skip batcher's queued-bytes gauge crosses
+/// `softCapBytes` (default 128 MiB). The reader parks on a Condvar between
+/// PTY `read()` calls, which lets the kernel PTY buffer fill up and pushes
+/// backpressure to the child process via its `write(2)` path.
+///
+/// Idempotent: pausing an already-paused session is a no-op. Calling on an
+/// unknown session is treated as a silent success — the TS batcher may race
+/// against `close()`, and a `session-not-found` toast on the pause path would
+/// be actively misleading (the user did nothing wrong).
+#[tauri::command]
+pub async fn quanta_pause_pty(
+    args: PausePtyArgs,
+    state: State<'_, AppState>,
+) -> Result<(), TauriError> {
+    let handle = state.sessions.lock().get(&args.session_id).cloned();
+    match handle {
+        Some(h) => {
+            tracing::debug!(session_id = %args.session_id, "pause_pty: parking reader");
+            h.flow_control.pause();
+        }
+        None => {
+            // Benign race: session already closed on our side. The TS side
+            // will tear down on the next pty_exit event; surfacing an error
+            // here would surface a phantom toast.
+            tracing::debug!(
+                session_id = %args.session_id,
+                "pause_pty: unknown session; ignoring (likely closed)"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Signal the per-session PTY reader to resume.
+///
+/// Invoked from TS when the batcher's queue drains below 75 % of the soft
+/// cap. Idempotent: resuming a running session is a no-op. Same "unknown
+/// session = silent success" contract as [`quanta_pause_pty`].
+#[tauri::command]
+pub async fn quanta_resume_pty(
+    args: ResumePtyArgs,
+    state: State<'_, AppState>,
+) -> Result<(), TauriError> {
+    let handle = state.sessions.lock().get(&args.session_id).cloned();
+    match handle {
+        Some(h) => {
+            tracing::debug!(session_id = %args.session_id, "resume_pty: waking reader");
+            h.flow_control.resume();
+        }
+        None => {
+            tracing::debug!(
+                session_id = %args.session_id,
+                "resume_pty: unknown session; ignoring (likely closed)"
+            );
+        }
+    }
+    Ok(())
+}
+
 /* -------------------- open-in-editor -------------------- */
 
 #[derive(Debug, Deserialize)]
@@ -642,16 +738,39 @@ pub async fn quanta_open_in_editor(args: OpenInEditorArgs) -> Result<(), TauriEr
 /* -------------------- wiring -------------------- */
 
 #[cfg(feature = "embedded-shell")]
-fn wire_events(app: AppHandle, session_id: SessionId, spawned: Arc<SpawnedSession>) {
+fn wire_events(
+    app: AppHandle,
+    session_id: SessionId,
+    spawned: Arc<SpawnedSession>,
+    flow_control: FlowControl,
+) {
     // Data pump: drain PTY -> emit `quanta://pty.data`.
+    //
+    // Flow-control gate: before each read we park on `flow_control` if the
+    // TS side has called `bridge.pausePty(sessionId)`. While parked, we do
+    // NOT consume any bytes from the kernel PTY buffer — that buffer fills
+    // up (typical 4–64 KiB on Linux/macOS), which transparently blocks the
+    // child's next `write`, pushing backpressure all the way to the producer.
+    // The `block_if_paused` timeout (250 ms) bounds how long we can stay
+    // parked before re-checking the PTY state; it lets the reader still
+    // notice a closed PTY / killed child even while the UI is paused. A
+    // fresh `pause()` inside the 250 ms window is observed on the next loop
+    // iteration, so the timeout never lets bytes slip through.
     let app_data = app.clone();
     let sid_data = session_id.clone();
     let spawned_data = spawned.clone();
+    let fc_data = flow_control.clone();
     std::thread::spawn(move || {
         use base64::Engine as _;
         let mut seq: u64 = 0;
         let mut buf = [0u8; 8192];
         loop {
+            // Park (if needed) BEFORE reading so we don't pre-fetch bytes
+            // that would then have to be held in our thread. 250 ms is a
+            // compromise between "wake fast enough on resume" (Condvar does)
+            // and "notice PTY death periodically" (we also get EOF via the
+            // read itself once resume fires and the child has exited).
+            fc_data.block_if_paused(std::time::Duration::from_millis(250));
             match spawned_data.read(&mut buf) {
                 Ok(0) => break, // EOF
                 Ok(n) => {

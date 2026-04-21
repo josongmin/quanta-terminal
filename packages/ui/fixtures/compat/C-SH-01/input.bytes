@@ -1,0 +1,8 @@
+$ ls
+Documents  Downloads  Projects
+$ cd /tmp
+$ pwd
+/tmp
+$ echo $?
+0
+$ 

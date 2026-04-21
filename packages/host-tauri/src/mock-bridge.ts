@@ -160,6 +160,21 @@ export function createMockHostBridge(): HostBridge {
       return Promise.resolve();
     },
 
+    pausePty(sessionId: SessionId): Promise<void> {
+      // Browser-dev mode has no real PTY to park. We still implement the
+      // method so the frame-skip batcher exercises the flow-control path in
+      // tests; production mock never gets hot enough to hit softCap anyway.
+      // eslint-disable-next-line no-console
+      console.debug('[mock] pausePty', sessionId);
+      return Promise.resolve();
+    },
+
+    resumePty(sessionId: SessionId): Promise<void> {
+      // eslint-disable-next-line no-console
+      console.debug('[mock] resumePty', sessionId);
+      return Promise.resolve();
+    },
+
     notify(options: NotifyOptions): Promise<void> {
       // Browser-dev mode: the Web Notification API is available via the
       // wrapper in `features/notifications` — this bridge path is a fallback

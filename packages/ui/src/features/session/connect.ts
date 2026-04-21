@@ -124,10 +124,47 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // stable pre-spawn id until the host hands us the real session id during
   // pre-buffer drain — the id is cosmetic inside the emulator (used only in
   // outgoing envelopes) and is not observed by consumers yet in P0.
+  //
+  // γ5: the flow-control hook injected into the batcher captures a mutable
+  // sessionIdRef because the engine (and its batcher) is constructed BEFORE
+  // `spawn()` resolves. The batcher only calls pause/resume AFTER bytes have
+  // been enqueued, which by definition is after we have a real sessionId.
+  // If the host bridge doesn't implement pause/resume (mock bridge for some
+  // adapters, VS Code), we omit `flowControl` entirely so the batcher falls
+  // back to emergency-drop once hardCapBytes is crossed.
+  const sessionIdRef: { current: SessionId | undefined } = { current: undefined };
+  const pauseFn = bridge.pausePty?.bind(bridge);
+  const resumeFn = bridge.resumePty?.bind(bridge);
+  const flowControl =
+    pauseFn && resumeFn
+      ? {
+          pause: (): void => {
+            const id = sessionIdRef.current;
+            if (id === undefined) return;
+            log.debug('flow-control pause', id);
+            pauseFn(id).catch((err) => {
+              // Flow-control failures are non-fatal: the batcher still has
+              // emergency-drop as a final defense. Log so the outage is
+              // observable but never throw — flow control is advisory.
+              log.warn('pausePty failed', id, err);
+            });
+          },
+          resume: (): void => {
+            const id = sessionIdRef.current;
+            if (id === undefined) return;
+            log.debug('flow-control resume', id);
+            resumeFn(id).catch((err) => {
+              log.warn('resumePty failed', id, err);
+            });
+          },
+        }
+      : undefined;
+
   const engine: VtEngineHandle = createSessionEngine({
     sessionId: 'pending',
     cols,
     rows,
+    ...(flowControl !== undefined ? { flowControl } : {}),
   });
 
   // Subscribe FIRST, buffer until we know the session id. The host may emit
@@ -175,6 +212,9 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     throw err;
   }
   sessionId = spawn.sessionId;
+  // Publish the real sessionId into the closure captured by the flow-control
+  // hook so subsequent pause()/resume() firings route to the right PTY.
+  sessionIdRef.current = sessionId;
 
   // Install the command router BEFORE draining the pre-buffer: pty_data that
   // arrived synchronously during spawn() needs a live router to land on the

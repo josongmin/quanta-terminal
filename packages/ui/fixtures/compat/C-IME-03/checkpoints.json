@@ -1,0 +1,173 @@
+[
+  {
+    "at_byte_offset": 22,
+    "description": "After `$ echo 你好世界!\\r\\n` — row 0 holds the prompt + 4 wide hanzi + narrow `!`; cursor at row 1 col 0.",
+    "expected": {
+      "cursor": {
+        "row": 1,
+        "col": 0
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo 你好世界!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 37,
+    "description": "After echo output — row 1 holds `你好世界!` at widths [2,0, 2,0, 2,0, 2,0, 1]; cursor on row 2.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "selected_rows": {
+        "1": {
+          "text": "你好世界!",
+          "widths": [
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 39,
+    "description": "After post-output `$ ` — row 2 holds the fresh prompt; cursor at row 2 col 2.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 2
+      },
+      "selected_rows": {
+        "2": {
+          "text": "$ ",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

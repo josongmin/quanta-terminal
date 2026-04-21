@@ -21,6 +21,7 @@
     "build": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:compat": "vitest run compat",
+    "test:perf": "node ../../tools/run-perf-budget.mjs",
     "lint:fsd": "node ../../tools/check-fsd-layers.mjs"
   },
   "dependencies": {

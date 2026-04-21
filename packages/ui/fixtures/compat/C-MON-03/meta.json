@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 10,
+  "description": "watch -n 0.1 date repaint stress: DECSET 1049h → 60 cursor-home repaint frames (~6 simulated seconds) → C-c / DECSET 1049l. Exercises rapid alt-repaint with zero scrollback leak.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

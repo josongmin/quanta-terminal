@@ -1,0 +1,5 @@
+$ ssh localhost
+Last login: Sat Jan  1 12:34:00 2022 from 127.0.0.1
+$ tmux new -s demo
+[?1049h[2J[H[1;1H$ [10;1H[7m[demo] 0:zsh*[0m[?1049l$ exit
+$ 

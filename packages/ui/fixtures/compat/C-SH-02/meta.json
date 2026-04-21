@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-zsh",
+  "cols": 80,
+  "rows": 24,
+  "description": "zsh with a 91-character hostname-in-prompt wrapping at the 80-column right margin: tests DECAWM auto-wrap — prompt fills row 0, continues on row 1, command echoes on row 1, and a second prompt re-wraps identically deeper in the transcript.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditRoot, isAllowlisted, findViolations } from '../index.mjs';
+import {
+  auditRoot,
+  isAllowlisted,
+  isDeferred,
+  findViolations,
+  P1_BLOCK_UX_DEFERRED,
+} from '../index.mjs';
 
 async function withTree(files, fn) {
   const root = await mkdtemp(join(tmpdir(), 'quanta-input-path-'));
@@ -42,12 +48,35 @@ test('foo.write( on an unrelated object is NOT flagged', () => {
   assert.equal(hits.length, 0);
 });
 
+test('JSDoc continuation lines mentioning bridge.write() are NOT flagged', () => {
+  const src =
+    '/**\n' +
+    ' * Prior to Plan 0005 α1 the race inside bridge.write() could drop\n' +
+    ' * bytes. See also: `bridge.write()` pitfalls in comments below.\n' +
+    ' */\n';
+  const hits = findViolations(src);
+  assert.equal(hits.length, 0);
+});
+
+test('line comments with bridge.write() are NOT flagged', () => {
+  const src = "// historical note: bridge.write() used to race here\n";
+  const hits = findViolations(src);
+  assert.equal(hits.length, 0);
+});
+
 test('isAllowlisted: features/input is exempt', () => {
   assert.equal(isAllowlisted('packages/ui/src/features/input/KeyEncoder.ts'), true);
 });
 
 test('isAllowlisted: features/session/connect.ts is exempt', () => {
   assert.equal(isAllowlisted('packages/ui/src/features/session/connect.ts'), true);
+});
+
+test('isAllowlisted: features/session/write-response.ts is exempt (protocol replies)', () => {
+  assert.equal(
+    isAllowlisted('packages/ui/src/features/session/write-response.ts'),
+    true,
+  );
 });
 
 test('isAllowlisted: random widget file is NOT exempt', () => {
@@ -57,6 +86,22 @@ test('isAllowlisted: random widget file is NOT exempt', () => {
 test('isAllowlisted: docs/*.md exempt', () => {
   assert.equal(isAllowlisted('docs/plans/foo.md'), true);
   assert.equal(isAllowlisted('README.md'), true);
+});
+
+test('isDeferred: execute.ts (P1 block UX) is deferred', () => {
+  assert.equal(isDeferred('packages/ui/src/features/command/execute.ts'), true);
+});
+
+test('isDeferred: a random file is NOT deferred', () => {
+  assert.equal(
+    isDeferred('packages/ui/src/widgets/composer/Composer.tsx'),
+    false,
+  );
+});
+
+test('P1_BLOCK_UX_DEFERRED is a non-empty array', () => {
+  assert.ok(Array.isArray(P1_BLOCK_UX_DEFERRED));
+  assert.ok(P1_BLOCK_UX_DEFERRED.length > 0);
 });
 
 test('audit: disallowed widget write is caught', async () => {
@@ -69,6 +114,7 @@ test('audit: disallowed widget write is caught', async () => {
   );
   assert.equal(result.violations.length, 1);
   assert.equal(result.violations[0].line, 2);
+  assert.equal(result.deferred.length, 0);
 });
 
 test('audit: features/input write is allowed', async () => {
@@ -80,4 +126,51 @@ test('audit: features/input write is allowed', async () => {
     (root) => auditRoot(root, { relBase: root }),
   );
   assert.equal(result.violations.length, 0);
+  assert.equal(result.deferred.length, 0);
+});
+
+test('audit: DEFERRED path (execute.ts) lands in the deferred bucket, not violations', async () => {
+  const result = await withTree(
+    {
+      'packages/ui/src/features/command/execute.ts':
+        "export async function submit() {\n  await bridge.write(id, p);\n}\n",
+    },
+    (root) => auditRoot(root, { relBase: root }),
+  );
+  assert.equal(result.violations.length, 0);
+  assert.equal(result.deferred.length, 1);
+  assert.equal(result.deferred[0].line, 2);
+  assert.equal(
+    result.deferred[0].relPath,
+    'packages/ui/src/features/command/execute.ts',
+  );
+});
+
+test('audit: custom deferred predicate promotes a file into the deferred bucket', async () => {
+  const result = await withTree(
+    {
+      'packages/ui/src/widgets/thing/Thing.tsx':
+        "export const t = () => {\n  bridge.write(bytes);\n};\n",
+    },
+    (root) =>
+      auditRoot(root, {
+        relBase: root,
+        deferred: (rel) => rel.includes('widgets/thing/'),
+      }),
+  );
+  assert.equal(result.violations.length, 0);
+  assert.equal(result.deferred.length, 1);
+});
+
+test('audit: comments inside a forbidden file are not flagged', async () => {
+  const result = await withTree(
+    {
+      'packages/ui/src/widgets/composer/Composer.tsx':
+        '/**\n * bridge.write() was historically racy.\n */\n' +
+        "export const x = () => {};\n",
+    },
+    (root) => auditRoot(root, { relBase: root }),
+  );
+  assert.equal(result.violations.length, 0);
+  assert.equal(result.deferred.length, 0);
 });

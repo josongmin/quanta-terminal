@@ -1,0 +1,161 @@
+[
+  {
+    "at_byte_offset": 23,
+    "description": "After `$ echo こんにちは!` — row 0 has the prompt, 5 wide hiragana, and the narrow `!` at col 17; cursor at col 18.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 18
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo こんにちは!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 43,
+    "description": "After newline + echo output — row 1 holds `こんにちは!` at identical wide-cell widths; cursor on row 2 col 0.",
+    "expected": {
+      "cursor": {
+        "row": 2,
+        "col": 0
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ echo こんにちは!",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "1": {
+          "text": "こんにちは!",
+          "widths": [
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            2,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  }
+]

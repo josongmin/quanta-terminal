@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 60,
+  "rows": 10,
+  "description": "man git-log: DECSET 1049h + plain header row + bold NAME / SYNOPSIS section headers (SGR 1) + reverse-video status line (SGR 7) + clean 1049l exit. sgrDigest on the bold and inverse rows locks the attribute bits byte-for-byte.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

@@ -43,6 +43,7 @@
 import {
   createFrameSkipBatcher,
   type BatcherStats,
+  type FlowControl,
   type FrameSkipBatcher,
 } from '../../shared/lib/write-batcher-frame-skip.js';
 import { VtEmulator } from '../../shared/lib/vt-emulator/index.js';
@@ -109,6 +110,21 @@ export interface CreateSessionEngineOptions {
    */
   readonly scheduler?: (cb: () => void) => number;
   readonly cancelScheduler?: (id: number) => void;
+  /**
+   * Plan 0005 Epic γ: optional producer flow-control hook forwarded verbatim
+   * to the frame-skip batcher. When the queue crosses `softCapBytes` the
+   * batcher calls `pause()`, which in the production wiring (`connect.ts`)
+   * routes to `bridge.pausePty(sessionId)` → Rust `quanta_pause_pty` →
+   * reader-thread park. Absent ⇒ the batcher falls back to emergency-drop
+   * once `hardCapBytes` is crossed.
+   */
+  readonly flowControl?: FlowControl;
+  /**
+   * Test hook: override `softCapBytes` without reaching into the batcher
+   * directly. Plumbed so the flow-control-wiring test can force a
+   * soft-cap crossing with a few hundred bytes instead of 128 MiB.
+   */
+  readonly softCapBytes?: number;
 }
 
 /**
@@ -153,6 +169,10 @@ export function createSessionEngine(
     ...(opts.scheduler !== undefined ? { scheduler: opts.scheduler } : {}),
     ...(opts.cancelScheduler !== undefined
       ? { cancelScheduler: opts.cancelScheduler }
+      : {}),
+    ...(opts.flowControl !== undefined ? { flowControl: opts.flowControl } : {}),
+    ...(opts.softCapBytes !== undefined
+      ? { softCapBytes: opts.softCapBytes }
       : {}),
   });
 

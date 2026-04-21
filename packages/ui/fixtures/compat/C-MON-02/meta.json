@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 80,
+  "rows": 12,
+  "description": "htop session: DECSET 1049h → 3 full-colour repaint frames (CPU bar green/yellow, proc state R/S/Z colour-coded, footer keybindings) → DECSET 1049l → main buffer restored. Scrollback stays empty.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

@@ -1,0 +1,8 @@
+{
+  "shell": "zsh",
+  "cols": 40,
+  "rows": 4,
+  "description": "Chinese pinyin IME post-commit render: `$ echo 你好世界!` lands with each hanzi at width-2/width-0; trailing `!` narrow. Mirrors C-IME-01 / C-IME-02 for the CJK unified ideograph range.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

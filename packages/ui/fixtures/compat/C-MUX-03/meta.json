@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-bash-like",
+  "cols": 60,
+  "rows": 10,
+  "description": "tmux-in-ssh-in-tmux (depth 3): outer tmux enters alt, ssh to localhost, inner tmux 1049h is a no-op, inner 1049l exits alt unconditionally. Documents the engine's \"no alt-buffer stack\" contract — P1 ModeStack work will refine.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

@@ -127,6 +127,12 @@ export async function submitCommand(
     log.debug('submitting without a bound block store; no block created');
     const payload = normalized.endsWith('\n') ? normalized : normalized + '\n';
     try {
+      // DEFERRED (Plan 0005 I-12 / check-one-input-path P1_BLOCK_UX_DEFERRED):
+      // this writer belongs to the legacy block-UX Enter-to-submit path. Once
+      // `flag.blockUx` flips on and the Composer unmounts (Epic δ), command
+      // submission becomes just another stream of keystrokes emitted by
+      // SessionInputSurface — this branch (and the one below) go away. Until
+      // then the rule tolerates the call under its DEFERRED allowlist group.
       await bridge.write(sessionId, payload);
       return { ok: true, blockId: '' as BlockId };
     } catch (err) {
@@ -168,6 +174,12 @@ export async function submitCommand(
   const payload = normalized.endsWith('\n') ? normalized : normalized + '\n';
 
   try {
+    // DEFERRED (Plan 0005 I-12 / check-one-input-path P1_BLOCK_UX_DEFERRED):
+    // the block-UX submit path writes the normalized command text directly
+    // to the PTY. Migration target: fold into SessionInputSurface-owned
+    // dispatch once `flag.blockUx` composer unmounts in Epic δ; at that
+    // point every keystroke (Enter included) flows through the input
+    // pipeline and this function collapses to a block-store mutation.
     await bridge.write(sessionId, payload);
     return { ok: true, blockId };
   } catch (err) {

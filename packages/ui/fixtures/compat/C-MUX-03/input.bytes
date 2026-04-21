@@ -1,0 +1,7 @@
+$ tmux
+[?1049h[2J[H[1;1H$ [10;1H[7m[outer] 0:bash*[0m[1;1H$ ssh localhost
+Last login: Sat Jan  1 12:34:00 2022 from 127.0.0.1
+$ tmux
+[?1049h[2J[H[1;1H$ [10;1H[7m[inner] 0:zsh*[0m[1;1H$ echo hello
+hello
+$ [?1049l

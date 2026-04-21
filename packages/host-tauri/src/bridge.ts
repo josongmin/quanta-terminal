@@ -295,6 +295,19 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       await invokeStructured('quanta_cancel_block', { sessionId, blockId });
     },
 
+    async pausePty(sessionId: SessionId): Promise<void> {
+      // Plan 0005 Epic γ PTY flow-control. The Rust side parks the per-
+      // session reader thread on a Condvar; the kernel PTY buffer fills up,
+      // which transparently back-pressures the child via its write(2).
+      // Rejections here are genuine IPC failures; the batcher logs and moves
+      // on so a flow-control outage can never take down the data path.
+      await invokeStructured('quanta_pause_pty', { args: { sessionId } });
+    },
+
+    async resumePty(sessionId: SessionId): Promise<void> {
+      await invokeStructured('quanta_resume_pty', { args: { sessionId } });
+    },
+
     async notify(options: NotifyOptions): Promise<void> {
       // Tauri host delegates to the notification plugin on the Rust side.
       // NOTE to Track β: the `tauri-plugin-notification` crate requires

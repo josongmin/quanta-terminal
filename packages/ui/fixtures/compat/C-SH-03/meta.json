@@ -1,0 +1,8 @@
+{
+  "shell": "synthetic-fish",
+  "cols": 40,
+  "rows": 6,
+  "description": "fish autosuggest ghost text: `$ ls ` typed, autosuggestion `/tmp` painted in SGR 90 (bright-black fg), cursor pulled back 4 cols with CSI 4 D. sgrDigest on row 0 locks the ghost-text fg byte-for-byte.",
+  "authoredAt": "2026-04-21T00:00:00Z",
+  "synthetic": true
+}

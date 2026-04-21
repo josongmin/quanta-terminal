@@ -36,6 +36,19 @@ import type { GridEventEnvelope, GridPayload } from '../../shared/lib/grid-mirro
 
 /* ---------- Fixture on-disk shapes ---------- */
 
+/**
+ * Current snapshot-format version. Bump whenever the shape of
+ * `RowProjection` or `CheckpointExpected` changes in a non-backwards
+ * compatible way (grid projection semantics drift, new required fields,
+ * etc.).
+ *
+ * `meta.json.snapshotFormatVersion` is optional for backwards compat with
+ * the initial wave of fixtures (authored before the field existed); when
+ * present the harness refuses to replay unless it matches. That protects
+ * us from a future refactor silently rewriting projections.
+ */
+export const COMPAT_SNAPSHOT_FORMAT_VERSION = 1;
+
 /** Shape of `meta.json`. */
 export interface CompatFixtureMeta {
   readonly shell: string;
@@ -44,8 +57,30 @@ export interface CompatFixtureMeta {
   readonly description: string;
   /** ISO-8601 authoring timestamp, included for audit / diff reviewability. */
   readonly authoredAt: string;
-  /** Optional free-form label for a future real-recording replacement. */
+  /**
+   * Preferred origin label.
+   *
+   *  - `synthetic`: hand-authored `input.bytes` (every compat fixture today).
+   *  - `recorded`: captured from a live PTY via `tools/compat-record`; ships
+   *    with a pointer to the source session.
+   *
+   * Optional for back-compat with the initial fixtures that used the older
+   * `synthetic: boolean` flag; new fixtures SHOULD set `kind`.
+   */
+  readonly kind?: 'synthetic' | 'recorded';
+  /** @deprecated use `kind` — left in place so existing fixtures still validate. */
   readonly synthetic?: boolean;
+  /**
+   * Optional compat ID. When present, the harness asserts it matches the
+   * fixture directory basename so a renamed directory can't silently
+   * desync from the registry.
+   */
+  readonly id?: string;
+  /**
+   * Snapshot-format version (see `COMPAT_SNAPSHOT_FORMAT_VERSION`). Omit
+   * to opt out of the shape-drift guard (legacy fixtures); set to pin.
+   */
+  readonly snapshotFormatVersion?: number;
 }
 
 /**
@@ -99,6 +134,18 @@ export interface CheckpointExpected {
   readonly scrollback?: {
     /** Exact expected row count in `emulator.getScrollback().rows`. */
     readonly rowCount: number;
+    /**
+     * Optional row-by-row projections. Keys are scrollback indices (0-based,
+     * oldest-first — matches `getScrollback().rows[i]`). Rows not listed are
+     * not checked; keep the smallest set that makes the assertion clear.
+     *
+     * Enables fixtures that assert EXACTLY what was evicted to scrollback
+     * (e.g. "after two full main-buffer repaints, row 0 of scrollback is
+     * the first evicted line"). Only populate when the row content is
+     * load-bearing; for mere "alt-paint didn't leak" assertions, `rowCount`
+     * is sufficient.
+     */
+    readonly rows?: Readonly<Record<string, RowProjection>>;
   };
 }
 
@@ -125,6 +172,24 @@ export interface FailedCheckpoint {
   readonly diff: readonly CheckpointDiff[];
 }
 
+/**
+ * Byte accounting per Plan 0005 test-strategy §6.
+ *
+ * Invariant:  `inputBytes === feedBytes + droppedBytes`
+ *
+ *  - `inputBytes`: size of `input.bytes` on disk.
+ *  - `feedBytes`:  sum of every chunk passed to `VtEmulator.feed()`.
+ *  - `droppedBytes`: bytes rejected by an emergency drop path (always 0
+ *    for P0 compat fixtures — compat streams are tiny and never exceed
+ *    the soft/hard caps). Tracked so the invariant generalises to the
+ *    P1 stress harness where emergency drops ARE expected under load.
+ */
+export interface ByteAccounting {
+  readonly inputBytes: number;
+  readonly feedBytes: number;
+  readonly droppedBytes: number;
+}
+
 export interface CompatReport {
   readonly passed: boolean;
   readonly failedCheckpoints: readonly FailedCheckpoint[];
@@ -137,6 +202,8 @@ export interface CompatReport {
     readonly totalFeedMs: number;
     readonly paintSimMs: number;
   };
+  /** See `ByteAccounting`. Assert `inputBytes === feedBytes + droppedBytes`. */
+  readonly byteAccounting: ByteAccounting;
 }
 
 /* ---------- Public entry point ---------- */
@@ -158,9 +225,15 @@ export async function replayCompatFixture(
   const meta = await readJson<CompatFixtureMeta>(
     path.join(fixtureDir, 'meta.json'),
   );
+  validateMeta(fixtureDir, meta);
   const checkpoints = await readJson<readonly CheckpointSpec[]>(
     path.join(fixtureDir, 'checkpoints.json'),
   );
+  // Read as raw bytes — `fs.readFile` without an encoding returns a Node
+  // `Buffer`, which subclasses `Uint8Array`. Wrap explicitly so downstream
+  // TypedArray semantics are fully portable (the Node `Buffer` shape
+  // extends but also overrides `.slice()`, and the spread of Node versions
+  // we support has historically differed on `.subarray()` view aliasing).
   const bytes = await fs.readFile(path.join(fixtureDir, 'input.bytes'));
   const input = new Uint8Array(
     bytes.buffer,
@@ -182,6 +255,7 @@ export async function replayCompatFixture(
   const SLICE = 4096;
   const failed: FailedCheckpoint[] = [];
   let fedUpTo = 0;
+  let feedBytes = 0;
   const feedStart = nowMs();
 
   // Sort checkpoints by offset so out-of-order authoring doesn't break us.
@@ -189,12 +263,18 @@ export async function replayCompatFixture(
     (a, b) => a.at_byte_offset - b.at_byte_offset,
   );
 
+  const feedSlice = (from: number, to: number): void => {
+    const chunk = input.subarray(from, to);
+    emulator.feed(chunk);
+    feedBytes += chunk.byteLength;
+  };
+
   for (let i = 0; i < ordered.length; i += 1) {
     const cp = ordered[i]!;
     // Feed in SLICE-sized chunks up to the checkpoint's byte offset.
     while (fedUpTo < cp.at_byte_offset && fedUpTo < input.length) {
       const next = Math.min(fedUpTo + SLICE, cp.at_byte_offset, input.length);
-      emulator.feed(input.subarray(fedUpTo, next));
+      feedSlice(fedUpTo, next);
       fedUpTo = next;
     }
     const diff = diffCheckpoint(emulator, envs, cp, meta);
@@ -210,12 +290,10 @@ export async function replayCompatFixture(
 
   // Drain remaining bytes (keeps the emulator in a consistent post-fixture
   // state; future checkpoints or perf harness can observe final state too).
-  if (fedUpTo < input.length) {
-    while (fedUpTo < input.length) {
-      const next = Math.min(fedUpTo + SLICE, input.length);
-      emulator.feed(input.subarray(fedUpTo, next));
-      fedUpTo = next;
-    }
+  while (fedUpTo < input.length) {
+    const next = Math.min(fedUpTo + SLICE, input.length);
+    feedSlice(fedUpTo, next);
+    fedUpTo = next;
   }
   const totalFeedMs = nowMs() - feedStart;
 
@@ -227,7 +305,63 @@ export async function replayCompatFixture(
       // Paint simulation isn't implemented here (separate perf harness).
       paintSimMs: 0,
     },
+    byteAccounting: {
+      inputBytes: input.byteLength,
+      feedBytes,
+      // No emergency drop path in the compat harness — stress tests that
+      // exercise the batcher's 256 MiB hard cap will flip this counter.
+      droppedBytes: 0,
+    },
   };
+}
+
+/* ---------- Meta validation ---------- */
+
+/**
+ * Validate `meta.json` against the hard invariants.
+ *
+ * The harness aborts replay on violation so a broken fixture fails fast
+ * with a clear error rather than producing subtle checkpoint mismatches.
+ *
+ *  - `cols` / `rows` positive integers.
+ *  - `id`, if present, equals the directory basename.
+ *  - `snapshotFormatVersion`, if present, equals `COMPAT_SNAPSHOT_FORMAT_VERSION`.
+ *  - `kind`, if present, is one of the allowed literals.
+ */
+function validateMeta(fixtureDir: string, meta: CompatFixtureMeta): void {
+  if (!Number.isInteger(meta.cols) || meta.cols <= 0) {
+    throw new Error(
+      `compat-replay: invalid meta.cols=${String(meta.cols)} in ${fixtureDir}`,
+    );
+  }
+  if (!Number.isInteger(meta.rows) || meta.rows <= 0) {
+    throw new Error(
+      `compat-replay: invalid meta.rows=${String(meta.rows)} in ${fixtureDir}`,
+    );
+  }
+  const dirBasename = path.basename(fixtureDir);
+  if (meta.id !== undefined && meta.id !== dirBasename) {
+    throw new Error(
+      `compat-replay: meta.id=${meta.id} does not match directory basename ${dirBasename}`,
+    );
+  }
+  if (meta.kind !== undefined && meta.kind !== 'synthetic' && meta.kind !== 'recorded') {
+    throw new Error(
+      `compat-replay: meta.kind must be 'synthetic' | 'recorded', got ${String(meta.kind)}`,
+    );
+  }
+  if (
+    meta.snapshotFormatVersion !== undefined &&
+    meta.snapshotFormatVersion !== COMPAT_SNAPSHOT_FORMAT_VERSION
+  ) {
+    throw new Error(
+      `compat-replay: snapshotFormatVersion mismatch in ${dirBasename}: ` +
+        `fixture=${String(meta.snapshotFormatVersion)}, ` +
+        `harness=${COMPAT_SNAPSHOT_FORMAT_VERSION}. ` +
+        `Refusing to replay against a drifted snapshot shape. ` +
+        `Either bump the fixture (and re-review) or bump the harness constant.`,
+    );
+  }
 }
 
 /* ---------- Checkpoint diffing ---------- */
@@ -274,7 +408,8 @@ function diffCheckpoint(
     // Read via the public projection — `getScrollback().rows.length` is the
     // canonical count. No test-only accessor needed; the engine already
     // exposes this for renderers and perf harnesses.
-    const actualCount = emulator.getScrollback().rows.length;
+    const ring = emulator.getScrollback();
+    const actualCount = ring.rows.length;
     const expectedCount = cp.expected.scrollback.rowCount;
     if (actualCount !== expectedCount) {
       diff.push({
@@ -282,6 +417,49 @@ function diffCheckpoint(
         expected: expectedCount,
         actual: actualCount,
       });
+    }
+    if (cp.expected.scrollback.rows) {
+      for (const [rowKey, expectedRow] of Object.entries(
+        cp.expected.scrollback.rows,
+      )) {
+        const idx = Number.parseInt(rowKey, 10);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= ring.rows.length) {
+          diff.push({
+            field: `scrollback.rows.${rowKey}`,
+            expected: `valid scrollback row index (0..${ring.rows.length - 1})`,
+            actual: `out-of-range (${rowKey})`,
+          });
+          continue;
+        }
+        const ringRow = ring.rows[idx]!;
+        const actualRow = projectScrollbackRow(ringRow.cells, meta.cols, {
+          includeSgrDigest: expectedRow.sgrDigest !== undefined,
+        });
+        if (actualRow.text !== expectedRow.text) {
+          diff.push({
+            field: `scrollback.rows.${rowKey}.text`,
+            expected: expectedRow.text,
+            actual: actualRow.text,
+          });
+        }
+        if (!widthsEqual(actualRow.widths, expectedRow.widths)) {
+          diff.push({
+            field: `scrollback.rows.${rowKey}.widths`,
+            expected: expectedRow.widths,
+            actual: actualRow.widths,
+          });
+        }
+        if (
+          expectedRow.sgrDigest !== undefined &&
+          actualRow.sgrDigest !== expectedRow.sgrDigest
+        ) {
+          diff.push({
+            field: `scrollback.rows.${rowKey}.sgrDigest`,
+            expected: expectedRow.sgrDigest,
+            actual: actualRow.sgrDigest,
+          });
+        }
+      }
     }
   }
 
@@ -396,6 +574,61 @@ export function projectRow(
         widths: widthsMut,
       };
   return projection;
+}
+
+/**
+ * Project a scrollback row (a plain array of `InternalCell`) into the
+ * same `RowProjection` shape used for live-grid rows. Mirror of
+ * `projectRow` but reads the cells array directly — scrollback rows live
+ * in the ring, not in the live grid, so `_getCell` can't reach them.
+ */
+export function projectScrollbackRow(
+  cells: readonly {
+    readonly grapheme: string;
+    readonly width: 0 | 1 | 2;
+    readonly fg: { kind: string; [k: string]: unknown } | 'default';
+    readonly bg: { kind: string; [k: string]: unknown } | 'default';
+    readonly bold: boolean;
+    readonly italic: boolean;
+    readonly underline: boolean;
+    readonly inverse: boolean;
+    readonly strike: boolean;
+    readonly dim: boolean;
+    readonly hidden: boolean;
+    readonly blink: boolean;
+  }[],
+  cols: number,
+  opts: { readonly includeSgrDigest: boolean },
+): RowProjection {
+  const widthsMut: (0 | 1 | 2)[] = new Array(cols).fill(1) as (0 | 1 | 2)[];
+  let lastNonBlankIdx = -1;
+  const sgrParts: string[] = [];
+  const maxCol = Math.min(cells.length, cols);
+
+  for (let c = 0; c < maxCol; c += 1) {
+    const cell = cells[c]!;
+    widthsMut[c] = cell.width;
+    if (cell.width !== 0 && cell.grapheme !== '') {
+      lastNonBlankIdx = c;
+    }
+    if (opts.includeSgrDigest) {
+      sgrParts.push(sgrTupleFor(cell));
+    }
+  }
+
+  let text = '';
+  if (lastNonBlankIdx !== -1) {
+    for (let c = 0; c <= lastNonBlankIdx; c += 1) {
+      const cell = cells[c]!;
+      if (cell.width !== 0 && cell.grapheme !== '') {
+        text += cell.grapheme;
+      }
+    }
+  }
+
+  return opts.includeSgrDigest
+    ? { text, widths: widthsMut, sgrDigest: sha256Hex(sgrParts.join('|')) }
+    : { text, widths: widthsMut };
 }
 
 /**

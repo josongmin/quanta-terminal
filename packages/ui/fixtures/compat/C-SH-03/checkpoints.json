@@ -1,0 +1,72 @@
+[
+  {
+    "at_byte_offset": 22,
+    "description": "After fish autosuggest paint — row 0 reads `$ ls /tmp`, cols 5..8 carry SGR fg=bright:0 (bright-black ghost text). sgrDigest is load-bearing.",
+    "expected": {
+      "mode": {
+        "altScreen": false
+      },
+      "selected_rows": {
+        "0": {
+          "text": "$ ls /tmp",
+          "widths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "sgrDigest": "c7b37a589e143f8298c2db980088f7824c926e8da03dc1f39bba9208c27b7df9"
+        }
+      }
+    }
+  },
+  {
+    "at_byte_offset": 22,
+    "description": "After `CSI 4 D` cursor-back — cursor at row 0 col 5 (immediately after `$ ls `), ready to overwrite the ghost on the next keystroke.",
+    "expected": {
+      "cursor": {
+        "row": 0,
+        "col": 5
+      },
+      "mode": {
+        "altScreen": false
+      }
+    }
+  }
+]
