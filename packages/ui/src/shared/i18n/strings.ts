@@ -35,6 +35,7 @@ export const STRINGS = {
   'sessionTabs.close': 'Close {{label}}',
   'sessionTabs.ariaActive': 'Active session {{base}}',
   'sessionTabs.ariaInactive': 'Session {{base}}',
+  'sessionTabs.unreadActivity': 'New activity',
 
   // Status bar
   'statusBar.region': 'Session status',
@@ -59,6 +60,20 @@ export const STRINGS = {
   'statusBar.siMissingTooltip':
     'cwd is estimated. Install shell integration for authoritative tracking.',
   'statusBar.siMissingSr': 'cwd is estimated from prompt text',
+  'statusBar.wslLabel': 'WSL',
+  'statusBar.wslTooltip':
+    'Session is running under Windows Subsystem for Linux. Windows drives live under /mnt/…',
+  'statusBar.wslSr': 'Session running under WSL',
+  'statusBar.gitBranchLabel': 'Git branch: {{branch}}',
+  'statusBar.gitBranchSr': 'Git branch',
+  'statusBar.gitBranchTooltip': 'On branch {{branch}} (repo: {{repo}})',
+  'statusBar.gitBranchDetachedTooltip': 'Detached HEAD at {{branch}} (repo: {{repo}})',
+  'statusBar.gitBranchDirtyTooltip': 'working tree has uncommitted changes',
+  'statusBar.gitBranchAheadTooltip': 'ahead of upstream by {{count}} commit(s)',
+  'statusBar.gitBranchBehindTooltip': 'behind upstream by {{count}} commit(s)',
+  'statusBar.gitBranchDirtySr': '(dirty)',
+  'statusBar.gitBranchAheadSr': '(ahead {{count}})',
+  'statusBar.gitBranchBehindSr': '(behind {{count}})',
 
   // Banner host
   'banner.crash.message': 'Your shell exited unexpectedly. Session has been recovered.',
@@ -161,12 +176,32 @@ export const STRINGS = {
   'blockCard.export.toastText': 'Exported as Text',
   'blockCard.export.toastFailed': 'Export failed: {{reason}}',
 
+  // Block card — "Copy as Markdown" action (palette, menu, toasts).
+  'blockCard.copyAsMarkdown.label': 'Copy as Markdown',
+  'blockCard.copyAsMarkdown.description':
+    'Copy the selected output (or the whole block) as a Markdown code fence',
+  'blockCard.copyAsMarkdown.toastFull': 'Copied block as Markdown',
+  'blockCard.copyAsMarkdown.toastSelection': 'Copied selection as Markdown',
+  'blockCard.copyAsMarkdown.toastFailed': 'Copy as Markdown failed: {{reason}}',
+  'palette.copyBlockAsMarkdown': 'Copy block as Markdown',
+  'palette.copyBlockAsMarkdown.description':
+    'Copy the focused block (or current selection within it) as a Markdown code fence',
+
   // Session tabs — transcript export
   'sessionTabs.menuLabel': 'Session actions',
   'sessionTabs.menuTooltip': 'Session actions',
   'sessionTabs.exportTranscript': 'Export transcript',
   'sessionTabs.transcriptExported': 'Session transcript copied',
   'sessionTabs.transcriptExportFailed': 'Transcript export failed: {{reason}}',
+
+  // Session tabs — hover preview
+  'sessionTabs.preview.noOutput': '(no output)',
+  'sessionTabs.preview.healthReady': 'ready',
+  'sessionTabs.preview.healthBooting': 'booting',
+  'sessionTabs.preview.healthExited': 'exited',
+  'sessionTabs.preview.healthError': 'error',
+  'sessionTabs.preview.cwdLabel': 'cwd',
+  'sessionTabs.preview.shellLabel': 'shell',
 
   // Session transcript document
   'sessionTranscript.title': 'Session transcript',
@@ -183,6 +218,63 @@ export const STRINGS = {
     'Post an OS notification when a long-running command finishes while the window is unfocused.',
   'settings.notifications.toggleLabel': 'Notify on long-running command completion',
   'settings.notifications.thresholdLabel': 'Threshold (seconds)',
+
+  // Settings — secrets
+  'settings.sections.secrets': 'Secrets',
+  'settings.secrets.description':
+    'Detect API keys, tokens, and credentials in command output and hide them behind a per-block reveal toggle.',
+  'settings.secrets.toggleLabel': 'Redact secrets in output',
+
+  // Settings — a11y screen-reader announcements
+  'settings.sections.a11yAnnounce': 'Screen Reader',
+  'settings.a11yAnnounce.description':
+    'Announce new terminal output through an aria-live region so screen readers (VoiceOver, NVDA, JAWS) can read it aloud.',
+  'settings.a11yAnnounce.toggleLabel': 'Announce new output to screen reader',
+  'settings.a11yAnnounce.modeLabel': 'Politeness',
+  'settings.a11yAnnounce.mode.polite': 'Polite (wait for pause)',
+  'settings.a11yAnnounce.mode.assertive': 'Assertive (interrupt)',
+  'settings.a11yAnnounce.shortcutHint': 'Shortcut: {{shortcut}} cycles off / polite / assertive.',
+
+  // Settings — bell
+  'settings.sections.bell': 'Bell',
+  'settings.bell.description':
+    'How to surface terminal bell (BEL) events. Visual flashes the screen briefly; audible plays a short beep.',
+  'settings.bell.visualLabel': 'Flash screen on bell',
+  'settings.bell.audibleLabel': 'Play sound on bell',
+
+  // Block card — "did you mean?" command correction (shown on exit 127)
+  'blockCard.didYouMean.question': 'Did you mean',
+  'blockCard.didYouMean.rerun': 'Rerun with this',
+  'blockCard.didYouMean.dismiss': 'Dismiss suggestion',
+
+  // AI explain-error panel (shown below a failed block)
+  'aiExplain.idleLabel': 'Explain this error',
+  'aiExplain.idleDescription': 'Ask AI why this command failed',
+  'aiExplain.loading': 'Asking AI\u2026',
+  'aiExplain.errorMessage': 'Couldn\u2019t explain. Try again.',
+  'aiExplain.retry': 'Retry',
+  'aiExplain.notConfigured':
+    'AI provider not configured. Set up in settings.',
+  'aiExplain.dismiss': 'Dismiss explanation',
+  'aiExplain.panelLabel': 'AI explanation',
+  'aiExplain.shortcutHint': 'E',
+
+  // Settings — AI explain failed commands
+  'settings.sections.aiExplain': 'AI',
+  'settings.aiExplain.description':
+    'Offer an inline "Explain this error" action on blocks that exit non-zero. Uses the configured AI provider.',
+  'settings.aiExplain.toggleLabel': 'Explain failed commands',
+
+  // Command palette — explain last failure
+  'palette.explainLastFailure': 'Explain last failure',
+  'palette.explainLastFailure.description':
+    'Ask AI to explain the most recent failed command in this session',
+
+  // Block card — secrets
+  'blockCard.secrets.showLabel': 'Show secrets',
+  'blockCard.secrets.hideLabel': 'Hide secrets',
+  'blockCard.secrets.count': '{{count}} secret hidden',
+  'blockCard.secrets.countPlural': '{{count}} secrets hidden',
 
   // Notifications
   'notifications.commandDone': 'Quanta: your command finished (exit {{exit}}, {{duration}})',
@@ -201,6 +293,12 @@ export const STRINGS = {
   'altScreenStatus.hint': 'Ctrl-D exits',
   'altScreenStatus.nested': '{{inner}} in {{outer}}',
   'altScreenStatus.exitedWithSignal': '{{command}} exited with signal {{signal}}',
+
+  // TUI surface a11y (announcement + aria labels)
+  'tui.announce.entered': 'Entered TUI mode{{command}}',
+  'tui.announce.exited': 'Exited TUI mode, back to shell',
+  'tui.input.ariaLabel': 'Terminal input (Press Cmd+Shift+Escape to release keyboard)',
+  'tui.render.ariaLabel': 'Terminal screen',
 
   // Degraded-mode banner (EPIC-H §4.4 / ADR 0010 additions)
   'degraded.engine_crashed':
@@ -233,6 +331,7 @@ export const STRINGS = {
   'settings.keyboard.description':
     'Core shortcuts (read-only for now — remapping lands in a later phase).',
   'settings.keyboard.palette': 'Open command palette',
+  'settings.keyboard.outputSearch': 'Find in output',
   'settings.keyboard.history': 'Search command history',
   'settings.keyboard.newSession': 'New session',
   'settings.keyboard.closeSession': 'Close session',
@@ -243,9 +342,230 @@ export const STRINGS = {
   'settings.shellIntegration.status.partial': 'Partial',
   'settings.shellIntegration.status.missing': 'Missing',
   'settings.shellIntegration.install': 'Install shell integration',
+  'settings.sections.sessionProfiles': 'Session Profiles',
+  'settings.sessionProfiles.description':
+    'Named shell + working-directory + env combinations. New sessions spawn with the default profile unless overridden.',
+  'settings.sessionProfiles.empty': 'No profiles yet. Click "Add profile" to create one.',
+  'settings.sessionProfiles.add': 'Add profile',
+  'settings.sessionProfiles.edit': 'Edit',
+  'settings.sessionProfiles.remove': 'Remove',
+  'settings.sessionProfiles.save': 'Save',
+  'settings.sessionProfiles.cancel': 'Cancel',
+  'settings.sessionProfiles.setDefault': 'Set default',
+  'settings.sessionProfiles.defaultBadge': 'Default',
+  'settings.sessionProfiles.nameLabel': 'Name',
+  'settings.sessionProfiles.shellLabel': 'Shell',
+  'settings.sessionProfiles.shell.zsh': 'zsh',
+  'settings.sessionProfiles.shell.bash': 'bash',
+  'settings.sessionProfiles.shell.fish': 'fish',
+  'settings.sessionProfiles.shell.custom': 'Custom path',
+  'settings.sessionProfiles.shell.hostDefault': 'Host default',
+  'settings.sessionProfiles.customShellLabel': 'Custom shell path',
+  'settings.sessionProfiles.cwdLabel': 'Startup working directory',
+  'settings.sessionProfiles.cwdPlaceholder': 'leave empty to inherit',
+  'settings.sessionProfiles.envLabel': 'Startup environment variables',
+  'settings.sessionProfiles.envKeyPlaceholder': 'KEY',
+  'settings.sessionProfiles.envValuePlaceholder': 'value',
+  'settings.sessionProfiles.envAddRow': 'Add variable',
+  'settings.sessionProfiles.envRemoveRow': 'Remove',
+  'settings.sessionProfiles.envKeyInvalid':
+    'Env names must match /^[A-Z_][A-Z0-9_]*$/ (POSIX).',
+  'settings.sessionProfiles.envCapReached':
+    'At most 64 variables per profile.',
+  'settings.sessionProfiles.startupCommandsLabel': 'Startup commands',
+  'settings.sessionProfiles.startupCommandsHelp':
+    'One command per line. Each runs automatically after the shell boots, as if typed.',
   'settings.privacy.description':
     'Telemetry is off. No command text, output, or keystrokes leave the device.',
   'settings.privacy.telemetryOff': 'Telemetry: off',
+
+  // Settings — shell history import
+  'settings.sections.shellHistoryImport': 'Shell History Import',
+  'settings.shellHistoryImport.description':
+    'Quanta can seed its history index from your existing ~/.zsh_history, ~/.bash_history, or ~/.config/fish/fish_history so autosuggest and the command palette are useful immediately. Import runs once on first launch; nothing is written back to your shell files.',
+  'settings.shellHistoryImport.status.imported':
+    'Imported {{count}} commands from {{source}}.',
+  'settings.shellHistoryImport.status.empty': 'No imported commands yet.',
+  'settings.shellHistoryImport.lastImport': 'Last import: {{when}}',
+  'settings.shellHistoryImport.reimport': 'Re-import',
+  'settings.shellHistoryImport.reimporting': 'Re-importing…',
+  'settings.shellHistoryImport.clear': 'Clear imported',
+  'settings.shellHistoryImport.error.noBridge':
+    'Host bridge unavailable — cannot read shell history files.',
+  'settings.shellHistoryImport.error.skipReason':
+    'Import skipped ({{reason}}).',
+
+  // Font settings
+  'settings.sections.font': 'Font',
+  'settings.font.description':
+    'Monospace font used across the terminal, command blocks, composer, and TUI. Uninstalled faces fall back to System Monospace automatically.',
+  'settings.font.familyLabel': 'Font family',
+  'settings.font.sizeLabel': 'Size',
+  'settings.font.sizePx': '{{size}}px',
+  'settings.font.ligaturesLabel': 'Programming ligatures (calt, liga)',
+  'settings.font.previewLabel': 'Preview',
+  'settings.font.fallbackNote':
+    'Uninstalled fonts fall back to System Monospace — no remote download.',
+
+  // Keybindings (customizable shortcuts)
+  'settings.sections.keybindings': 'Shortcuts',
+  'keybindings.description':
+    'Customize shortcuts for app-level actions. Click Record and press a combination; Esc cancels.',
+  'keybindings.record': 'Record',
+  'keybindings.recording': 'Press keys...',
+  'keybindings.recordHint': 'Press any combination, Esc to cancel',
+  'keybindings.reset': 'Reset',
+  'keybindings.resetAll': 'Reset all',
+  'keybindings.conflictBadge': 'conflict',
+  'keybindings.conflictWarning': 'Also bound to: {{actions}}',
+  'keybindings.action.palette': 'Open command palette',
+  'keybindings.action.newSession': 'New session',
+  'keybindings.action.closeSession': 'Close session',
+  'keybindings.action.splitRight': 'Split pane right',
+  'keybindings.action.outputSearch': 'Find in output',
+  'keybindings.action.historySearch': 'Search history',
+  'keybindings.action.settings': 'Open settings',
+  'keybindings.action.clearTerminal': 'Clear terminal',
+  'keybindings.action.focusTerminal': 'Focus terminal',
+
+  // Output search
+  'outputSearch.placeholder': 'Find in output',
+  'outputSearch.ariaLabel': 'Find in output',
+  'outputSearch.regionLabel': 'Search block output',
+  'outputSearch.countLive': 'Results',
+  'outputSearch.countOf': '{{current}} of {{total}} matches',
+  'outputSearch.countNone': 'No matches',
+  'outputSearch.countEmpty': '',
+  'outputSearch.invalidRegex': '/invalid regex/',
+  'outputSearch.hint': '↵ next · ⇧↵ prev',
+  'outputSearch.toggleRegex': 'Regex',
+  'outputSearch.toggleRegexTooltip': 'Regular expression (.*)',
+  'outputSearch.toggleCase': 'Aa',
+  'outputSearch.toggleCaseTooltip': 'Match case',
+  'outputSearch.toggleWord': 'W',
+  'outputSearch.toggleWordTooltip': 'Whole word',
+  'outputSearch.prev': 'Previous match',
+  'outputSearch.next': 'Next match',
+  'outputSearch.close': 'Close output search',
+
+  // Paste safety
+  'pasteSafety.dialogLabel': 'Confirm paste',
+  'pasteSafety.title.danger': 'Dangerous paste detected',
+  'pasteSafety.title.warn': 'Review before pasting',
+  'pasteSafety.reasonsLabel': 'Why this was flagged',
+  'pasteSafety.previewLabel': 'Preview',
+  'pasteSafety.truncated': 'Preview truncated. {{chars}} characters total.',
+  'pasteSafety.cancel': 'Cancel',
+  'pasteSafety.confirm': 'Paste Anyway',
+  'pasteSafety.badgeDanger': 'danger',
+  'pasteSafety.badgeWarn': 'warn',
+
+  // Composer — password mode
+  'composer.passwordMode': 'password mode',
+  'composer.passwordMode.aria':
+    'Password mode active: typed characters are masked and not stored in history',
+
+  // Pane layout (split panes)
+  'paneLayout.splitH': 'Split Right',
+  'paneLayout.splitV': 'Split Down',
+  'paneLayout.nextPane': 'Next Pane',
+  'paneLayout.closePane': 'Close Pane',
+  'paneLayout.paneLabel': 'Pane {{id}}',
+  'paneLayout.resizerLabel': 'Resize panes',
+  'paneLayout.zoomBadge': 'zoomed',
+  'paneLayout.zoomBadgeTooltip': 'Pane maximized — {{shortcut}} to restore',
+  'paneLayout.zoomToggle': 'Toggle pane zoom',
+  'paneLayout.zoomToggleDescription':
+    'Maximize the focused pane (hides siblings without closing them). Press again to restore.',
+  'paneLayout.zoomedAnnounce': 'Pane zoomed',
+  'paneLayout.restoredAnnounce': 'Pane restored',
+  'keybindings.action.zoomPane': 'Toggle pane zoom',
+
+  // Session record (asciicast v2)
+  'sessionRecord.commands.start.label': 'Session: Start recording',
+  'sessionRecord.commands.start.description':
+    'Capture all output from the active shell as an asciicast .cast file',
+  'sessionRecord.commands.stop.label': 'Session: Stop recording',
+  'sessionRecord.commands.stop.description': 'End the asciicast capture and open the save dialog',
+  'sessionRecord.indicator.label': 'REC',
+  'sessionRecord.indicator.aria': 'Recording session, {{time}} elapsed',
+  'sessionRecord.toast.noSession': 'No active session to record.',
+  'sessionRecord.toast.alreadyRecording': 'A session recording is already in progress.',
+  'sessionRecord.toast.overflow':
+    'Recording stopped: buffer cap (32 MiB) reached. You can still save what was captured.',
+  'sessionRecord.modal.title': 'Recording stopped',
+  'sessionRecord.modal.statsLabel': 'Recording statistics',
+  'sessionRecord.modal.statDuration': 'Duration',
+  'sessionRecord.modal.statBytes': 'Captured',
+  'sessionRecord.modal.statEvents': 'Events',
+  'sessionRecord.modal.copy': 'Copy to clipboard',
+  'sessionRecord.modal.download': 'Download .cast',
+  'sessionRecord.modal.discard': 'Discard',
+  'sessionRecord.modal.copyOk': 'Asciicast copied to clipboard.',
+  'sessionRecord.modal.copyFail': 'Could not copy to clipboard.',
+  'sessionRecord.modal.copyUnavailable': 'Clipboard access is unavailable in this environment.',
+  'sessionRecord.modal.downloadOk': 'Downloading asciicast file.',
+  'sessionRecord.modal.downloadFail': 'Could not start the download.',
+
+  // Block tags (SOTA++ tagging feature)
+  'blockCard.tags.addButton': 'Tag',
+  'blockCard.tags.addLabel': 'Add a tag to this block',
+  'blockCard.tags.removeLabel': 'Remove tag {{tag}}',
+  'blockCard.tags.chipLabel': 'Filter by tag {{tag}}',
+  'blockCard.tags.popoverLabel': 'Tag editor',
+  'blockCard.tags.inputPlaceholder': 'tag name',
+  'blockCard.tags.invalid':
+    'Tags must be 1-24 characters: lowercase letters, digits, _ or -.',
+  'blockFilter.bar.activeLabel': 'Filtering by',
+  'blockFilter.bar.removeTag': 'Remove {{tag}} from filter',
+  'blockFilter.bar.clear': 'Clear',
+  'blockFilter.bar.clearLabel': 'Clear all tag filters',
+  'blockFilter.bar.count': '{{matched}} of {{total}}',
+  'blockFilter.bar.modeAny': 'Any',
+  'blockFilter.bar.modeAll': 'All',
+  'blockFilter.bar.modeLabel': 'Filter mode',
+  'palette.tagActiveBlock': 'Tag active block...',
+  'palette.tagActiveBlock.description': 'Open the tag editor for the focused block',
+  'palette.clearTagFilter': 'Clear tag filters',
+  'palette.clearTagFilter.description': 'Remove every active tag from the block filter',
+
+  // Workspace snapshots (SOTA++ layout capture feature)
+  'workspaceSnapshot.palette.save': 'Workspace: Save snapshot...',
+  'workspaceSnapshot.palette.save.description':
+    'Capture the current layout (sessions, panes, filters) under a name',
+  'workspaceSnapshot.palette.restore': 'Workspace: Restore snapshot...',
+  'workspaceSnapshot.palette.restore.description':
+    'Switch to a saved workspace layout',
+  'workspaceSnapshot.palette.delete': 'Workspace: Delete snapshot...',
+  'workspaceSnapshot.palette.delete.description': 'Remove a saved workspace layout',
+  'workspaceSnapshot.palette.toggleAutoRestore': 'Workspace: Toggle auto-restore',
+  'workspaceSnapshot.palette.toggleAutoRestore.description':
+    'Automatically re-open the last workspace on next launch',
+  'workspaceSnapshot.prompt.saveName':
+    'Name this workspace snapshot (e.g. "deploy flow")',
+  'workspaceSnapshot.prompt.restoreName': 'Restore which snapshot?',
+  'workspaceSnapshot.prompt.deleteName': 'Delete which snapshot?',
+  'workspaceSnapshot.toast.saved': 'Saved workspace snapshot "{{name}}".',
+  'workspaceSnapshot.toast.restored': 'Restored workspace snapshot "{{name}}".',
+  'workspaceSnapshot.toast.deleted': 'Deleted workspace snapshot "{{name}}".',
+  'workspaceSnapshot.toast.autoRestoreOn': 'Auto-restore enabled.',
+  'workspaceSnapshot.toast.autoRestoreOff': 'Auto-restore disabled.',
+  'workspaceSnapshot.toast.empty': 'No saved snapshots yet.',
+  'workspaceSnapshot.toast.notFound': 'No snapshot named "{{name}}".',
+  'workspaceSnapshot.settings.sectionTitle': 'Workspace snapshots',
+  'workspaceSnapshot.settings.description':
+    'Saved layouts — sessions, splits, zoom, and filter tags. Restore to switch the whole workspace.',
+  'workspaceSnapshot.settings.autoRestoreLabel':
+    'Re-open the last workspace automatically on launch',
+  'workspaceSnapshot.settings.autoSectionTitle': 'Automatic',
+  'workspaceSnapshot.settings.autoEmpty': 'No automatic snapshot yet.',
+  'workspaceSnapshot.settings.autoCapturedAt': 'Captured {{when}}',
+  'workspaceSnapshot.settings.namedSectionTitle': 'Named',
+  'workspaceSnapshot.settings.namedEmpty': 'No named snapshots saved.',
+  'workspaceSnapshot.settings.save': 'Save current workspace...',
+  'workspaceSnapshot.settings.restore': 'Restore',
+  'workspaceSnapshot.settings.delete': 'Delete',
+  'workspaceSnapshot.settings.sessionCount': '{{count}} sessions',
 } as const;
 
 export type StringKey = keyof typeof STRINGS;

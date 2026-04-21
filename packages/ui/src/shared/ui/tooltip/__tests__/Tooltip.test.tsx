@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Tooltip } from '../Tooltip.js';
 
 // Bubbles are portaled to document.body; Testing Library's default
@@ -104,5 +104,41 @@ describe('<Tooltip />', () => {
     expect(tip.style.position === 'fixed' || tip.style.position === '').toBe(
       true,
     );
+  });
+
+  /**
+   * prefers-reduced-motion: the bubble must NOT apply a CSS transition when
+   * the user has opted in to reduced motion. We verify this by checking the
+   * CSS module source: the transition declaration must live inside a
+   * `prefers-reduced-motion: no-preference` media block, not at the top level.
+   *
+   * This is a source-level contract test — jsdom doesn't evaluate media
+   * queries, so we read the raw CSS text instead of computed styles.
+   */
+  it('tooltip CSS module does not set transition at top level (only under no-preference media query)', async () => {
+    // Mock matchMedia so any component code that checks it sees reduce.
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+
+    // Import the raw CSS text. Vite resolves `?inline` to a string in tests.
+    // The CSS module file is the source of truth; we verify the transition
+    // property is NOT present outside a media block.
+    const cssText: string = await import('../tooltip.module.css?inline').then(
+      (m) => (m as { default: string }).default,
+    );
+
+    // Split off any @media blocks so we can inspect the top-level rules only.
+    const topLevelCss = cssText.replace(/@media[^{]*\{[\s\S]*?\}\s*\}/g, '');
+    expect(topLevelCss).not.toMatch(/transition\s*:/);
+
+    vi.unstubAllGlobals();
   });
 });

@@ -297,6 +297,84 @@ describe('<AnsiOutput /> — path detection (Phase 3)', () => {
   });
 });
 
+describe('<AnsiOutput /> — URL autolinkification', () => {
+  it('does NOT render URL anchors when onUrlClick is absent', () => {
+    const { container } = renderSpans([{ text: 'visit https://example.com here' }]);
+    expect(container.querySelector('a[data-url-link]')).toBeNull();
+  });
+
+  it('wraps a detected URL in an <a> when onUrlClick is provided', () => {
+    const spy = vi.fn();
+    render(
+      <AnsiOutput
+        spans={[{ text: 'visit https://example.com/foo here' }]}
+        onUrlClick={spy}
+      />,
+    );
+    const anchor = screen.getByRole('link', { name: /example\.com/ });
+    expect(anchor.getAttribute('href')).toBe('https://example.com/foo');
+    expect(anchor.getAttribute('data-url-kind')).toBe('http');
+  });
+
+  it('gives bare domains a synthesised https:// href', () => {
+    const spy = vi.fn();
+    render(
+      <AnsiOutput spans={[{ text: 'try example.com/page ok' }]} onUrlClick={spy} />,
+    );
+    const anchor = screen.getByRole('link', { name: /example\.com/ });
+    expect(anchor.getAttribute('href')).toBe('https://example.com/page');
+    expect(anchor.getAttribute('data-url-kind')).toBe('domain');
+  });
+
+  it('fires onUrlClick with url + kind on activation', async () => {
+    const spy = vi.fn();
+    render(
+      <AnsiOutput
+        spans={[{ text: 'clone git@github.com:me/repo.git here' }]}
+        onUrlClick={spy}
+      />,
+    );
+    const anchor = screen.getByRole('link', { name: /github\.com/ });
+    await userEvent.click(anchor);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toEqual({
+      url: 'git@github.com:me/repo.git',
+      kind: 'ssh',
+    });
+  });
+
+  it('OSC 8 precedence: terminal-emitted link wins, no auto-link on top', () => {
+    const spy = vi.fn();
+    const { container } = render(
+      <AnsiOutput
+        spans={[{ text: 'https://terminal.example.com', link: 'https://actual.example.com' }]}
+        onUrlClick={spy}
+      />,
+    );
+    // Only the OSC 8 anchor exists; the renderer does not double-wrap with an
+    // autolink node over a span that already carries `span.link`.
+    const links = container.querySelectorAll('a');
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute('href')).toBe('https://actual.example.com');
+    expect(container.querySelector('a[data-url-link]')).toBeNull();
+  });
+
+  it('coexists with path detection on the same span', () => {
+    const urlSpy = vi.fn();
+    const pathSpy = vi.fn();
+    render(
+      <AnsiOutput
+        spans={[{ text: 'error in src/main.rs:12:3 see https://example.com for help' }]}
+        onPathClick={pathSpy}
+        onUrlClick={urlSpy}
+      />,
+    );
+    // Path button AND URL anchor both render.
+    expect(screen.getByRole('button', { name: /src\/main\.rs:12:3/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /example\.com/ })).toBeInTheDocument();
+  });
+});
+
 describe('<AnsiOutput /> — performance', () => {
   it('renders 10 000 spans without producing more DOM nodes than spans', () => {
     const spans: AnsiSpan[] = Array.from({ length: 10_000 }, (_, i) => ({

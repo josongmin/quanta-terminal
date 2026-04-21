@@ -1,5 +1,6 @@
-/* Composer — elevated input card. Focus reveals a soft blue stroke + glow;
-   the mode chip sits on the right separated by a 1px Separator. */
+/* Composer — Warp-style minimal bottom input dock.
+ * Clean, focused. Focus state shows a blue glow ring.
+ * Inline autosuggest (ghost text) + syntax highlight overlay. */
 
 .wrap {
   display: flex;
@@ -11,24 +12,23 @@
   border-radius: var(--q-radius-lg);
   transition:
     border-color var(--q-dur-fast) var(--q-ease-out),
-    box-shadow var(--q-dur-fast) var(--q-ease-out),
-    background var(--q-dur-fast) var(--q-ease-out);
+    box-shadow var(--q-dur-fast) var(--q-ease-out);
   min-height: var(--q-composer-min-height);
 }
 
 .wrap.focused {
   border-color: var(--q-border-focus);
   box-shadow: var(--q-shadow-focus-ring);
-  background: var(--q-bg-elev-2);
 }
 
 .row {
   display: flex;
   align-items: flex-start;
   gap: var(--q-space-2);
-  padding: 8px 12px;
+  padding: 10px 14px;
 }
 
+/* Shell prompt glyph */
 .prompt {
   flex: 0 0 auto;
   margin-top: 2px;
@@ -37,6 +37,14 @@
   font-size: var(--q-font-size-md);
   line-height: 20px;
   user-select: none;
+  opacity: 0.8;
+}
+
+.editorWrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  display: flex;
 }
 
 .editor {
@@ -51,19 +59,70 @@
   color: var(--q-fg);
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-md);
+  font-feature-settings: var(--q-font-features, normal);
   line-height: 20px;
   caret-color: var(--q-accent);
-  animation: q-caret-pulse 1.1s var(--q-ease-in-out) infinite;
+  animation: q-caret-pulse 1.2s var(--q-ease-in-out) infinite;
+  position: relative;
+  z-index: 2;
 }
 
-/*
- * Suppress the app-level `:focus-visible` outline (shared/config/app.css)
- * on this textarea. The composer card already paints its own focus
- * affordance via `.wrap.focused` (border + box-shadow glow), so the
- * global 2px outline would stack into a visible double-ring. Higher
- * specificity via the `&:focus-visible` pair beats the bare
- * `:focus-visible` rule in the cascade regardless of stylesheet order.
- */
+/* Syntax highlight overlay */
+.highlight {
+  position: absolute;
+  inset: 0;
+  padding: 2px 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  font-feature-settings: var(--q-font-features, normal);
+  line-height: 20px;
+  color: var(--q-fg);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.editorTransparent {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Syntax token colors */
+.hlCommandKnown   { color: var(--color-syntax-command-known); }
+.hlCommandUnknown { color: var(--color-syntax-command-unknown); }
+.hlFlag           { color: var(--color-syntax-flag); }
+.hlString         { color: var(--color-syntax-string); }
+.hlPath           { color: var(--color-syntax-path); }
+.hlVar            { color: var(--color-syntax-var); }
+.hlOperator       { color: var(--color-syntax-operator); }
+.hlSubshell       { color: var(--color-syntax-subshell); font-weight: 600; }
+.hlComment        { color: var(--color-syntax-comment); font-style: italic; }
+
+/* Ghost text — fish-shell style greyed autocompletion tail */
+.ghost {
+  position: absolute;
+  inset: 0;
+  padding: 2px 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-md);
+  font-feature-settings: var(--q-font-features, normal);
+  line-height: 20px;
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
+  z-index: 0;
+}
+.ghostSpacer {
+  color: transparent;
+}
+.ghostTail {
+  color: var(--q-fg-faint);
+  opacity: 0.7;
+}
+
+/* Suppress double focus ring */
 .editor:focus,
 .editor:focus-visible {
   outline: none;
@@ -73,29 +132,28 @@
 
 .editor::placeholder {
   color: var(--q-fg-faint);
+  opacity: 0.6;
 }
 .editor:disabled {
   color: var(--q-fg-muted);
   cursor: progress;
 }
 
-/* Subtle caret emphasis: CSS cannot style the textarea caret directly beyond
-   caret-color, but pulsing the editor's subtle box-shadow while focused makes
-   the insertion point feel alive without being noisy. */
 @keyframes q-caret-pulse {
   0%, 100% { caret-color: var(--q-accent); }
-  50%      { caret-color: rgba(94, 160, 255, 0.6); }
+  50%      { caret-color: rgba(107, 163, 255, 0.5); }
 }
 @media (prefers-reduced-motion: reduce) {
   .editor { animation: none; }
 }
 
+/* Mode chip — shell / AI toggle */
 .modeChip {
   flex: 0 0 auto;
   align-self: center;
   padding: 2px 8px;
-  color: var(--q-fg-muted);
-  background: var(--q-bg-elev-2);
+  color: var(--q-fg-faint);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--q-border-subtle);
   border-radius: var(--q-radius-sm);
   font-family: var(--q-font-mono);
@@ -103,22 +161,74 @@
   letter-spacing: 0.04em;
   text-transform: lowercase;
   user-select: none;
+  transition: color var(--q-dur-fast) var(--q-ease-out),
+              background var(--q-dur-fast) var(--q-ease-out),
+              border-color var(--q-dur-fast) var(--q-ease-out);
+}
+.wrap.focused .modeChip {
+  color: var(--q-fg-muted);
+  border-color: var(--q-border-strong);
 }
 
-/* History (recent commands) scaffold: a slim panel rising above the input.
-   Phase 1 shows only the empty state; later phases populate rows. */
+/* History panel — slides up above the input row, shows recent commands */
 .history {
   border-bottom: 1px solid var(--q-border-subtle);
-  padding: 8px 12px;
-  color: var(--q-fg-muted);
-  font-family: var(--q-font-sans);
-  font-size: var(--q-font-size-sm);
+  padding: 6px 4px;
   animation: q-history-in var(--q-dur-med) var(--q-ease-standard);
+  background: var(--q-bg-elev-2);
+  border-radius: var(--q-radius-lg) var(--q-radius-lg) 0 0;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--q-border-strong) transparent;
+}
+.history::-webkit-scrollbar { width: 4px; }
+.history::-webkit-scrollbar-thumb { background: var(--q-border-strong); border-radius: 4px; }
+.history::-webkit-scrollbar-track { background: transparent; }
+
+.historyHeader {
+  padding: 2px 12px 4px;
+  font-family: var(--q-font-sans);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--q-fg-faint);
+  user-select: none;
 }
 .historyEmpty {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 6px 12px;
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+}
+.historyItem {
+  display: flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: var(--q-radius-sm);
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out);
+}
+.historyItem:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.historyItemActive {
+  background: rgba(107, 163, 255, 0.10);
+}
+.historyItemActive:hover {
+  background: rgba(107, 163, 255, 0.13);
+}
+.historyItemCmd {
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 @keyframes q-history-in {
@@ -129,6 +239,7 @@
   .history { animation: none; }
 }
 
+/* Accessibility */
 .srOnly {
   position: absolute;
   width: 1px;
@@ -137,14 +248,14 @@
   margin: -1px;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }
 
-/* Inline error surface — quiet, one-line, dismisses the moment the user
-   types anything new. Never blocks the input (the textarea stays enabled). */
+/* Inline submit error */
 .error {
-  padding: 4px 12px 8px 12px;
+  padding: 4px 14px 8px 14px;
   color: var(--q-danger);
   background: transparent;
   font-family: var(--q-font-mono);

@@ -7,8 +7,9 @@ export {
   getSuggestionPort,
   createMockSuggestionPort,
   resetSuggestionPortForTests,
+  EXPLAIN_NOT_CONFIGURED_MESSAGE,
 } from './provider-port.js';
-export type { SuggestionPort, SuggestRequest } from './provider-port.js';
+export type { SuggestionPort, SuggestRequest, ExplainErrorRequest } from './provider-port.js';
 export {
   createAskAiCommand,
   extendPaletteWithAskAi,

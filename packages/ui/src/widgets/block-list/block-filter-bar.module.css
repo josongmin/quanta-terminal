@@ -1,0 +1,116 @@
+/*
+ * BlockFilterBar — sticky strip rendered at the top of the BlockList when
+ * the filter has at least one active tag. Hidden entirely otherwise (see
+ * component's early return).
+ */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  padding: 6px var(--q-space-3);
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  font-size: 12px;
+  color: var(--q-fg-muted);
+  margin-bottom: var(--q-space-2);
+}
+
+.label {
+  font-size: 11px;
+  color: var(--q-fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 2px 0 8px;
+  border-radius: 999px;
+  background: var(--q-bg-elev-3, var(--q-bg-elev-1));
+  border: 1px solid var(--q-border-subtle);
+  font-size: 11px;
+  color: var(--q-fg);
+}
+
+.chipLabel {
+  padding-right: 4px;
+}
+
+.chipRemove {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--q-fg-faint);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+}
+.chipRemove:hover {
+  color: var(--q-fg);
+  background: rgba(255,255,255,0.06);
+}
+
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  overflow: hidden;
+}
+
+.modeButton {
+  background: transparent;
+  border: none;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font-family: var(--q-font-sans);
+}
+.modeButton:hover {
+  color: var(--q-fg);
+}
+.modeButtonActive {
+  background: var(--q-accent-bg, var(--q-bg-elev-1));
+  color: var(--q-fg);
+}
+
+.count {
+  color: var(--q-fg-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.clear {
+  background: transparent;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font-family: var(--q-font-sans);
+}
+.clear:hover {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+}

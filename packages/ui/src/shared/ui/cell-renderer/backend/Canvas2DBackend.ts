@@ -79,14 +79,27 @@ const TERMINAL_FONT_STACK =
   "'Segoe UI Emoji', 'Noto Color Emoji', ui-monospace, 'SF Mono', Menlo, " +
   'Consolas, monospace';
 
+/** Optional user-selected font family string. When non-null, `buildFontString`
+ *  uses it instead of `TERMINAL_FONT_STACK`. Set by the font-settings feature
+ *  via `_setFontOverride`. */
+interface FontOverride {
+  readonly family: string | null;
+  /** Feature string forwarded to `ctx.fontFeatureSettings` when the platform
+   *  supports it. 2D context feature-settings is Chromium-only for now;
+   *  non-supporting browsers ignore the assignment. */
+  readonly features: string | null;
+}
+
 /** The `font` shorthand string applied to `ctx.font` for the given cell
  *  height. Canvas2D honors the same syntax as CSS `font`. */
-function buildFontString(cellHeightPx: number): string {
+function buildFontString(cellHeightPx: number, override: FontOverride | null): string {
   // Pick a glyph size that sits comfortably within the cell. 0.80 of the
   // cell height matches what the metrics derivation targets and keeps the
   // baseline offset (`metrics.baselineOffsetPx`) stable.
   const px = Math.max(1, Math.round(cellHeightPx * 0.8));
-  return `${px}px ${TERMINAL_FONT_STACK}`;
+  const family =
+    override && override.family ? override.family + ', ' + TERMINAL_FONT_STACK : TERMINAL_FONT_STACK;
+  return `${px}px ${family}`;
 }
 
 export class Canvas2DBackend implements BackendContract {
@@ -125,6 +138,10 @@ export class Canvas2DBackend implements BackendContract {
    * tick to reblit. Tests inject a spy via `_setInvalidationHook`.
    */
   private invalidationHook: (() => void) | null = null;
+  /** User-selected font override (family + feature-settings). Set from the
+   *  font-settings feature via `_setFontOverride`; affects the font
+   *  shorthand and is re-applied on every paint entry. */
+  private fontOverride: FontOverride | null = null;
 
   mount(ctx: MountContext): void {
     this.container = ctx.container;
@@ -176,7 +193,7 @@ export class Canvas2DBackend implements BackendContract {
       this.cursorCtx = null;
     }
     this.atlas = new FontAtlas(this.metrics, { rasterizer: new MemoryRasterizer() });
-    this.fontString = buildFontString(this.metrics.cellHeightPx);
+    this.fontString = buildFontString(this.metrics.cellHeightPx, this.fontOverride);
     this.applyContextState();
     this.wireFontAndVisibilityListeners();
     this.paintLog.push({ kind: 'mount' });
@@ -189,9 +206,24 @@ export class Canvas2DBackend implements BackendContract {
    * and when fonts-ready or visibilitychange fires.
    */
   private applyContextState(): void {
+    const features = this.fontOverride?.features ?? null;
     if (this.cellCtx) {
       this.cellCtx.font = this.fontString;
       this.cellCtx.textBaseline = 'alphabetic';
+      // Chromium exposes `fontFeatureSettings` on 2D contexts so programming
+      // ligatures (calt/liga) can be toggled JS-side. Non-supporting browsers
+      // silently accept/ignore the assignment; guard with a feature sniff
+      // so we don't poison the fallback path.
+      if (features !== null) {
+        const ctxRec = this.cellCtx as unknown as { fontFeatureSettings?: string };
+        if ('fontFeatureSettings' in this.cellCtx) {
+          try {
+            ctxRec.fontFeatureSettings = features;
+          } catch {
+            // noop — older browsers
+          }
+        }
+      }
       // `fillStyle` defaults to "#000" on a fresh context which is invisible
       // on dark themes. The CSS var cannot be read from a canvas, so fall
       // back to the terminal foreground token's dark-theme default. A future
@@ -263,11 +295,39 @@ export class Canvas2DBackend implements BackendContract {
    * next rAF. Idempotent.
    */
   private refreshFontState(reason: 'fonts_ready' | 'visibility_refresh'): void {
-    this.fontString = buildFontString(this.metrics.cellHeightPx);
+    this.fontString = buildFontString(this.metrics.cellHeightPx, this.fontOverride);
     this.applyContextState();
     this.atlas?.invalidateAll('font_load_complete');
     this.invalidationHook?.();
     this.paintLog.push({ kind: reason });
+  }
+
+  /**
+   * Update the user-selected font family + feature string. Called by the
+   * font-settings feature whenever the store changes. Invalidates the glyph
+   * atlas so the next paint re-rasters every cell with the new face, and
+   * fires the upstream invalidation hook so the Renderer schedules a frame.
+   *
+   * A `null` override clears any prior selection and falls back to the
+   * canonical `TERMINAL_FONT_STACK`. Passing the same override as before is
+   * a cheap no-op so repeated notifications don't flood the render loop.
+   */
+  _setFontOverride(override: FontOverride | null): void {
+    const prev = this.fontOverride;
+    if (prev && override && prev.family === override.family && prev.features === override.features) {
+      return;
+    }
+    if (!prev && !override) return;
+    this.fontOverride = override;
+    this.fontString = buildFontString(this.metrics.cellHeightPx, this.fontOverride);
+    this.applyContextState();
+    this.atlas?.invalidateAll('font_load_complete');
+    this.invalidationHook?.();
+  }
+
+  /** @internal Test-only accessor for the synthesized font shorthand. */
+  _fontString(): string {
+    return this.fontString;
   }
 
   applyGridSnapshot(rows: readonly Row[], cursor: CursorState | null, mode: TerminalModeState): void {
@@ -318,7 +378,7 @@ export class Canvas2DBackend implements BackendContract {
     this.atlas?.applyMetrics(metrics);
     // Metrics drive font size. Recompute the shorthand and reapply so
     // subsequent fillText calls honor the new cell height.
-    this.fontString = buildFontString(metrics.cellHeightPx);
+    this.fontString = buildFontString(metrics.cellHeightPx, this.fontOverride);
     this.applyContextState();
     this.paintLog.push({ kind: 'metrics' });
   }

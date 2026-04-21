@@ -70,6 +70,8 @@ describe('features/ai-suggest ask-ai command', () => {
       suggest: async () => {
         throw new Error('boom');
       },
+      explainError: async () => 'AI provider not configured',
+      suggestCorrection: () => [],
     });
     const cmd = createAskAiCommand({ ask: () => 'anything' });
     // Must not throw.

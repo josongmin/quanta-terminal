@@ -49,14 +49,16 @@
  * Composer's own autoFocus (or a following user click) restores focus.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { HostBridge } from '@quanta/host-common';
 
-import { useAltScreenMode } from '../../entities/tui/index.js';
+import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
+import { isMac } from '../../shared/lib/keymap.js';
+import { t } from '../../shared/i18n/index.js';
 import {
   Focus,
   KeyEncoder,
@@ -67,6 +69,12 @@ import {
   mount,
   type InputHostHandle,
 } from '../input/index.js';
+import {
+  analyze as analyzePaste,
+  needsConfirmation,
+  PasteConfirmDialog,
+  type PasteAnalysis,
+} from '../paste-safety/index.js';
 import { getSessionConnection } from '../session-tabs/index.js';
 
 import styles from './tui-input-surface.module.css';
@@ -142,6 +150,74 @@ export function TuiInputSurface(props: TuiInputSurfaceProps): JSX.Element | null
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bridge = bridgeProp ?? tryGetHostBridge();
 
+  // Paste-safety: when a risky paste lands on the surface we stash it in
+  // state, show the confirmation dialog, and only resolve the gate promise
+  // when the user makes a choice. Using a ref for the pending-resolver
+  // keeps the dialog's confirm/cancel handlers plain React callbacks.
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+  const [pasteAnalysis, setPasteAnalysis] = useState<PasteAnalysis | null>(null);
+  const pendingResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+
+  const onPasteGate = useCallback(
+    (text: string): boolean | Promise<boolean> => {
+      const analysis = analyzePaste(text);
+      if (!needsConfirmation(analysis)) return true;
+      return new Promise<boolean>((resolve) => {
+        pendingResolverRef.current = resolve;
+        setPendingPaste(text);
+        setPasteAnalysis(analysis);
+      });
+    },
+    [],
+  );
+
+  const resolvePasteDecision = useCallback((allowed: boolean): void => {
+    const resolver = pendingResolverRef.current;
+    pendingResolverRef.current = null;
+    setPendingPaste(null);
+    setPasteAnalysis(null);
+    resolver?.(allowed);
+  }, []);
+
+  // Escape-hatch keyboard interceptor. Users can always release the keyboard
+  // back to the shell with Cmd+Shift+Esc on macOS (or Ctrl+Shift+Esc on other
+  // platforms) even when the TUI has captured all input. We install the
+  // listener in the capture phase so we win the event before the input-host
+  // KeyEncoder has a chance to forward Escape as a plain 0x1b byte.
+  useEffect(() => {
+    if (!active) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onKeyDownCapture = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (!e.shiftKey) return;
+      const modifierHeld = isMac() ? e.metaKey : e.ctrlKey;
+      if (!modifierHeld) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Best-effort: tell the TUI program to exit the alt-screen + restore
+      // the cursor. The bytes are dispatched through the same transport as
+      // normal keystrokes so the degraded-gate is still consulted.
+      if (sessionId && bridge) {
+        const ESC_EXIT = new Uint8Array([
+          0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x6c, // ESC [ ? 1 0 4 9 l
+          0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x68, // ESC [ ? 2 5 h
+        ]);
+        onBytesOut?.(ESC_EXIT);
+        void writeToSession(sessionId, bridge, ESC_EXIT);
+      }
+      // Force the UI store back to the non-TUI state regardless of whether
+      // the program honors the alt-screen exit bytes — the user requested a
+      // hard release.
+      useTuiStore.getState().reset();
+    };
+    container.addEventListener('keydown', onKeyDownCapture, true);
+    return () => {
+      container.removeEventListener('keydown', onKeyDownCapture, true);
+    };
+  }, [active, sessionId, bridge, onBytesOut]);
+
   useEffect(() => {
     if (!active) return;
     const container = containerRef.current;
@@ -157,7 +233,13 @@ export function TuiInputSurface(props: TuiInputSurfaceProps): JSX.Element | null
 
     // Build a per-mount stub mirror. See file-header "Mode mirror" note
     // for why this is a stub and what it means for feature coverage.
-    const mirror = createStubMirror();
+    //
+    // Seed `altScreen: true` — this surface is only mounted when the tui
+    // store reports an active alt-screen program, so the mirror must
+    // reflect that. Critically, MouseEncoder's wheel→arrow-key fallback
+    // reads this flag to decide whether to synthesize arrow bytes when
+    // mouse tracking is off (alt-screen has no native scroll).
+    const mirror = createStubMirror({ altScreen: true });
     const modeSnapshot = new ModeSnapshot(mirror);
     const keyEncoder = new KeyEncoder({ modeSnapshot });
     const mouseEncoder = new MouseEncoder({ modeSnapshot });
@@ -175,6 +257,7 @@ export function TuiInputSurface(props: TuiInputSurfaceProps): JSX.Element | null
           onBytesOut?.(bytes);
           void writeToSession(sessionId, bridge, bytes);
         },
+        onPasteGate,
       });
     } catch (err) {
       log.warn('tui-input-surface: mount failed', err);
@@ -203,19 +286,28 @@ export function TuiInputSurface(props: TuiInputSurfaceProps): JSX.Element | null
       container.removeEventListener('pointerdown', onPointerDown);
       handle?.unmount();
     };
-  }, [active, sessionId, bridge, onBytesOut]);
+  }, [active, sessionId, bridge, onBytesOut, onPasteGate]);
 
   if (!active) return null;
 
   return (
-    <div
-      ref={containerRef}
-      className={styles.tuiInputSurface}
-      tabIndex={0}
-      role="application"
-      aria-label="tui-input-surface"
-      data-testid="tui-input-surface"
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={styles.tuiInputSurface}
+        tabIndex={0}
+        role="application"
+        aria-label={t('tui.input.ariaLabel')}
+        aria-roledescription="terminal"
+        data-testid="tui-input-surface"
+      />
+      <PasteConfirmDialog
+        text={pendingPaste}
+        analysis={pasteAnalysis}
+        onCancel={() => resolvePasteDecision(false)}
+        onConfirm={() => resolvePasteDecision(true)}
+      />
+    </>
   );
 }
 

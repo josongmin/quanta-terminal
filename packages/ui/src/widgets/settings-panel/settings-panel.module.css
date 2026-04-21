@@ -150,3 +150,174 @@
   font-size: var(--q-font-size-sm);
   margin-top: var(--q-space-2);
 }
+
+/*
+ * Live preview in the Font section. Renders a representative shell snippet
+ * with ligature-forming digraphs so the user can judge the face / size
+ * choice before committing. Uses the same vars as the rest of the app so
+ * the preview updates in real time as the store's set* actions fire.
+ */
+.fontPreview {
+  margin: 0;
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  color: var(--q-fg);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-term);
+  font-feature-settings: var(--q-font-features, normal);
+  line-height: var(--q-line-height-term);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Session-profiles section
+ * -------------------------
+ * A list of profile rows with inline actions. Each row is a flex container;
+ * the editor form — when opened — replaces the row body and spans full width.
+ */
+.profileList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+}
+
+.profileRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+}
+
+.profileRowInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.profileName {
+  font-weight: 600;
+  color: var(--q-fg);
+  font-size: var(--q-font-size-md);
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.profileMeta {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-sm);
+  font-family: var(--q-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileDefaultBadge {
+  font-size: var(--q-font-size-xs);
+  background: var(--q-accent);
+  color: var(--q-fg-on-accent);
+  border-radius: var(--q-radius-sm);
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.profileActions {
+  display: flex;
+  gap: var(--q-space-2);
+  flex: 0 0 auto;
+}
+
+.profileEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+  padding: var(--q-space-3);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-md);
+  background: var(--q-bg-elev-1);
+}
+
+.profileField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profileInput,
+.profileTextarea,
+.profileSelect {
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: var(--q-space-1) var(--q-space-2);
+  font-family: inherit;
+  font-size: var(--q-font-size-sm);
+}
+.profileTextarea {
+  font-family: var(--q-font-mono);
+  min-height: 60px;
+  resize: vertical;
+}
+
+.profileEditorActions {
+  display: flex;
+  gap: var(--q-space-2);
+  justify-content: flex-end;
+}
+
+.profileMiniButton {
+  background: transparent;
+  color: var(--q-fg-muted);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: var(--q-space-1) var(--q-space-2);
+  font-family: inherit;
+  font-size: var(--q-font-size-sm);
+  cursor: pointer;
+}
+.profileMiniButton:hover {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+}
+.profileMiniButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.envRows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.envRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: var(--q-space-2);
+  align-items: center;
+}
+
+.profileInputError {
+  border-color: var(--q-danger, #c1443d);
+}
+
+.profileFieldHelp {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-xs);
+}
+
+.profileFieldError {
+  grid-column: 1 / -1;
+  color: var(--q-danger, #c1443d);
+  font-size: var(--q-font-size-xs);
+}

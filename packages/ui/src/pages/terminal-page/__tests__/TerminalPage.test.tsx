@@ -96,6 +96,7 @@ vi.mock('../../../shared/api/host-bridge.js', async () => {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     async ready() {},
     async spawn() {

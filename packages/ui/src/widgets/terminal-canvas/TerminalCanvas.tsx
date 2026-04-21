@@ -59,6 +59,13 @@ import {
   type SelectionState,
 } from '../../shared/ui/cell-renderer/index.js';
 import { cx } from '../../shared/lib/cx.js';
+import {
+  getFontSettings,
+  resolveFamilyCss,
+  resolveFeatureSettings,
+  subscribeFontChange,
+  type FontSettings,
+} from '../../features/font-settings/index.js';
 import styles from './terminal-canvas.module.css';
 
 export type TerminalCanvasBackendKind = 'canvas' | 'memory';
@@ -295,6 +302,25 @@ export const TerminalCanvas = forwardRef<TerminalCanvasHandle, TerminalCanvasPro
           plumbing.renderer.scheduleFrame();
         });
       }
+      // Hook up font-settings → Canvas2D backend. The 2D context cannot
+      // read CSS variables, so the font-settings store notifies subscribers
+      // whenever the user changes family / size / ligatures; we forward to
+      // the backend's `_setFontOverride`, which drops the glyph atlas and
+      // triggers the invalidation hook registered above — the next rAF
+      // re-rasters every cell with the new face.
+      const setOverride = (
+        plumbing.backend as BackendContract & {
+          _setFontOverride?: (o: { family: string | null; features: string | null } | null) => void;
+        }
+      )._setFontOverride;
+      const pushFontToBackend = (fs: FontSettings) => {
+        if (typeof setOverride !== 'function') return;
+        const family = fs.family === 'system' ? null : resolveFamilyCss(fs.family);
+        const features = resolveFeatureSettings(fs.ligatures);
+        setOverride.call(plumbing.backend, { family, features });
+      };
+      pushFontToBackend(getFontSettings());
+      const unsubFont = subscribeFontChange(pushFontToBackend);
       // Seed with the mirror's current state.
       const dims = mirror.getDimensions();
       const rows: Row[] = [];
@@ -306,6 +332,7 @@ export const TerminalCanvas = forwardRef<TerminalCanvasHandle, TerminalCanvasPro
       plumbing.buffer.writeSnapshot(rows);
       plumbing.renderer.start();
       return () => {
+        unsubFont();
         if (typeof maybeSetHook === 'function') {
           maybeSetHook.call(plumbing.backend, null);
         }

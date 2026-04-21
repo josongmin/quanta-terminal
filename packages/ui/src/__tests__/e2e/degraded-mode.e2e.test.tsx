@@ -68,6 +68,7 @@ function makeBridge(): TestBridge {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     ready: async () => {},
     spawn: async () => ({ sessionId: 'x', shell: '/bin/sh', cwd: '/' }),
@@ -92,6 +93,7 @@ function makeBridge(): TestBridge {
       lineCount: 0,
     }),
     notify: async () => {},
+    readTextFile: async () => null,
     aiSuggest: async () => ({
       id: '',
       command: '',

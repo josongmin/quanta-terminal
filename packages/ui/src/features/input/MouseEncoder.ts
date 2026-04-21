@@ -4,6 +4,18 @@
  * browser's native scroll (input-host does not preventDefault), in
  * line with xterm's standard where wheel is a mouse-tracking-only
  * event. EPIC-E §4.
+ *
+ * Alt-screen wheel fallback
+ * -------------------------
+ * Alt-screen programs (less / man / vim) render via the canvas grid
+ * with `overflow:hidden` — the browser's native scroll has nothing to
+ * scroll. When mouse tracking is OFF (the program didn't DECSET
+ * 1000/1002/1003) AND alt-screen is active, a wheel event would
+ * otherwise emit zero bytes and the user could not page through the
+ * content. To keep those programs usable we translate wheel events to
+ * arrow-up / arrow-down keystrokes, honoring DECCKM (ESC [ A/B vs
+ * ESC O A/B). The count is approximated from `wheelLines` on the
+ * event when provided, else a single press per wheel tick.
  */
 import type { ModeSnapshot } from './ModeSnapshot';
 import type {
@@ -13,6 +25,12 @@ import type {
 } from './types';
 
 const utf8Encoder = new TextEncoder();
+
+// Escape sequences for arrow-up / arrow-down under legacy CSI vs DECCKM SS3.
+const ARROW_UP_CSI = new Uint8Array([0x1b, 0x5b, 0x41]); // ESC [ A
+const ARROW_DOWN_CSI = new Uint8Array([0x1b, 0x5b, 0x42]); // ESC [ B
+const ARROW_UP_SS3 = new Uint8Array([0x1b, 0x4f, 0x41]); // ESC O A
+const ARROW_DOWN_SS3 = new Uint8Array([0x1b, 0x4f, 0x42]); // ESC O B
 
 const BUTTON_BASE: Readonly<Record<MouseEvent['button'], number | null>> = {
   left: 0,
@@ -90,7 +108,34 @@ export class MouseEncoder {
     // Per xterm, wheel is a mouse-tracking-only event; when tracking is
     // off we emit zero bytes and input-host leaves the DOM event un-
     // prevented so the browser's native scroll handles it.
+    //
+    // EXCEPTION: alt-screen is active AND the event is a wheel tick.
+    // Alt-screen renders with `overflow:hidden` and native scroll does
+    // nothing, so we fall back to synthesizing arrow-key bytes so that
+    // pagers (less / man / vim) can be driven by the wheel. DECCKM
+    // switches between legacy CSI and SS3.
     if (tracking === 'off') {
+      if (
+        used.altScreen &&
+        event.kind === 'wheel' &&
+        (event.button === 'wheel-up' || event.button === 'wheel-down')
+      ) {
+        const count = Math.max(1, Math.floor(event.wheelLines ?? 1));
+        const up = event.button === 'wheel-up';
+        const seq = used.decckm
+          ? (up ? ARROW_UP_SS3 : ARROW_DOWN_SS3)
+          : (up ? ARROW_UP_CSI : ARROW_DOWN_CSI);
+        const bytes = new Uint8Array(seq.length * count);
+        for (let i = 0; i < count; i += 1) bytes.set(seq, i * seq.length);
+        return {
+          bytes,
+          diagnostics: {
+            modeReadInconsistency: false,
+            deprecatedFallback: true,
+            snapshotEpoch: used.snapshotEpoch,
+          },
+        };
+      }
       return empty(false);
     }
 

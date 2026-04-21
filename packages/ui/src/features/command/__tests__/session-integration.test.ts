@@ -84,6 +84,9 @@ function makeBridge(sessionId: SessionId = 'sess-int' as SessionId): ScriptedBri
         rulesetVersion: 1,
       };
     },
+    async readTextFile() {
+      return null;
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return { unsubscribe: () => listeners.delete(listener) };

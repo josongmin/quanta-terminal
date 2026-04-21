@@ -35,7 +35,7 @@
  * exported `shouldAutoscroll` helper and e2e is covered by live usage.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 // Cross-slice: BlockList composes BlockCard. Both are block-domain widgets;
@@ -44,7 +44,9 @@ import { Kbd } from '../../shared/ui/kbd/index.js';
 // it to know about the block entity type from a lower layer than itself.
 // FIXME(fsd-layer-skip): block-list widget composes sibling block-card widget
 import { BlockCard } from '../block-card/index.js';
+import { BlockFilterBar } from './BlockFilterBar.js';
 import { useBlock, useBlockIds, useBlocksForSession, useBlockStore } from '../../entities/block/index.js';
+import { useFilteredBlockIds } from '../../entities/block-filter/index.js';
 import { DEFAULT_METRICS } from '../../shared/ui/cell-renderer/index.js';
 import type { Rect } from '../../shared/ui/cell-renderer/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
@@ -218,10 +220,17 @@ export function BlockList(props: BlockListProps) {
     // rowSignatures is the authoritative trigger; ids is already baked into it.
   }, [ids, rowSignatures]);
 
+  const rangesByBlockId = useMemo(() => {
+    const m = new Map<string, RowRange>();
+    for (const r of ranges) m.set(r.blockId, r);
+    return m;
+  }, [ranges]);
+
   const totalRows = ranges.length > 0 ? ranges[ranges.length - 1]!.endExclusive : 0;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const prevCountRef = useRef(ids.length);
+  const [scrolledUp, setScrolledUp] = useState(false);
 
   const estimateSize = useCallback(
     (rowIndex: number) => {
@@ -262,6 +271,24 @@ export function BlockList(props: BlockListProps) {
     }
   }, [ids.length, totalRows, virtualizer]);
 
+  // Track whether the user has scrolled up away from the bottom edge.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setScrolledUp(dist > AUTO_SCROLL_THRESHOLD_PX);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+
   // ResizeObserver rAF batching — mirrors the prior behaviour for streaming
   // output keeping the view pinned.
   useEffect(() => {
@@ -288,6 +315,12 @@ export function BlockList(props: BlockListProps) {
       if (rafId !== 0) cancelAnimationFrame(rafId);
     };
   }, [totalRows, virtualizer]);
+
+  // Must be above the early-return — hooks can't be called conditionally.
+  // Returns a subset of `ids` matching the active tag filter (or all ids when
+  // no filter is active). `ids` (unfiltered) is still passed to BlockFilterBar
+  // for the matched/total count display.
+  const displayIds = useFilteredBlockIds(ids);
 
   if (ids.length === 0) {
     return (
@@ -318,30 +351,47 @@ export function BlockList(props: BlockListProps) {
   // just pin-scroll in the effect above.
   void virtualizer; // keep the hook alive for the scroll-pin side effect
   void ranges; // row-range math unused but retained for tests + future perf
+  void rangesByBlockId; // O(1) lookup map for spacer memos — retained for future perf
   void totalRows;
 
   return (
-    <div
-      ref={scrollRef}
-      className={styles.scroll}
-      data-testid="block-list"
-      data-total-rows={totalRows}
-      aria-live="polite"
-      aria-relevant="additions"
-      aria-label={t('blockList.ariaLabel')}
-    >
-      <div className={styles.inner} data-testid="block-list-inner">
-        {ids.map((id) => (
-          <BlockRowChrome
-            key={id}
-            id={id}
-            {...(onRerun ? { onRerun } : {})}
-            {...(onCopy ? { onCopy } : {})}
-            {...(onCompare ? { onCompare } : {})}
-          />
-        ))}
+    <>
+      <BlockFilterBar ids={ids} />
+      <div className={styles.scrollWrap}>
+        <div
+          ref={scrollRef}
+          className={styles.scroll}
+          data-testid="block-list"
+          data-total-rows={totalRows}
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label={t('blockList.ariaLabel')}
+        >
+          <div className={styles.inner} data-testid="block-list-inner">
+            {displayIds.map((id) => (
+              <BlockRowChrome
+                key={id}
+                id={id}
+                {...(onRerun ? { onRerun } : {})}
+                {...(onCopy ? { onCopy } : {})}
+                {...(onCompare ? { onCompare } : {})}
+              />
+            ))}
+          </div>
+        </div>
+        {scrolledUp && (
+          <button
+            className={styles.scrollDownBtn}
+            onClick={scrollToBottom}
+            aria-label="Scroll to latest output"
+            type="button"
+          >
+            <span className={styles.scrollDownArrow}>↓</span>
+            <span className={styles.scrollDownLabel}>new output</span>
+          </button>
+        )}
       </div>
-    </div>
+    </>
   );
 }
 

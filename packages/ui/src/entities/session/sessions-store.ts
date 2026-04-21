@@ -41,6 +41,21 @@ export interface SessionEntity {
   readonly shellIntegration: ShellIntegrationStatus;
   readonly health: SessionHealth;
   readonly exitCode: number | null;
+  /**
+   * `true` when the host spawned this shell inside WSL (Windows Subsystem
+   * for Linux). Surfaced by `packages/host-tauri`'s Rust `is_wsl` probe —
+   * see `embedded_shell::is_wsl_from_proc_version`. Optional because older
+   * hosts and the mock backend leave it absent; treat `undefined` as
+   * "definitely not WSL" for badge rendering.
+   */
+  readonly isWsl?: boolean;
+  /**
+   * Epoch-ms of the last meaningful activity in this session (cwd change,
+   * health transition, or explicit mark via `markActivity`). Used by the
+   * session tab strip to show an unread-activity indicator on inactive tabs.
+   * Null until the session has any activity beyond initial spawn.
+   */
+  readonly lastActivityAt?: number | null;
 }
 
 export interface SessionEntitySeed {
@@ -51,6 +66,7 @@ export interface SessionEntitySeed {
   readonly shellIntegration?: ShellIntegrationStatus;
   readonly health?: SessionHealth;
   readonly exitCode?: number | null;
+  readonly isWsl?: boolean;
 }
 
 export interface SessionsState {
@@ -86,6 +102,12 @@ export interface SessionsActions {
    * `activeId` is preserved — reordering must not swap which tab is active.
    */
   reorderSessions(fromIndex: number, toIndex: number): void;
+  /**
+   * Stamp `lastActivityAt = Date.now()` on a session. Called whenever a
+   * meaningful event occurs in a background session (cwd change, health
+   * transition, block completion). No-op for unknown ids.
+   */
+  markActivity(id: SessionId): void;
   /** Test helper — wipe everything. */
   reset(): void;
 }
@@ -97,6 +119,7 @@ const DEFAULT_ENTITY_DEFAULTS: Omit<SessionEntity, 'id'> = {
   shellIntegration: 'missing',
   health: 'booting',
   exitCode: null,
+  isWsl: false,
 };
 
 const INITIAL: SessionsState = {
@@ -190,14 +213,33 @@ export const useSessionsStore = create<SessionsState & SessionsActions>()(
       set((prev) => {
         if (!prev.entities[id]) return prev;
         if (prev.activeId === id) return prev;
-        return { ...prev, activeId: id };
+        const entity = prev.entities[id]!;
+        const cleared: SessionEntity = { ...entity, lastActivityAt: null };
+        return {
+          ...prev,
+          activeId: id,
+          entities: { ...prev.entities, [id]: cleared },
+        };
       }),
 
     patchSession: (id, patch) =>
       set((prev) => {
         const existing = prev.entities[id];
         if (!existing) return prev;
-        const nextEntity: SessionEntity = { ...existing, ...stripUndefined(patch), id };
+        const isBackground = prev.activeId !== id;
+        const cwdChanged = 'cwd' in patch && patch.cwd !== undefined && patch.cwd !== existing.cwd;
+        const healthChanged =
+          'health' in patch && patch.health !== undefined && patch.health !== existing.health;
+        const activityAt: number | null =
+          isBackground && (cwdChanged || healthChanged)
+            ? Date.now()
+            : (existing.lastActivityAt ?? null);
+        const nextEntity: SessionEntity = {
+          ...existing,
+          ...stripUndefined(patch),
+          id,
+          lastActivityAt: activityAt,
+        };
         return {
           ...prev,
           entities: { ...prev.entities, [id]: nextEntity },
@@ -208,11 +250,30 @@ export const useSessionsStore = create<SessionsState & SessionsActions>()(
       set((prev) => {
         const existing = prev.entities[id];
         if (!existing) return prev;
+        const isBackground = prev.activeId !== id;
         return {
           ...prev,
           entities: {
             ...prev.entities,
-            [id]: { ...existing, health: 'exited', exitCode },
+            [id]: {
+              ...existing,
+              health: 'exited',
+              exitCode,
+              lastActivityAt: isBackground ? Date.now() : (existing.lastActivityAt ?? null),
+            },
+          },
+        };
+      }),
+
+    markActivity: (id) =>
+      set((prev) => {
+        const existing = prev.entities[id];
+        if (!existing) return prev;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [id]: { ...existing, lastActivityAt: Date.now() },
           },
         };
       }),

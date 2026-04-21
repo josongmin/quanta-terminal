@@ -3,6 +3,8 @@ export {
   closeSession,
   switchSession,
   getSessionConnection,
+  reorderSessions,
+  moveActiveTabBy,
 } from './actions.js';
 export type {
   CreateSessionOptions,

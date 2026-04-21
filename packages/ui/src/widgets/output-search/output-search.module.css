@@ -1,0 +1,150 @@
+/*
+ * OutputSearch — find-on-page-style bar for block OUTPUT text.
+ *
+ * Docked at the bottom-right of the terminal main area (above the composer)
+ * so it never covers the block list's active edge. Uses the same elevation
+ * and motion tokens as the history search modal for visual consistency,
+ * but without a backdrop — the user should still be able to interact with
+ * the block list while the bar is open.
+ *
+ * Layout — the bar has two rows:
+ *   row 1: search icon, input, toggle chips (Aa / W / .*), counter, nav, close
+ *   row 2: tiny hint line "↵ next · ⇧↵ prev" (or the invalid-regex warning)
+ */
+
+.bar {
+  position: absolute;
+  bottom: var(--q-space-2);
+  right: var(--q-space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  box-shadow: var(--q-shadow-pop);
+  z-index: 50;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+  min-width: 420px;
+  max-width: 560px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.icon {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-md);
+  line-height: 1;
+}
+
+.input {
+  flex: 1;
+  appearance: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  padding: 0;
+  min-width: 0;
+}
+
+.input::placeholder {
+  color: var(--q-fg-faint);
+}
+
+.toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: 1px 6px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: calc(var(--q-font-size-sm) * 0.92);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.toggle:hover {
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+}
+
+.toggle[data-active='true'] {
+  background: var(--q-accent-soft, rgba(94, 160, 255, 0.18));
+  border-color: var(--q-accent, #5ea0ff);
+  color: var(--q-accent, #5ea0ff);
+}
+
+.count {
+  color: var(--q-fg-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 5ch;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.countEmpty {
+  color: var(--q-fg-faint);
+}
+
+.countError {
+  color: var(--q-danger, #e06c6c);
+}
+
+.navBtn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--q-radius-sm);
+  padding: 2px 6px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.navBtn:hover:not(:disabled) {
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg);
+  border-color: var(--q-border-subtle);
+}
+
+.navBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.closeBtn {
+  composes: navBtn;
+  padding: 2px 8px;
+}
+
+.hint {
+  color: var(--q-fg-faint);
+  font-size: calc(var(--q-font-size-sm) * 0.85);
+  padding: 0 2px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.hintError {
+  color: var(--q-danger, #e06c6c);
+}

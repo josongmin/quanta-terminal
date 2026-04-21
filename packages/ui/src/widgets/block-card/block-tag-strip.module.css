@@ -1,0 +1,149 @@
+/*
+ * BlockTagStrip — chip row + add popover.
+ *
+ * Neutral tone across all chips (scope discipline: "no color-coded tags in
+ * this pass"). Chips use the standard border-subtle + bg-elev-2 combo so
+ * they read against both the card background and, when the card is
+ * collapsed, the body bg.
+ */
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 var(--q-space-3) var(--q-space-2) var(--q-space-3);
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 2px 0 8px;
+  border-radius: 999px;
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  font-size: 11px;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  line-height: 1;
+  user-select: none;
+}
+
+.chipLabel {
+  background: transparent;
+  border: none;
+  padding: 0 4px 0 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.chipLabel:hover {
+  color: var(--q-fg);
+}
+
+.chipRemove {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--q-fg-faint);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+}
+.chipRemove:hover {
+  color: var(--q-fg);
+  background: var(--q-bg-elev-3, rgba(255,255,255,0.06));
+}
+
+.add {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px dashed var(--q-border-subtle);
+  font-size: 11px;
+  color: var(--q-fg-faint);
+  cursor: pointer;
+  font-family: var(--q-font-sans);
+}
+.add:hover, .addOpen {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+  background: var(--q-bg-elev-2);
+}
+
+.popover {
+  position: fixed;
+  z-index: 40;
+  background: var(--q-bg-elev-2);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border-radius: var(--q-radius-sm);
+  background: var(--q-bg);
+  border: 1px solid var(--q-border-subtle);
+  color: var(--q-fg);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.input:focus {
+  border-color: var(--q-accent);
+}
+
+.error {
+  font-size: 11px;
+  color: var(--q-danger);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.listItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border-radius: var(--q-radius-sm);
+  font-size: 12px;
+  color: var(--q-fg-muted);
+  cursor: pointer;
+}
+.listItem:hover, .listItemActive {
+  background: var(--q-bg-elev-3, rgba(255,255,255,0.06));
+  color: var(--q-fg);
+}
+
+.listItemTag {
+  font-family: var(--q-font-sans);
+}
+.listItemCount {
+  font-size: 10px;
+  color: var(--q-fg-faint);
+  padding-left: 8px;
+}

@@ -1,55 +1,61 @@
-/* TitleBar — app toolbar directly below the OS-native window chrome. No
-   drag-region / traffic-light cutout: the OS title bar sits above this
-   widget and owns all window-management gestures. */
+/* TitleBar — top chrome with brand on left, session tabs centered, actions on right. */
 
 .bar {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  align-items: center;
+  align-items: stretch;
   height: var(--q-titlebar-height);
   background: var(--q-bg-titlebar);
   border-bottom: 1px solid var(--q-border-subtle);
   user-select: none;
   position: relative;
-  z-index: 2;
+  z-index: 10;
 }
 
 .left {
   grid-column: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 var(--q-space-3);
-  font-family: var(--q-font-sans);
-  font-size: var(--q-font-size-sm);
-  color: var(--q-fg-muted);
-  letter-spacing: 0.02em;
-  min-width: 0;
+  gap: 6px;
+  padding: 0 var(--q-space-3) 0 var(--q-space-4);
+  flex-shrink: 0;
+}
+
+.brandIcon {
+  font-size: 10px;
+  color: var(--q-accent);
+  line-height: 1;
+  opacity: 0.9;
 }
 
 .brand {
   color: var(--q-fg);
+  font-family: var(--q-font-sans);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
 }
 
-.sep {
+.cwd {
   color: var(--q-fg-faint);
-}
-
-.subtle {
-  color: var(--q-fg-muted);
   font-family: var(--q-font-mono);
-  font-size: 12px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 420px;
+  max-width: 200px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--q-radius-sm);
 }
 
 .center {
   grid-column: 2;
-  height: 100%;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  padding: 0 var(--q-space-2);
 }
 
 .right {
@@ -58,24 +64,31 @@
   align-items: center;
   gap: var(--q-space-2);
   padding: 0 var(--q-space-3);
+  flex-shrink: 0;
 }
 
 .paletteHint {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 6px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--q-radius-sm);
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
   cursor: pointer;
   transition:
     background var(--q-dur-fast) var(--q-ease-out),
     border-color var(--q-dur-fast) var(--q-ease-out);
 }
 .paletteHint:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: var(--q-border-subtle);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--q-border-strong);
+}
+
+.paletteHintLabel {
+  color: var(--q-fg-faint);
+  font-family: var(--q-font-sans);
+  font-size: 11px;
 }

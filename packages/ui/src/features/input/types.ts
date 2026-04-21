@@ -48,6 +48,13 @@ export interface MouseEvent {
   button: 'left' | 'middle' | 'right' | 'wheel-up' | 'wheel-down' | 'none';
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean };
   kind: 'press' | 'release' | 'drag' | 'wheel' | 'move';
+  /**
+   * Alt-screen wheel fallback: approximate line-count to translate into
+   * arrow-up / arrow-down keypresses when tracking is off AND alt-screen is
+   * active. Set by input-host from `deltaY / cellHeight`, clamped to >= 1.
+   * Ignored for every non-wheel `kind`. Omit to default to 1.
+   */
+  wheelLines?: number;
 }
 
 export interface PasteEvent {
@@ -129,6 +136,7 @@ export interface EncoderDiagnostics {
  */
 export type EncodingMode =
   | 'legacy'
+  | 'modify-other-keys-v1'
   | 'modify-other-keys-v2'
   | 'kitty-1'
   | 'kitty-2'

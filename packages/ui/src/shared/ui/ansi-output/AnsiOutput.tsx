@@ -37,6 +37,7 @@ import { memo, type CSSProperties, type MouseEvent, type ReactNode } from 'react
 import { BACKSPACE_MARKER } from '../../lib/ansi-parser/index.js';
 import { cx } from '../../lib/cx.js';
 import { splitTextByPaths, type DetectedPath } from '../../lib/path-detect/index.js';
+import { detectUrls, type DetectedUrl } from '../../lib/url-detect/index.js';
 import styles from './ansi-output.module.css';
 import { indexed256ToCss } from './palette.js';
 import type { AnsiColor, AnsiSpan } from './types.js';
@@ -46,6 +47,42 @@ export interface PathClickPayload {
   readonly path: string;
   readonly line: number;
   readonly column?: number;
+}
+
+/**
+ * Payload delivered to `onUrlClick` when the user activates a detected URL in
+ * plain-text output. The kind flag lets callers branch — bare domains may be
+ * treated differently from ssh/scp-style references, for example.
+ */
+export interface UrlClickPayload {
+  readonly url: string;
+  readonly kind: DetectedUrl['kind'];
+}
+
+/**
+ * Input shape for the output-search highlight overlay. Each entry is scoped
+ * to ONE span (by `spans[i]` index) and enumerates the sub-ranges (in span-
+ * local rendered-text offsets) that should be wrapped in `<mark>`.
+ *
+ * The `activeSpanIndex`/`activeRangeIndex` pair optionally marks one of
+ * those entries as the "current" match (the one Enter is navigating to);
+ * that range gets an additional `.searchMarkActive` class so the user can
+ * see which hit has focus among many.
+ *
+ * `features/output-search` builds this structure from the global match
+ * list and passes it through BlockCard. AnsiOutput stays agnostic of the
+ * match source so tests and Storybook can feed a hand-rolled highlight
+ * layer.
+ */
+export interface SearchHighlights {
+  /** One entry per span; missing entries (sparse array) = "no hits in this span". */
+  readonly perSpan: ReadonlyArray<
+    ReadonlyArray<{ readonly start: number; readonly length: number }>
+  >;
+  /** Index into `spans` identifying the span that holds the active hit, or null. */
+  readonly activeSpanIndex?: number | null;
+  /** Index into `perSpan[activeSpanIndex]` identifying the active range, or null. */
+  readonly activeRangeIndex?: number | null;
 }
 
 export interface AnsiOutputProps {
@@ -74,6 +111,20 @@ export interface AnsiOutputProps {
    */
   readonly onPathClick?: (payload: PathClickPayload, event: MouseEvent<HTMLButtonElement>) => void;
   /**
+   * Plain-text URL autolinkification. When set, the renderer scans each
+   * non-OSC-8 span for bare URLs (`https://…`, `git@github.com:…`,
+   * `example.com/path`) and wraps them in an `<a>` so the user can click to
+   * open.
+   *
+   * OSC 8 precedence: spans that already carry `span.link` (terminal-emitted
+   * hyperlinks) render as anchors before this callback is ever consulted, so
+   * autolinkification never overlaps explicit terminal hyperlinks.
+   *
+   * Omit the prop to keep the Phase-2 behaviour (no scan, no anchors, zero
+   * extra DOM nodes).
+   */
+  readonly onUrlClick?: (payload: UrlClickPayload, event: MouseEvent<HTMLAnchorElement>) => void;
+  /**
    * If true, `\r` and `\x08` rewrite / erase visible text as a real terminal
    * would. Defaults to false because for most build output CR/BS are noise
    * left over from interactive shells. Progress-bar-heavy workloads (pnpm
@@ -82,6 +133,15 @@ export interface AnsiOutputProps {
   readonly carriageReturnRewrites?: boolean;
   /** Additional class on the <pre> wrapper (tests / block chrome integration). */
   readonly className?: string;
+  /**
+   * Output-search overlay. When present (and a span has non-empty ranges),
+   * the renderer splits the span's rendered text at hit boundaries and
+   * wraps matches in `<mark>`. Mutually composable with `onPathClick` —
+   * path detection runs first, search highlighting runs over the resulting
+   * text slices. The two features share a `<span>`; a path link inside a
+   * search match still reads as a link, the `<mark>` background sits behind it.
+   */
+  readonly searchHighlights?: SearchHighlights;
 }
 
 interface RenderedSpan {
@@ -133,8 +193,12 @@ function colorToStyle(
  * Apply control-character rewriting to the assembled visible text if the
  * caller opted in. When opted out, we just strip the backspace sentinels so
  * they don't render as a literal glyph (some browsers do, and it's ugly).
+ *
+ * Exported so features/output-search can project span text the same way the
+ * renderer does — the two paths MUST agree on the final character offsets
+ * or the search highlights would land on the wrong substrings.
  */
-function applyControlChars(text: string, rewrites: boolean): string {
+export function applyControlChars(text: string, rewrites: boolean): string {
   if (!rewrites) {
     // Default: strip BS sentinels; keep CR as-is (it's a no-op glyph in <pre>).
     return text.includes(BACKSPACE_MARKER) ? text.replaceAll(BACKSPACE_MARKER, '') : text;
@@ -213,19 +277,71 @@ function renderSpan(span: AnsiSpan, key: number, rewrites: boolean): RenderedSpa
 }
 
 /**
- * When `onPathClick` is enabled and a plain span's text contains any detected
- * `path:line[:col]` runs, splice the text into interleaved `<span>` + `<button>`
- * nodes so the click target is keyboard-focusable without losing the
- * surrounding SGR styling (class/style come from the parent span).
+ * Interleaved detection fragments — a plain text run, a `path:line:col` hit,
+ * or a URL hit. We detect paths FIRST (Phase 3) and then run URL detection
+ * only over the residual plain-text slices so that a `path:line:col` match
+ * is not re-classified as a bare-domain URL. This mirrors real precedence:
+ * `src/foo.ts:12:3` is a path, not a URL.
  */
-function renderPlainSpanWithPathDetection(
+type DetectFragment =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'path'; readonly hit: DetectedPath }
+  | { readonly kind: 'url'; readonly hit: DetectedUrl };
+
+function detectFragments(text: string, wantUrls: boolean): DetectFragment[] {
+  // First pass: splice by `path:line:col` hits.
+  const pathSplit = splitTextByPaths(text);
+  if (!wantUrls) {
+    return pathSplit.map<DetectFragment>((f) =>
+      f.kind === 'text' ? { kind: 'text', text: f.text } : { kind: 'path', hit: f.hit },
+    );
+  }
+  // Second pass: re-scan each TEXT fragment for URLs and splice those in
+  // too. Path hits are passed through verbatim so they keep precedence.
+  const out: DetectFragment[] = [];
+  for (const f of pathSplit) {
+    if (f.kind !== 'text') {
+      out.push({ kind: 'path', hit: f.hit });
+      continue;
+    }
+    const urls = detectUrls(f.text);
+    if (urls.length === 0) {
+      out.push({ kind: 'text', text: f.text });
+      continue;
+    }
+    let cursor = 0;
+    for (const u of urls) {
+      if (cursor < u.start) {
+        out.push({ kind: 'text', text: f.text.slice(cursor, u.start) });
+      }
+      out.push({ kind: 'url', hit: u });
+      cursor = u.end;
+    }
+    if (cursor < f.text.length) {
+      out.push({ kind: 'text', text: f.text.slice(cursor) });
+    }
+  }
+  return out;
+}
+
+/**
+ * When path OR URL detection is enabled for a plain span, splice its text
+ * into interleaved `<span>` / `<button>` / `<a>` nodes. The parent span
+ * carries the SGR styling (class/style) so selection and copy-paste continue
+ * to feel like raw terminal output.
+ *
+ * OSC 8 precedence is enforced at the call site: spans that already carry
+ * `r.link` are rendered as anchors BEFORE this function is reached, so the
+ * autolinker never overlays an explicit terminal hyperlink.
+ */
+function renderPlainSpanWithDetection(
   r: RenderedSpan,
   keyPrefix: number,
-  onPathClick: NonNullable<AnsiOutputProps['onPathClick']>,
+  onPathClick: AnsiOutputProps['onPathClick'] | undefined,
+  onUrlClick: AnsiOutputProps['onUrlClick'] | undefined,
 ): ReactNode {
-  const fragments = splitTextByPaths(r.text);
-  if (fragments.length === 1) {
-    // No hits → fall back to the plain path.
+  const fragments = detectFragments(r.text, onUrlClick !== undefined);
+  if (fragments.length === 1 && fragments[0]!.kind === 'text') {
     return (
       <span key={r.key} className={r.className} style={r.style}>
         {r.text}
@@ -233,27 +349,86 @@ function renderPlainSpanWithPathDetection(
     );
   }
   const children: ReactNode[] = [];
-  let frag = 0;
+  let i = 0;
   for (const f of fragments) {
     if (f.kind === 'text') {
       if (f.text.length > 0) {
-        children.push(
-          // The parent span conveys the SGR styling; the inner text node is
-          // a bare string (no wrapping) so selection and copy-paste continue
-          // to feel like raw terminal output.
-          <span key={`${keyPrefix}-t${frag}`}>{f.text}</span>,
-        );
+        children.push(<span key={`${keyPrefix}-t${i}`}>{f.text}</span>);
+      }
+    } else if (f.kind === 'path') {
+      if (onPathClick !== undefined) {
+        children.push(renderPathButton(f.hit, `${keyPrefix}-p${i}`, onPathClick));
+      } else {
+        // Path detection passed us a hit but the caller didn't wire a click
+        // handler — render the matched text as plain inline content.
+        children.push(<span key={`${keyPrefix}-p${i}`}>{f.hit.match}</span>);
       }
     } else {
-      children.push(renderPathButton(f.hit, `${keyPrefix}-p${frag}`, onPathClick));
+      if (onUrlClick !== undefined) {
+        children.push(renderUrlAnchor(f.hit, `${keyPrefix}-u${i}`, onUrlClick));
+      } else {
+        children.push(<span key={`${keyPrefix}-u${i}`}>{f.hit.url}</span>);
+      }
     }
-    frag += 1;
+    i += 1;
   }
   return (
     <span key={r.key} className={r.className} style={r.style}>
       {children}
     </span>
   );
+}
+
+function renderUrlAnchor(
+  hit: DetectedUrl,
+  key: string,
+  onUrlClick: NonNullable<AnsiOutputProps['onUrlClick']>,
+): ReactNode {
+  // We render an <a> (not a <button>) so the URL is visible in the element
+  // inspector and screen readers announce it as a link. `href` is the
+  // canonical URL — some browsers / OS handlers require a fully qualified
+  // scheme, so bare-domain hits (`example.com/page`) get a leading
+  // `https://`. The click handler calls `preventDefault` before delegating
+  // so the browser never auto-navigates without the confirmation flow.
+  const href = inferHref(hit);
+  return (
+    <a
+      key={key}
+      href={href}
+      className={styles['urlLink']}
+      data-url-link="true"
+      data-url={hit.url}
+      data-url-kind={hit.kind}
+      rel="noreferrer noopener"
+      target="_blank"
+      title={`Open ${hit.url}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        onUrlClick({ url: hit.url, kind: hit.kind }, event);
+      }}
+    >
+      {hit.url}
+    </a>
+  );
+}
+
+function inferHref(hit: DetectedUrl): string {
+  if (hit.kind === 'domain') return `https://${hit.url}`;
+  if (hit.kind === 'ssh' && !/^ssh:/i.test(hit.url)) {
+    // `git@github.com:org/repo.git` → give the anchor a valid `ssh://` href
+    // so standard-compliant browsers treat it as a link target rather than
+    // a freeform string. The actual open flow uses `canonicaliseForOpen`
+    // which does the same substitution.
+    const at = hit.url.indexOf('@');
+    if (at > 0) {
+      const colon = hit.url.indexOf(':', at + 1);
+      if (colon > at) {
+        return `ssh://${hit.url.slice(0, colon)}/${hit.url.slice(colon + 1)}`;
+      }
+    }
+  }
+  return hit.url;
 }
 
 function renderPathButton(
@@ -292,12 +467,68 @@ function renderPathButton(
   );
 }
 
+/**
+ * Split a span's text into interleaved plain / <mark> children by the given
+ * search ranges. Ranges are local to the span, sorted ascending and non-
+ * overlapping (the caller — features/output-search/highlight — guarantees
+ * this). When `activeRangeIndex` matches, the corresponding <mark> also
+ * carries `.searchMarkActive` so the navigation cursor is visible.
+ */
+function renderSearchHighlightedText(
+  text: string,
+  ranges: ReadonlyArray<{ readonly start: number; readonly length: number }>,
+  activeRangeIndex: number | null,
+  keyPrefix: string | number,
+): ReactNode[] {
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  for (let i = 0; i < ranges.length; i += 1) {
+    const r = ranges[i]!;
+    const start = Math.max(0, Math.min(text.length, r.start));
+    const end = Math.max(start, Math.min(text.length, r.start + r.length));
+    if (end <= start) continue;
+    if (cursor < start) {
+      out.push(<span key={`${keyPrefix}-pre${i}`}>{text.slice(cursor, start)}</span>);
+    }
+    const markClass = cx(
+      styles['searchMark'],
+      i === activeRangeIndex ? styles['searchMarkActive'] : undefined,
+    );
+    out.push(
+      <mark
+        key={`${keyPrefix}-hit${i}`}
+        className={markClass}
+        data-testid={i === activeRangeIndex ? 'search-mark-active' : 'search-mark'}
+      >
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    out.push(<span key={`${keyPrefix}-tail`}>{text.slice(cursor)}</span>);
+  }
+  return out;
+}
+
 function AnsiOutputImpl(props: AnsiOutputProps) {
-  const { spans, onLinkClick, onPathClick, carriageReturnRewrites = false, className, maxWidth } =
-    props;
+  const {
+    spans,
+    onLinkClick,
+    onPathClick,
+    onUrlClick,
+    carriageReturnRewrites = false,
+    className,
+    maxWidth,
+    searchHighlights,
+  } = props;
 
   const wrapperStyle: CSSProperties | undefined =
     maxWidth !== undefined ? { maxWidth: `${maxWidth}ch` } : undefined;
+
+  const perSpanHits = searchHighlights?.perSpan ?? null;
+  const activeSpanIndex = searchHighlights?.activeSpanIndex ?? null;
+  const activeRangeIndex = searchHighlights?.activeRangeIndex ?? null;
 
   // Render spans. We intentionally DO NOT merge or collapse adjacent spans;
   // the parser already gives us the coarsest granularity it can, and merging
@@ -326,8 +557,23 @@ function AnsiOutputImpl(props: AnsiOutputProps) {
         </a>
       );
     }
-    if (onPathClick !== undefined) {
-      return renderPlainSpanWithPathDetection(r, i, onPathClick);
+    // Search highlighting takes precedence over path detection: the two
+    // features rewrite plain-text regions differently and the simplest
+    // correct behaviour when both are on is "show the hit; the path link
+    // would still be clickable on a non-highlighted line". This matches
+    // Chrome's find-in-page, which suppresses hyperlink underlines
+    // underneath a Ctrl+F hit to preserve legibility of the highlight.
+    const hitsForSpan = perSpanHits ? (perSpanHits[i] ?? []) : [];
+    if (hitsForSpan.length > 0) {
+      const localActive = activeSpanIndex === i ? activeRangeIndex : null;
+      return (
+        <span key={r.key} className={r.className} style={r.style}>
+          {renderSearchHighlightedText(r.text, hitsForSpan, localActive, i)}
+        </span>
+      );
+    }
+    if (onPathClick !== undefined || onUrlClick !== undefined) {
+      return renderPlainSpanWithDetection(r, i, onPathClick, onUrlClick);
     }
     return (
       <span key={r.key} className={r.className} style={r.style}>

@@ -1,0 +1,122 @@
+/* PaneGrid — recursive split container.
+ *
+ * Each split renders two children with a flex ratio and a draggable
+ * resizer in between. A horizontal split arranges its children side-by-side
+ * (flex-direction: row); a vertical split stacks them (flex-direction:
+ * column). The resizer changes orientation to match.
+ *
+ * Leaves take up the remaining flex area; their inner `.pane` gets
+ * `data-active="true"` when it carries the focused session so the theme
+ * can draw a subtle border.
+ */
+
+.root {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.split {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.split.horizontal {
+  flex-direction: row;
+}
+
+.split.vertical {
+  flex-direction: column;
+}
+
+.pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border: 1px solid transparent;
+  overflow: hidden;
+}
+
+.pane[data-active='true'] {
+  border-color: var(--q-border-accent, #4c7dff);
+}
+
+.paneBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paneComposer {
+  flex: 0 0 auto;
+}
+
+.resizer {
+  flex: 0 0 auto;
+  background: var(--q-border-subtle, #222);
+  position: relative;
+  z-index: 1;
+  user-select: none;
+}
+
+.resizer.horizontal {
+  /* children side-by-side → resizer is a vertical bar */
+  width: 4px;
+  cursor: col-resize;
+}
+
+.resizer.vertical {
+  /* children stacked → resizer is a horizontal bar */
+  height: 4px;
+  cursor: row-resize;
+}
+
+.resizer:hover,
+.resizer[data-dragging='true'] {
+  background: var(--q-border-accent, #4c7dff);
+}
+
+/* Zoomed pane badge — pinned to the top-right of the maximized leaf. The
+ * container is the `.pane` box (position: relative already set above), so
+ * positioning is scoped to whichever leaf carries `data-zoomed="true"`.
+ * Pointer events pass through so the badge never steals clicks from the
+ * surface underneath. */
+.zoomBadge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+/* While one pane is zoomed, every other leaf collapses to display:none.
+ * We keep the React tree mounted — the non-zoomed panes' sessions stay
+ * connected and their block state is preserved — so unzoom restores
+ * instantly with no remount. */
+.hiddenForZoom {
+  display: none !important;
+}
+
+/* The zoomed pane itself grows to fill the remaining space inside its
+ * parent split. Zooming reuses the existing flex layout by flagging the
+ * parent wrapper with `data-zoom-host="true"` and the leaf with
+ * `data-zoomed="true"`. */
+.pane[data-zoomed='true'] {
+  flex: 1 1 auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pane {
+    transition: flex-grow 120ms ease-out;
+  }
+}

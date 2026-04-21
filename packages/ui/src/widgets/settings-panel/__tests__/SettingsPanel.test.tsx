@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPanel } from '../SettingsPanel.js';
 import { setTheme, useThemeStore } from '../../../features/theme/index.js';
 import { useSessionStore } from '../../../entities/session/index.js';
+import {
+  SHELL_PATHS,
+  useSessionProfiles,
+} from '../../../entities/session-profile/index.js';
 
 /** jsdom ships without localStorage in this project's setup — shim one. */
 function installStorage(): void {
@@ -39,6 +43,7 @@ beforeEach(() => {
   installStorage();
   useThemeStore.getState()._rehydrate();
   useSessionStore.getState().reset();
+  useSessionProfiles.getState().reset();
   document.documentElement.removeAttribute('data-theme');
 });
 
@@ -115,5 +120,115 @@ describe('<SettingsPanel />', () => {
     // Exact formatting is platform-dependent; just assert the hint cells render.
     expect(screen.getByTestId('settings-shortcut-mod+k')).toBeInTheDocument();
     expect(screen.getByTestId('settings-shortcut-mod+,')).toBeInTheDocument();
+  });
+});
+
+describe('<SettingsPanel /> session profiles section', () => {
+  it('renders the built-in default profile with a default badge', () => {
+    const s = useSessionProfiles.getState();
+    const defaultId = s.defaultId;
+    render(<SettingsPanel open onClose={() => {}} />);
+    expect(screen.getByTestId(`settings-profile-row-${defaultId}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`settings-profile-default-${defaultId}`)).toBeInTheDocument();
+  });
+
+  it('clicking Add profile + Save creates a new profile in the store', async () => {
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId('settings-profile-add'));
+    const nameInput = screen.getByTestId('settings-profile-name-new');
+    await userEvent.type(nameInput, 'Work');
+    // The default shellKind in the draft is zsh — Save should pick up
+    // SHELL_PATHS.zsh automatically.
+    await userEvent.click(screen.getByTestId('settings-profile-save-new'));
+    const s = useSessionProfiles.getState();
+    const added = Object.values(s.entities).find((p) => p.name === 'Work');
+    expect(added).toBeDefined();
+    expect(added?.shell).toBe(SHELL_PATHS.zsh);
+  });
+
+  it('Remove button deletes the profile from the store', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Deletable',
+      shell: SHELL_PATHS.bash,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    expect(screen.getByTestId(`settings-profile-row-${id}`)).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId(`settings-profile-remove-${id}`));
+    expect(useSessionProfiles.getState().entities[id]).toBeUndefined();
+  });
+
+  it('Set default button flips the defaultId', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Alt',
+      shell: SHELL_PATHS.fish,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId(`settings-profile-set-default-${id}`));
+    expect(useSessionProfiles.getState().defaultId).toBe(id);
+  });
+
+  it('Edit + Save updates an existing profile', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Old',
+      shell: SHELL_PATHS.bash,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId(`settings-profile-edit-${id}`));
+    const nameInput = screen.getByTestId(`settings-profile-name-${id}`);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'New');
+    await userEvent.click(screen.getByTestId(`settings-profile-save-${id}`));
+    expect(useSessionProfiles.getState().entities[id]?.name).toBe('New');
+  });
+
+  it('env-row editor adds an env var and persists it on Save', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Work',
+      shell: SHELL_PATHS.zsh,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId(`settings-profile-edit-${id}`));
+    // Start with zero rows; click Add variable to create one.
+    await userEvent.click(screen.getByTestId(`settings-profile-env-add-${id}`));
+    const keyInput = screen.getByTestId(`settings-profile-env-key-${id}-0`);
+    const valInput = screen.getByTestId(`settings-profile-env-value-${id}-0`);
+    await userEvent.type(keyInput, 'NODE_ENV');
+    await userEvent.type(valInput, 'development');
+    await userEvent.click(screen.getByTestId(`settings-profile-save-${id}`));
+    const p = useSessionProfiles.getState().entities[id];
+    expect(p?.env).toEqual({ NODE_ENV: 'development' });
+  });
+
+  it('startup commands textarea round-trips through the store', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Dev',
+      shell: SHELL_PATHS.zsh,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId(`settings-profile-edit-${id}`));
+    const area = screen.getByTestId(`settings-profile-startup-commands-${id}`);
+    await userEvent.type(area, 'cd ~/work\npnpm dev');
+    await userEvent.click(screen.getByTestId(`settings-profile-save-${id}`));
+    expect(useSessionProfiles.getState().entities[id]?.startupCommands).toEqual([
+      'cd ~/work',
+      'pnpm dev',
+    ]);
+  });
+
+  it('shows an inline error for an invalid env key on blur', async () => {
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Lint',
+      shell: SHELL_PATHS.zsh,
+    });
+    render(<SettingsPanel open onClose={() => {}} />);
+    await userEvent.click(screen.getByTestId(`settings-profile-edit-${id}`));
+    await userEvent.click(screen.getByTestId(`settings-profile-env-add-${id}`));
+    const keyInput = screen.getByTestId(`settings-profile-env-key-${id}-0`);
+    await userEvent.type(keyInput, 'lowercase');
+    // Tab away to trigger the blur-based validation.
+    await userEvent.tab();
+    expect(
+      screen.getByTestId(`settings-profile-env-error-${id}-0`),
+    ).toBeInTheDocument();
   });
 });

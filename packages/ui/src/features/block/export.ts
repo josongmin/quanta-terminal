@@ -161,6 +161,76 @@ export function exportAsMarkdown(block: Block): string {
   return lines.join('\n');
 }
 
+/**
+ * Selection-aware copy:
+ *   - `selection === null`      → full block: H3 heading with the command +
+ *                                 a `shell` code fence around the stripped,
+ *                                 CR-rewritten output.
+ *   - `{ start, end }` range    → selection only: code fence only (no heading),
+ *                                 sliced out of the *rendered* plain-text
+ *                                 projection so offsets line up with what the
+ *                                 user saw on screen.
+ *
+ * The output always uses the `shell` language hint (unlike `exportAsMarkdown`,
+ * which infers from the command's first token). This matches the "copy output
+ * of a terminal" mental model — `shell` is what chat UIs/markdown renderers
+ * use for generic shell sessions.
+ *
+ * Rendering parity with the BlockCard body (see `carriageReturnRewrites` on
+ * `AnsiOutput`): a bare `\r` truncates back to the start of the current line.
+ * Performing this rewrite AFTER the ANSI strip means SGR-wrapped redraws
+ * (e.g. zsh ZLE) collapse to only the final state, matching the visible UI.
+ */
+export function renderBlockPlainText(block: Block): string {
+  const decoded = decodeOutput(block);
+  const stripped = stripAnsi(decoded);
+  let out = '';
+  let lineStart = 0;
+  for (const ch of stripped) {
+    if (ch === '\n') {
+      out += ch;
+      lineStart = out.length;
+      continue;
+    }
+    if (ch === '\r') {
+      out = out.slice(0, lineStart);
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+export interface SelectionRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+export function exportAsMarkdownSelection(
+  block: Block,
+  selection: SelectionRange | null,
+): string {
+  const LANG = 'shell';
+  const rendered = renderBlockPlainText(block);
+  const full = rendered.endsWith('\n') ? rendered.slice(0, -1) : rendered;
+
+  if (selection === null) {
+    const lines: string[] = [];
+    lines.push(`### \`${block.command}\``);
+    lines.push('');
+    lines.push('```' + LANG);
+    lines.push(full);
+    lines.push('```');
+    return lines.join('\n');
+  }
+
+  const a = Math.max(0, Math.min(selection.start, selection.end));
+  const b = Math.max(0, Math.max(selection.start, selection.end));
+  const sliced = rendered.slice(a, Math.min(b, rendered.length));
+  const body = sliced.endsWith('\n') ? sliced.slice(0, -1) : sliced;
+  return ['```' + LANG, body, '```'].join('\n');
+}
+
 export function exportAsJson(block: Block): string {
   const payload = {
     id: block.id,

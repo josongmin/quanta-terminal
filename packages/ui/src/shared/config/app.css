@@ -19,11 +19,20 @@ body,
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Prevent text selection flicker on rapid clicks in the terminal */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-/* Focus ring — keyboard only. */
+/* Allow text selection inside output and input areas */
+pre, code, textarea, input, [data-testid*='output'], .q-selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Focus ring — keyboard only, subtle */
 :focus-visible {
-  outline: 2px solid var(--q-border-focus);
+  outline: 1.5px solid var(--q-border-focus);
   outline-offset: 1px;
   border-radius: var(--q-radius-sm);
 }

@@ -69,6 +69,9 @@ function makeBridge(): FakeBridge {
       };
     },
     async notify() {},
+    async readTextFile() {
+      return null;
+    },
     async aiSuggest() {
       return {
         id: 'stub',
@@ -337,6 +340,95 @@ describe('<TuiRenderSurface />', () => {
       }
     });
     expect(screen.getByTestId('tui-render-surface')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Canvas AT fallback: visually-hidden `<pre>` text mirror.
+  // -------------------------------------------------------------------------
+
+  it('mounts a visually-hidden text mirror for assistive tech', () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(<TuiRenderSurface sessionId={sid} bridge={bridge} />);
+    const mirror = screen.getByTestId('tui-at-mirror');
+    expect(mirror.tagName.toLowerCase()).toBe('pre');
+    expect(mirror.getAttribute('aria-live')).toBe('polite');
+    expect(mirror.getAttribute('aria-atomic')).toBe('false');
+  });
+
+  it('feeds grid rows into the AT mirror on debounce flush', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = makeBridge();
+      const sid = 'sess-1' as SessionId;
+      act(() => {
+        useTuiStore.getState().enter({ sessionId: sid });
+      });
+      render(<TuiRenderSurface sessionId={sid} bridge={bridge} />);
+      // Initial render: the mirror is empty (the emulator just allocated a
+      // blank grid).
+      const atMirror = screen.getByTestId('tui-at-mirror');
+      act(() => {
+        bridge.emit({
+          kind: 'pty_data',
+          sessionId: sid,
+          seq: 0,
+          bytesB64: textToB64('hello\r\nworld'),
+        });
+      });
+      // The 200 ms debounce hasn't fired yet.
+      await act(async () => {
+        vi.advanceTimersByTime(205);
+        await Promise.resolve();
+      });
+      const text = atMirror.textContent ?? '';
+      expect(text).toContain('hello');
+      expect(text).toContain('world');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces high-frequency emits into a single debounced textContent write', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = makeBridge();
+      const sid = 'sess-1' as SessionId;
+      act(() => {
+        useTuiStore.getState().enter({ sessionId: sid });
+      });
+      render(<TuiRenderSurface sessionId={sid} bridge={bridge} />);
+      const atMirror = screen.getByTestId('tui-at-mirror');
+      // Fire 20 rapid emits within the debounce window.
+      act(() => {
+        for (let i = 0; i < 20; i += 1) {
+          bridge.emit({
+            kind: 'pty_data',
+            sessionId: sid,
+            seq: i,
+            bytesB64: textToB64('x'),
+          });
+        }
+      });
+      // Not flushed yet — the debounce window is open.
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+        await Promise.resolve();
+      });
+      // After the debounce, at least the accumulated text is there.
+      const text = atMirror.textContent ?? '';
+      expect(text.length).toBeGreaterThan(0);
+      expect(text).toContain('x');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

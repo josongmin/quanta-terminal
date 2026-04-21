@@ -66,6 +66,7 @@ vi.mock('../../../shared/api/host-bridge.js', async () => {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     ready: async () => {},
     spawn: async () => ({ sessionId: 'mock-sess', shell: '/bin/sh', cwd: '/tmp' }),
@@ -210,5 +211,43 @@ describe('alt-screen transitions on TerminalPage', () => {
       vi.advanceTimersByTime(200);
     });
     expect(useTuiStore.getState().transitioning).toBe(false);
+  });
+
+  // Alt-screen announcer (a11y live region).
+
+  it('announces "Entered TUI mode" with the command label on enter', async () => {
+    seedActiveSession();
+    await renderPage();
+    // Initial render: the announcer is empty (no transition yet).
+    expect(screen.getByTestId('alt-screen-announce').textContent).toBe('');
+    act(() => {
+      useTuiStore.getState().enter({ command: 'vim' });
+    });
+    const text = screen.getByTestId('alt-screen-announce').textContent ?? '';
+    expect(text.toLowerCase()).toContain('entered');
+    expect(text).toContain('vim');
+  });
+
+  it('announces "Exited TUI mode, back to shell" on exit', async () => {
+    seedActiveSession();
+    await renderPage();
+    act(() => {
+      useTuiStore.getState().enter({ command: 'vim' });
+    });
+    act(() => {
+      useTuiStore.getState().exit();
+    });
+    const text = screen.getByTestId('alt-screen-announce').textContent ?? '';
+    expect(text.toLowerCase()).toContain('exited');
+    expect(text.toLowerCase()).toContain('back to shell');
+  });
+
+  it('announcer element is a polite live region with role=status', async () => {
+    seedActiveSession();
+    await renderPage();
+    const node = screen.getByTestId('alt-screen-announce');
+    expect(node.getAttribute('role')).toBe('status');
+    expect(node.getAttribute('aria-live')).toBe('polite');
+    expect(node.getAttribute('aria-atomic')).toBe('true');
   });
 });

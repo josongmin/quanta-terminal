@@ -39,6 +39,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type RefObject,
 } from 'react';
 import { Badge } from '../../shared/ui/badge/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';
@@ -46,15 +47,30 @@ import { Tooltip } from '../../shared/ui/tooltip/index.js';
 import { Spinner } from '../../shared/ui/spinner/index.js';
 import {
   AnsiOutput,
+  applyControlChars,
   type AnsiSpan,
   type PathClickPayload,
+  type SearchHighlights,
+  type UrlClickPayload,
 } from '../../shared/ui/ansi-output/index.js';
+import { openExternalUrl as openExternalUrlAction } from '../../features/open-url/index.js';
 import { AnsiParser, stripAnsi } from '../../shared/lib/ansi-parser/index.js';
 import {
-  concatChunks,
+  distributeRangesToSpans,
+  useBlockOutputMatches,
+} from '../../features/output-search/index.js';
+import {
+  detectSecrets,
+  useBlockRevealed,
+  useSecretRedactSettings,
+  useSecretRevealStore,
+  type SecretMatch,
+} from '../../features/secret-detect/index.js';
+import {
   useBlockHeader,
   useBlockOutputChunks,
   useBlockStore,
+  useBlockSuccessor,
   type Block,
   type BlockHeaderView,
   type BlockStatus,
@@ -67,12 +83,21 @@ import {
   type OpenInEditorResult,
 } from '../../features/navigation/index.js';
 import { exportBlockAs, type ExportFormat } from '../../features/block/export.js';
+import {
+  computeBlockSelectionRange,
+  copyBlockAsMarkdown,
+} from '../../features/block/copy-as-markdown.js';
 import { cx } from '../../shared/lib/cx.js';
+import { formatShortcutHint, subscribeKeymap } from '../../shared/lib/keymap.js';
 import { createLogger } from '../../shared/lib/logger.js';
 import { tryGetHostBridge } from '../../shared/api/host-bridge.js';
 import { showToast } from '../../shared/ui/toast/index.js';
 import { t } from '../../shared/i18n/index.js';
 import { BlockHoverCard } from './BlockHoverCard.js';
+import { BlockTagStrip } from './BlockTagStrip.js';
+import { CommandCorrectionHint } from '../../features/command-correction/index.js';
+import { AiExplainPanel, useExplainShortcut } from '../../features/ai-explain/index.js';
+import { useHighlighted } from '../../features/shell-highlight/index.js';
 import styles from './block-card.module.css';
 
 const log = createLogger('widgets/block-card');
@@ -90,6 +115,17 @@ export interface BlockCardProps {
    * surface stable across reruns.
    */
   readonly onCompare?: (blockId: string) => void;
+  /**
+   * Command-correction hook. Invoked when the user clicks "Rerun with this"
+   * on the `<CommandCorrectionHint />` rendered below a failed block
+   * (exit 127). The callback receives the original failing block id plus
+   * the corrected command text — the host is responsible for submitting it
+   * through the composer (or whatever equivalent pathway it uses).
+   *
+   * When omitted, the hint still renders but its rerun button becomes a
+   * no-op. The dismiss button keeps working.
+   */
+  readonly onRerunWithCorrection?: (blockId: string, correctedCommand: string) => void;
 }
 
 // Collapsed peek shows a single line of output as plain text. We decode the
@@ -151,13 +187,15 @@ function countLines(chunks: readonly Uint8Array[]): number {
 }
 
 function BlockCardImpl(props: BlockCardProps) {
-  const { block, onRerun, onCopy, onCompare } = props;
+  const { block, onRerun, onCopy, onCompare, onRerunWithCorrection } = props;
   // Subscribe to the chrome view, falling back to the incoming prop on the
   // first render (the store is the source of truth thereafter). `block` is
   // still the entry used by callers that hand-construct a card in isolation
   // (tests, storybook).
   const storeHeader = useBlockHeader(block.id);
   const header: BlockHeaderView = storeHeader ?? toHeaderView(block);
+
+  const commandSpans = useHighlighted({ value: header.command, styles });
 
   // EPIC-H §4.2: alt-screen chrome collapse. When an alt-screen program is
   // running and THIS card is the owning block's chrome (status === 'running'
@@ -174,17 +212,11 @@ function BlockCardImpl(props: BlockCardProps) {
   const togglePin = useBlockStore((s) => s.togglePin);
 
   // Compare button gate — true when the block has a predecessor OR a
-  // successor. Reading the store directly here (scan for any block whose
-  // `rerunOfId` === this.id) avoids adding a dedicated selector and
-  // re-renders infrequently: entity count changes are rare and stable per
-  // card's header-view subscription window.
-  const hasSuccessor = useBlockStore((s) => {
-    for (const id of s.order) {
-      const b = s.entities[id];
-      if (b && b.rerunOfId === block.id) return true;
-    }
-    return false;
-  });
+  // successor. Previously this scanned `s.order` from every card on every
+  // store mutation (O(cards × blocks)); now backed by the store-maintained
+  // `rerunChildByParent` index for a single-map-read lookup.
+  const successor = useBlockSuccessor(block.id);
+  const hasSuccessor = successor !== undefined;
   const canCompare = header.rerunOfId !== null || hasSuccessor;
 
   const duration = useMemo(() => {
@@ -236,6 +268,11 @@ function BlockCardImpl(props: BlockCardProps) {
     },
     [header.id, onRerun, stop],
   );
+
+  // Ref to the `<article>` root — also used by the tag editor shortcut hook
+  // further down. Declared up here so the copy-as-markdown handler (which
+  // scopes `window.getSelection()` to this card) can reference it too.
+  const articleRef = useRef<HTMLElement | null>(null);
 
   // Export menu state — a tiny local dropdown. Opens on button click, closes
   // on selection / outside click / Escape.
@@ -381,6 +418,50 @@ function BlockCardImpl(props: BlockCardProps) {
     },
     [runExport, stop],
   );
+
+  // "Copy as Markdown" — selection-aware. Reads the live `window.getSelection()`
+  // scoped to this card's article root; a collapsed / outside-article selection
+  // falls through to the full block. Closes the export menu first so clicking
+  // the menu item feels decisive.
+  const copyAsMarkdown = useCallback(async () => {
+    setExportOpen(false);
+    const root = articleRef.current;
+    const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+    const range = computeBlockSelectionRange(root, sel);
+    const result = await copyBlockAsMarkdown({
+      blockId: header.id,
+      selection: range,
+    });
+    if (result.ok) {
+      showToast({
+        kind: 'info',
+        message: t(
+          range === null
+            ? 'blockCard.copyAsMarkdown.toastFull'
+            : 'blockCard.copyAsMarkdown.toastSelection',
+        ),
+      });
+      return;
+    }
+    log.warn('copy-as-markdown failed', result.reason, result.error?.message);
+    showToast({
+      kind: 'warning',
+      message: t('blockCard.copyAsMarkdown.toastFailed', { reason: result.reason }),
+    });
+  }, [header.id]);
+
+  const onCopyAsMarkdownClick = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      stop(e);
+      void copyAsMarkdown();
+    },
+    [copyAsMarkdown, stop],
+  );
+
+  // Register keyboard shortcut + palette event listener scoped to "this card
+  // owns focus". Mirrors `useBlockTagEditorShortcut`'s pattern so the two
+  // focused-card entry points stay consistent.
+  useBlockCopyAsMarkdownShortcut(articleRef, copyAsMarkdown);
   const onExportJson = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
       stop(e);
@@ -431,8 +512,22 @@ function BlockCardImpl(props: BlockCardProps) {
 
   const exitAttr = header.exitCode === null ? undefined : header.exitCode === 0 ? '0' : 'nonzero';
 
+  // Tag-editor open signal — monotonic counter bumped by the `T` shortcut
+  // (wired via `useBlockTagEditorShortcut` below). BlockTagStrip opens its
+  // popover whenever this increments; we start at 0 so the initial render
+  // stays closed.
+  const [tagOpenSignal, setTagOpenSignal] = useState(0);
+  useBlockTagEditorShortcut(articleRef, () => setTagOpenSignal((v) => v + 1));
+
+  // "Explain this error" shortcut — `E` while this card has focus fires a
+  // window event the `<AiExplainPanel />` below listens for. The hook
+  // gates on the exit code / feature flag internally, so binding it
+  // unconditionally here is free (no side effects for a succeeding block).
+  useExplainShortcut({ articleRef, blockId: header.id });
+
   return (
     <article
+      ref={articleRef}
       className={cx(
         styles.card,
         isOwningAltScreenBlock ? styles.altScreenCollapsed : undefined,
@@ -469,7 +564,15 @@ function BlockCardImpl(props: BlockCardProps) {
           />
         )}
         <Tooltip content={header.command}>
-          <span className={styles.command}>{header.command}</span>
+          <span className={styles.command}>
+            {commandSpans.length > 0
+              ? commandSpans.map((s, i) =>
+                  s.className !== null
+                    ? <span key={i} className={s.className}>{s.text}</span>
+                    : <span key={i}>{s.text}</span>
+                )
+              : header.command}
+          </span>
         </Tooltip>
         <span className={styles.meta}>
           <span className={styles.duration} aria-label="Duration">
@@ -533,7 +636,7 @@ function BlockCardImpl(props: BlockCardProps) {
           <Tooltip
             content={
               <>
-                Copy output <Kbd>⌘C</Kbd>
+                Copy output <Kbd>{formatShortcutHint('mod+c')}</Kbd>
               </>
             }
           >
@@ -572,6 +675,16 @@ function BlockCardImpl(props: BlockCardProps) {
                   type="button"
                   role="menuitem"
                   className={styles.exportMenuItem}
+                  onClick={onCopyAsMarkdownClick}
+                  data-testid={`block-card-copy-as-markdown-${header.id}`}
+                  aria-label={t('blockCard.copyAsMarkdown.label')}
+                >
+                  {t('blockCard.copyAsMarkdown.label')}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.exportMenuItem}
                   onClick={onExportMarkdown}
                   data-testid={`block-card-export-markdown-${header.id}`}
                 >
@@ -602,7 +715,7 @@ function BlockCardImpl(props: BlockCardProps) {
             <Tooltip
               content={
                 <>
-                  Rerun <Kbd>⌘R</Kbd>
+                  Rerun <Kbd>{formatShortcutHint('mod+r')}</Kbd>
                 </>
               }
             >
@@ -640,6 +753,10 @@ function BlockCardImpl(props: BlockCardProps) {
         </span>
       </div>
 
+      {!isOwningAltScreenBlock && (
+        <BlockTagStrip blockId={header.id} tags={header.tags} openSignal={tagOpenSignal} />
+      )}
+
       <BlockBody
         blockId={header.id}
         collapsed={header.collapsed}
@@ -650,12 +767,47 @@ function BlockCardImpl(props: BlockCardProps) {
         status={header.status}
       />
 
+      {/*
+        "Did you mean?" hint. Mounts below the body; the component itself
+        short-circuits to `null` unless the block completed with exit 127 AND
+        `suggestCorrection` produced a confident match. Rendering
+        unconditionally keeps BlockCard free of correction logic — every
+        decision lives in the feature slice.
+      */}
+      <CommandCorrectionHint
+        blockId={header.id}
+        onRerunWithCorrection={
+          onRerunWithCorrection ??
+          NOOP_CORRECTION_RERUN /* stable no-op so memoized hint doesn't churn */
+        }
+      />
+
+      {/*
+        AI "Explain this error" affordance. Internally gates on:
+          - master `aiExplainEnabled` setting,
+          - block being in a non-zero terminal state,
+          - user not having dismissed it.
+        Rendering unconditionally keeps BlockCard free of feature logic —
+        every branch lives inside the panel.
+      */}
+      <AiExplainPanel blockId={header.id} />
+
       {hoverOpen && (
         <BlockHoverCard block={block} x={hoverPos.x} y={hoverPos.y} open={hoverOpen} />
       )}
     </article>
   );
 }
+
+/**
+ * Stable no-op rerun handler — referenced when BlockCard's parent doesn't
+ * wire `onRerunWithCorrection`. Declared at module scope so its identity is
+ * stable across renders, preventing the memoized `CommandCorrectionHint`
+ * from re-rendering on every parent update.
+ */
+const NOOP_CORRECTION_RERUN = (_blockId: string, _command: string): void => {
+  /* intentionally empty */
+};
 
 /**
  * Memoized outer export. The chrome + body both re-subscribe to the store via
@@ -671,7 +823,8 @@ export const BlockCard = memo(BlockCardImpl, (prev, next) => {
     prev.block.id === next.block.id &&
     prev.onRerun === next.onRerun &&
     prev.onCopy === next.onCopy &&
-    prev.onCompare === next.onCompare
+    prev.onCompare === next.onCompare &&
+    prev.onRerunWithCorrection === next.onRerunWithCorrection
   );
 });
 
@@ -691,7 +844,100 @@ function toHeaderView(b: Block): BlockHeaderView {
     pinned: b.pinned,
     errorMessage: b.errorMessage,
     rerunOfId: b.rerunOfId,
+    tags: b.tags,
   };
+}
+
+/**
+ * Keyboard hook — when the card OR a descendant has focus AND the user
+ * presses `T` (no modifiers, not inside a typing target), bump the tag
+ * editor open signal. Implemented via the global `subscribeKeymap` with a
+ * gating check against `articleRef.current?.contains(document.activeElement)`
+ * so `T` only triggers for the card that owns focus. This keeps the binding
+ * global (one listener) while the semantics stay per-card.
+ */
+function useBlockTagEditorShortcut(
+  articleRef: RefObject<HTMLElement | null>,
+  onOpen: () => void,
+): void {
+  useEffect(() => {
+    const sub = subscribeKeymap({
+      shortcut: 't',
+      handler: () => {
+        const article = articleRef.current;
+        if (!article) return;
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (!active || !article.contains(active)) return;
+        onOpen();
+      },
+      allowInEditable: false,
+    });
+    return () => sub.unsubscribe();
+  }, [articleRef, onOpen]);
+
+  // Command-palette "Tag active block…" entry dispatches a window event; the
+  // card whose descendant holds focus responds by opening the editor. Using
+  // the same focus-check as the keyboard shortcut keeps the two entry
+  // points semantically identical.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOpenEvent = () => {
+      const article = articleRef.current;
+      if (!article) return;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      if (!active || !article.contains(active)) return;
+      onOpen();
+    };
+    window.addEventListener('quanta:open-tag-editor', onOpenEvent);
+    return () => window.removeEventListener('quanta:open-tag-editor', onOpenEvent);
+  }, [articleRef, onOpen]);
+}
+
+/**
+ * Keyboard hook — Cmd+Shift+C (Ctrl+Shift+C on non-macOS) when this card's
+ * subtree owns focus triggers "Copy as Markdown". Mirrors the focus-gated
+ * `useBlockTagEditorShortcut` pattern so the global keymap still owns the
+ * single listener while the semantics stay per-card.
+ *
+ * Additionally listens for the `quanta:copy-block-as-markdown` window event
+ * the command palette dispatches, so the palette entry and the shortcut
+ * share one handler.
+ */
+function useBlockCopyAsMarkdownShortcut(
+  articleRef: RefObject<HTMLElement | null>,
+  onInvoke: () => void | Promise<void>,
+): void {
+  useEffect(() => {
+    const sub = subscribeKeymap({
+      shortcut: 'mod+shift+c',
+      handler: (event) => {
+        const article = articleRef.current;
+        if (!article) return;
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (!active || !article.contains(active)) return;
+        // The browser's default Cmd+Shift+C may be bound to DevTools or a
+        // selection-copy variant — preventDefault so our action wins when
+        // the card has focus.
+        event.preventDefault();
+        void onInvoke();
+      },
+      allowInEditable: false,
+    });
+    return () => sub.unsubscribe();
+  }, [articleRef, onInvoke]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onEvent = () => {
+      const article = articleRef.current;
+      if (!article) return;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      if (!active || !article.contains(active)) return;
+      void onInvoke();
+    };
+    window.addEventListener('quanta:copy-block-as-markdown', onEvent);
+    return () => window.removeEventListener('quanta:copy-block-as-markdown', onEvent);
+  }, [articleRef, onInvoke]);
 }
 
 /* ------------------------------- Body ---------------------------------- */
@@ -728,6 +974,78 @@ function isPromptEolMarkSpan(span: AnsiSpan): boolean {
   if (t.length !== 1) return false;
   if (t !== '%' && t !== '#' && t !== '$' && t !== '>') return false;
   return span.inverse === true;
+}
+
+/**
+ * Preprocess spans for carriage-return sequences that cross PTY read boundaries.
+ *
+ * ZLE (zsh line editor) echoes each keystroke on a separate PTY read call, so
+ * typing "ls" produces span1="l" then span2="\rls". A per-span CR rewrite only
+ * resets within its own span, rendering "lls". This fold operates across the
+ * full span list: a leading "\r" in span2 erases everything accumulated on the
+ * current line (including span1's "l") before the new text is written.
+ *
+ * CRLF ("\r\n"): PTY cooked mode (ONLCR) emits "\r\n" as a standard line
+ * ending. The "\r" must NOT erase the current line — it is the first half of a
+ * newline sequence. We collapse "\r\n" → "\n" so downstream rendering never
+ * sees bare "\r" followed by "\n" and inadvertently wipes file listings.
+ */
+function foldSpansWithCR(spans: readonly AnsiSpan[]): readonly AnsiSpan[] {
+  if (!spans.some((s) => s.text.includes('\r'))) return spans;
+  const result: AnsiSpan[] = [];
+  const line: AnsiSpan[] = [];
+  let pendingCR = false;
+  let pendingCRSpan: AnsiSpan | null = null;
+
+  const flushLine = (nlSpan: AnsiSpan): void => {
+    result.push(...line);
+    result.push({ ...nlSpan, text: '\n' });
+    line.length = 0;
+  };
+
+  for (const span of spans) {
+    const t = span.text;
+    let segStart = 0;
+    for (let i = 0; i <= t.length; i++) {
+      const ch = i < t.length ? t[i] : null;
+      // End-of-span: a trailing \r must defer its decision to the NEXT span's
+      // first character (could be \n → CRLF, or anything else → standalone CR).
+      // Processing pendingCR here with ch=null would incorrectly treat it as a
+      // standalone CR and erase the current line (the ls-output-blank-output bug).
+      if (ch === null) break;
+      if (pendingCR) {
+        pendingCR = false;
+        if (ch === '\n') {
+          // "\r\n" — collapse to a plain newline; do NOT erase the line.
+          flushLine(pendingCRSpan!);
+          pendingCRSpan = null;
+          segStart = i + 1;
+          continue;
+        }
+        // Standalone "\r" — erase everything on the current line.
+        line.length = 0;
+        pendingCRSpan = null;
+      }
+      if (ch === '\n') {
+        if (i > segStart) line.push({ ...span, text: t.slice(segStart, i) });
+        flushLine(span);
+        segStart = i + 1;
+      } else if (ch === '\r') {
+        if (i > segStart) line.push({ ...span, text: t.slice(segStart, i) });
+        pendingCR = true;
+        pendingCRSpan = span;
+        segStart = i + 1;
+      }
+    }
+    if (segStart < t.length) line.push({ ...span, text: t.slice(segStart) });
+  }
+  // Trailing bare "\r": cursor moved to col 0 but nothing followed.
+  // Root cause of intermittent blank output: zsh positions cursor before
+  // the PROMPT_EOL_MARK sigil (`%`), which isPromptEolMarkSpan filters away.
+  // With the sigil gone, this "\r" is the last span character and would erase
+  // the final output line. Discard the pending CR but keep line content.
+  result.push(...line);
+  return result;
 }
 
 /**
@@ -772,6 +1090,17 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
 
   const chunks = stream?.outputChunks ?? EMPTY_CHUNKS;
   const status = stream?.status ?? 'running';
+
+  // Secret-detection wiring. We read the user's master "redact secrets in
+  // output" preference and the per-block reveal flag; the actual detector
+  // runs inside the spans memo below so we pay the regex cost only once
+  // per render, not once per read.
+  const redactEnabled = useSecretRedactSettings((s) => s.enabled);
+  const blockRevealed = useBlockRevealed(blockId);
+  const toggleReveal = useSecretRevealStore((s) => s.toggle);
+  const onToggleSecrets = useCallback(() => {
+    toggleReveal(blockId);
+  }, [blockId, toggleReveal]);
 
   useEffect(() => {
     if (parserRef.current === null) {
@@ -827,6 +1156,46 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
   const decodedForPeek = useMemo(() => {
     if (!collapsed) return '';
     if (chunks.length === 0) return '';
+    // Tail-only decode (review F16): the peek only renders the LAST line
+    // of output, so decoding the full history is wasted work — and for
+    // commands that stream megabytes (e.g. `cat large.log`) it becomes a
+    // per-render UI hang. Walk the chunks backward accumulating up to
+    // `PEEK_TAIL_BYTES` of tail bytes, then decode that slice. UTF-8
+    // boundary handling: TextDecoder with `fatal:false` emits U+FFFD for
+    // an invalid leading byte and continues, so a mid-codepoint tail slice
+    // at worst corrupts the very first character of the slice — and
+    // `lastLine()` above discards everything before the final newline
+    // anyway, so the visible peek is unaffected for any output whose
+    // last line fits inside the window.
+    const PEEK_TAIL_BYTES = 8192;
+    let acc = 0;
+    let startChunk = chunks.length;
+    let startOffset = 0;
+    for (let i = chunks.length - 1; i >= 0; i -= 1) {
+      const c = chunks[i]!;
+      if (acc + c.byteLength >= PEEK_TAIL_BYTES) {
+        startChunk = i;
+        startOffset = c.byteLength - (PEEK_TAIL_BYTES - acc);
+        acc = PEEK_TAIL_BYTES;
+        break;
+      }
+      acc += c.byteLength;
+      startChunk = i;
+      startOffset = 0;
+    }
+    const tail = new Uint8Array(acc);
+    let off = 0;
+    for (let i = startChunk; i < chunks.length; i += 1) {
+      const c = chunks[i]!;
+      if (i === startChunk && startOffset > 0) {
+        const sub = c.subarray(startOffset);
+        tail.set(sub, off);
+        off += sub.byteLength;
+      } else {
+        tail.set(c, off);
+        off += c.byteLength;
+      }
+    }
     // Strip ANSI escapes so the peek line renders as readable plain text —
     // otherwise zsh's `PROMPT_EOL_MARK` bytes (`\e[1m\e[7m%\e[0m`) would
     // render as literal ESC glyphs in the one-line summary.
@@ -837,7 +1206,7 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
     // current line the way a real terminal does turns that into just
     // `<output>` in the peek — same logic as the expanded body's
     // `carriageReturnRewrites` flag on `AnsiOutput`.
-    const raw = stripAnsi(TEXT_DECODER.decode(concatChunks(chunks)));
+    const raw = stripAnsi(TEXT_DECODER.decode(tail));
     let out = '';
     let lineStart = 0;
     for (const ch of raw) {
@@ -876,6 +1245,152 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
     });
   }, []);
 
+  // Plain-text URL autolinkification. The `url-detect` module found a clickable
+  // URL inside this block's output — we delegate to `features/open-url` which
+  // prompts the user for confirmation (pasted URLs may be malicious) and
+  // then hands off to the host bridge's optional `openExternalUrl`. OSC 8
+  // hyperlinks are handled separately via `onLinkClick`; the renderer
+  // guarantees autolinkification never overlaps explicit terminal links.
+  const onUrlClick = useCallback((payload: UrlClickPayload) => {
+    void openExternalUrlAction({ url: payload.url, kind: payload.kind });
+  }, []);
+
+  // Secret detection — scan the currently-rendered spans for well-known
+  // credentials. The redaction pipeline:
+  //   - Join all span texts into a single buffer.
+  //   - Run the detector (patterns in `features/secret-detect`).
+  //   - Remember both the match list (for the UI banner / count pill) and a
+  //     set of per-span redacted text strings. When we build `renderSpans`
+  //     for the final <AnsiOutput />, we swap the redacted text in place of
+  //     the original on any span that intersects a match.
+  //
+  // The memo deps are `version` (streaming bump) and `redactEnabled` +
+  // `blockRevealed` — both cheap and identity-stable outside state changes.
+  const secretState = useMemo(() => {
+    const spans = spansRef.current;
+    // Fast exits:
+    //   - detection disabled by the master setting
+    //   - block has no spans yet
+    //   - block is collapsed (peek row does not render the output, and the
+    //     detector would uselessly burn CPU joining multi-MB span arrays)
+    if (!redactEnabled || spans.length === 0 || collapsed) {
+      return { matches: [] as ReadonlyArray<SecretMatch>, redactedTexts: null as null | string[] };
+    }
+    // Build a flat buffer of span text and parallel offset table so we can
+    // project detected ranges back onto per-span slices. Length computation
+    // uses the raw text (NOT the post-`applyControlChars` version) because
+    // the detector operates on raw decoded bytes and we want the offsets to
+    // align with span.text directly.
+    const texts = spans.map((s) => s.text);
+    const joined = texts.join('');
+    // Guard against pathological inputs. 2 MB is far beyond any realistic
+    // command output a human would scroll through; above that we skip the
+    // scan rather than block the render budget. The user can still toggle
+    // redaction off to fall through the whole pipeline.
+    if (joined.length > 2 * 1024 * 1024) {
+      return { matches: [] as ReadonlyArray<SecretMatch>, redactedTexts: null };
+    }
+    const matches = detectSecrets(joined);
+    if (matches.length === 0) {
+      return { matches, redactedTexts: null };
+    }
+    if (blockRevealed) {
+      // User asked to see the secrets — keep matches (so the pill still
+      // shows "N secrets") but don't redact the spans.
+      return { matches, redactedTexts: null };
+    }
+    // Project matches onto per-span offsets, rewriting each affected span's
+    // text with bullet placeholders. Spans that do not intersect any match
+    // are left untouched (shared reference with the original span).
+    const redactedTexts: string[] = texts.slice();
+    let spanIdx = 0;
+    let spanStart = 0;
+    let spanEnd = texts[0]?.length ?? 0;
+    for (const match of matches) {
+      // Advance spanIdx until the match's start falls inside it.
+      while (spanIdx < texts.length && spanEnd <= match.start) {
+        spanIdx += 1;
+        spanStart = spanEnd;
+        spanEnd = spanStart + (texts[spanIdx]?.length ?? 0);
+      }
+      // Walk the possibly-multi-span match and replace each covered slice.
+      let remaining = match.end;
+      let localIdx = spanIdx;
+      let localStart = spanStart;
+      let localEnd = spanEnd;
+      while (localIdx < texts.length && localStart < remaining) {
+        const s = redactedTexts[localIdx]!;
+        const from = Math.max(0, match.start - localStart);
+        const to = Math.min(s.length, remaining - localStart);
+        redactedTexts[localIdx] = s.slice(0, from) + '•'.repeat(Math.max(0, to - from)) + s.slice(to);
+        localIdx += 1;
+        localStart = localEnd;
+        localEnd = localStart + (texts[localIdx]?.length ?? 0);
+      }
+    }
+    return { matches, redactedTexts };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, redactEnabled, blockRevealed, collapsed]);
+
+  const renderSpans = useMemo(() => {
+    const base = spansRef.current;
+    const redacted = secretState.redactedTexts;
+    if (!redacted) return base;
+    // Build new span objects only for the spans whose text changed. Reusing
+    // references for untouched spans keeps the AnsiOutput memo sharp.
+    const out = new Array<AnsiSpan>(base.length);
+    for (let i = 0; i < base.length; i += 1) {
+      const span = base[i]!;
+      const newText = redacted[i];
+      if (newText === undefined || newText === span.text) {
+        out[i] = span;
+      } else {
+        out[i] = { ...span, text: newText };
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, secretState]);
+
+  // Apply cross-span carriage-return folding. This runs after redaction so
+  // secrets are already masked before CR logic can shift text around.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const processedSpans = useMemo(() => foldSpansWithCR(renderSpans), [renderSpans]);
+
+  // Output-search overlay. `useBlockOutputMatches` reads the global store and
+  // returns the ranges scoped to THIS block (in block-local rendered-char
+  // offsets) plus, optionally, the index of the "current" match. We re-derive
+  // per-span ranges every render to stay resilient to streaming chunk appends
+  // — the memo deps cover the version bump so allocation is bounded.
+  const blockMatches = useBlockOutputMatches(blockId);
+  const searchHighlights = useMemo<SearchHighlights | undefined>(() => {
+    if (blockMatches.ranges.length === 0) return undefined;
+    const texts = spansRef.current.map((s) => applyControlChars(s.text, true));
+    const perSpan = distributeRangesToSpans(texts, blockMatches.ranges);
+    let activeSpanIndex: number | null = null;
+    let activeRangeIndex: number | null = null;
+    if (blockMatches.activeLocalIndex !== null) {
+      // Walk per-span bucket counts to locate which span owns the active hit.
+      let consumed = 0;
+      for (let i = 0; i < perSpan.length; i += 1) {
+        const bucket = perSpan[i]!;
+        if (blockMatches.activeLocalIndex < consumed + bucket.length) {
+          activeSpanIndex = i;
+          activeRangeIndex = blockMatches.activeLocalIndex - consumed;
+          break;
+        }
+        consumed += bucket.length;
+      }
+    }
+    return {
+      perSpan,
+      activeSpanIndex,
+      activeRangeIndex,
+    };
+    // `version` is the streaming-spans invalidation signal; recompute when new
+    // bytes arrive so late-streamed matches get highlighted.
+  }, [blockMatches, version]);
+
   if (collapsed) {
     // Audit P1 (fix 7): Warp-style summary line
     //   "<command> · <N lines> · <duration> · exit <code>"
@@ -900,8 +1415,43 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
     );
   }
 
+  const secretCount = secretState.matches.length;
+  const hasSecrets = secretCount > 0;
+
   return (
     <div className={styles.body}>
+      {hasSecrets ? (
+        <div
+          className={styles.secretBanner}
+          data-testid={`block-secret-banner-${blockId}`}
+          role="status"
+        >
+          <span className={styles.secretBannerText}>
+            {secretCount === 1
+              ? t('blockCard.secrets.count', { count: secretCount })
+              : t('blockCard.secrets.countPlural', { count: secretCount })}
+          </span>
+          <button
+            type="button"
+            className={styles.secretToggleButton}
+            onClick={onToggleSecrets}
+            aria-pressed={blockRevealed ? 'true' : 'false'}
+            aria-label={
+              blockRevealed
+                ? t('blockCard.secrets.hideLabel')
+                : t('blockCard.secrets.showLabel')
+            }
+            data-testid={`block-secret-toggle-${blockId}`}
+          >
+            <EyeIcon open={blockRevealed} />
+            <span>
+              {blockRevealed
+                ? t('blockCard.secrets.hideLabel')
+                : t('blockCard.secrets.showLabel')}
+            </span>
+          </button>
+        </div>
+      ) : null}
       {spansRef.current.length === 0 ? (
         <div className={styles.empty} data-testid="block-empty">
           {status === 'running' ? 'Waiting for output…' : 'No output.'}
@@ -909,23 +1459,12 @@ const BlockBody = memo(function BlockBodyImpl(props: BlockBodyProps) {
       ) : (
         <div data-testid="block-output">
           <AnsiOutput
-            spans={spansRef.current}
+            spans={processedSpans}
             version={version}
             className={styles.output ?? ''}
             onPathClick={onPathClick}
-            /*
-             * Interactive shells (zsh ZLE) emit a `\r` + redrawn line on
-             * EVERY keystroke, so the raw byte stream for "ls\n" is
-             * roughly "prompt l\r prompt ls\r\n<output>". Without
-             * carriage-return rewriting we render each incremental redraw
-             * literally and the user sees `lls` / `vvi` / `ccd` prepended
-             * to the real output. Enabling `carriageReturnRewrites` makes
-             * `\r` truncate back to the start of the current line the way
-             * a real terminal would, collapsing those redraws into the
-             * final command only. Progress-bar workloads (npm, wget) also
-             * benefit for the same reason.
-             */
-            carriageReturnRewrites
+            onUrlClick={onUrlClick}
+            {...(searchHighlights ? { searchHighlights } : {})}
           />
         </div>
       )}
@@ -1027,6 +1566,36 @@ function ExportIcon() {
       />
       <path
         d="M2.5 8.5v3a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-3"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  // Two renders: open-eye (secrets revealed) vs crossed-eye (secrets hidden).
+  // Stroke-only so the glyph reads at 14px on any background.
+  if (open) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+        <path
+          d="M1.5 7S3.5 2.5 7 2.5 12.5 7 12.5 7 10.5 11.5 7 11.5 1.5 7 1.5 7z"
+          stroke="currentColor"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle cx="7" cy="7" r="1.8" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M2 2l10 10M3 7s2-4.5 5-4.5c1.1 0 2.1.5 2.9 1.1M11 7s-.4 1.1-1.3 2.1M6 11.2c.3.2.7.3 1 .3 3.5 0 5.5-4.5 5.5-4.5"
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinecap="round"

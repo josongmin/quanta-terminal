@@ -97,6 +97,14 @@ export interface StoredBlock {
   readonly sessionId: string | null;
   readonly rerunOfId: string | null;
   readonly errorMessage: string | null;
+  /**
+   * User-applied tags captured at persist time. Optional so rows written
+   * before the tag-filter feature landed hydrate cleanly — missing field
+   * falls back to `[]`. Persisted as a plain array of ASCII strings; the
+   * normalization invariants live in the model layer so the row is cheap
+   * to validate on read.
+   */
+  readonly tags?: readonly string[];
 }
 
 export type TerminalStatus = StoredBlock['status'];
@@ -242,6 +250,11 @@ export async function serializeBlock(
     sessionId,
     rerunOfId,
     errorMessage: block.errorMessage,
+    // Tags are user metadata; persist even when empty so the read path can
+    // distinguish "no tags stored" (legacy row — undefined) from "explicitly
+    // empty". Normalized at write time, not re-validated — the model owns
+    // the invariants.
+    tags: [...block.tags],
   };
 }
 
@@ -269,6 +282,9 @@ export async function deserializeBlock(row: StoredBlock): Promise<Block> {
     pinned: row.pinned,
     errorMessage: row.errorMessage ?? null,
     rerunOfId: row.rerunOfId ?? null,
+    // Forward-compat: legacy rows have no `tags` field — treat as untagged.
+    // Defensive copy so downstream mutations can't scribble on the row.
+    tags: Array.isArray(row.tags) ? [...row.tags] : [],
   };
 }
 

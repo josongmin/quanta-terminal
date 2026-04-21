@@ -33,6 +33,15 @@ export interface SpawnSessionResult {
   readonly sessionId: SessionId;
   readonly shell: string;
   readonly cwd: string;
+  /**
+   * `true` when the host spawned this shell on the Linux kernel shim that
+   * Windows Subsystem for Linux provides (WSL 1 / 2). The Tauri host probes
+   * `/proc/version` for "Microsoft" / "WSL" tokens during spawn; see
+   * `packages/host-tauri/src-tauri/src/embedded_shell::is_wsl`. Optional so
+   * hosts that cannot answer (mock bridge, future third-party shells) omit
+   * the field rather than asserting false.
+   */
+  readonly isWsl?: boolean;
 }
 
 /** Handle returned by `HostBridge.subscribe`. Idempotent unsubscribe. */
@@ -165,6 +174,56 @@ export interface HostBridgeError {
   readonly context?: Readonly<Record<string, unknown>>;
 }
 
+/* ------------------------------------------------------------------------ */
+/*  ISP sub-interfaces — use these for narrower dependency declarations      */
+/* ------------------------------------------------------------------------ */
+
+/** Core PTY lifecycle. Use when a module only needs session I/O. */
+export interface SessionBridge {
+  ready(): Promise<void>;
+  spawn(options: SpawnSessionOptions): Promise<SpawnSessionResult>;
+  write(sessionId: SessionId, data: string): Promise<void>;
+  resize(sessionId: SessionId, cols: number, rows: number): Promise<void>;
+  close(sessionId: SessionId): Promise<void>;
+  cancelBlock(sessionId: SessionId, blockId: BlockId): Promise<void>;
+  subscribe(listener: HostEventListener): Subscription;
+}
+
+/** External URL + in-editor file opening. */
+export interface ExternalActionBridge {
+  openInEditor(options: OpenInEditorOptions): Promise<void>;
+  openExternalUrl?(options: OpenExternalUrlOptions): Promise<void>;
+}
+
+/** Shell dotfile integration. */
+export interface ShellIntegrationBridge {
+  installShellIntegration(
+    options: InstallShellIntegrationOptions,
+  ): Promise<InstallShellIntegrationReply>;
+  uninstallShellIntegration(
+    options: UninstallShellIntegrationOptions,
+  ): Promise<UninstallShellIntegrationReply>;
+}
+
+/** File system + git metadata access. */
+export interface FileBridge {
+  readTextFile(options: ReadTextFileOptions): Promise<string | null>;
+  getHomeDir?(): Promise<string | null>;
+  gitStatus?(options: GitStatusOptions): Promise<GitStatus | null>;
+}
+
+/** OS notification dispatch. */
+export interface NotificationBridge {
+  notify(options: NotifyOptions): Promise<void>;
+}
+
+/** AI command suggestion. */
+export interface AiBridge {
+  aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion>;
+}
+
+/* ------------------------------------------------------------------------ */
+
 /**
  * Phase-1 bridge surface. The real engine will replace this with JSON-RPC over
  * a Unix socket (see ADR 0004); the UI never sees that difference because it
@@ -181,7 +240,13 @@ export interface HostBridgeError {
  * The return type is `Result<void, string>` expressed as a `Promise<void>` that
  * either resolves (success) or rejects with a human-readable message.
  */
-export interface HostBridge {
+export interface HostBridge
+  extends SessionBridge,
+    ExternalActionBridge,
+    ShellIntegrationBridge,
+    FileBridge,
+    NotificationBridge,
+    AiBridge {
   readonly capabilities: HostCapabilities;
 
   /** Announce readiness and fetch any persistent session list. */
@@ -230,6 +295,23 @@ export interface HostBridge {
   openInEditor(options: OpenInEditorOptions): Promise<void>;
 
   /**
+   * Open an external URL in the user's default browser (or associated
+   * protocol handler for non-http schemes). Used by the auto-linkification
+   * feature that turns plain-text URLs in block output into clickable
+   * affordances — the UI prompts the user for confirmation first and then
+   * delegates to this method.
+   *
+   * OPTIONAL. Hosts that cannot open external URLs (e.g. the browser-dev
+   * mock bridge) may omit the method entirely. Callers MUST null-check
+   * `bridge.openExternalUrl` before invoking it.
+   *
+   * Rejects with a human-readable message when the host refuses the URL
+   * (blocked scheme, malformed input) or the platform open-url syscall
+   * fails. Never throws synchronously.
+   */
+  openExternalUrl?(options: OpenExternalUrlOptions): Promise<void>;
+
+  /**
    * Install (or preview install of) Quanta's shell integration into the
    * user's dotfile. See `InstallShellIntegrationOptions` for the two-phase
    * semantics.
@@ -267,6 +349,80 @@ export interface HostBridge {
   notify(options: NotifyOptions): Promise<void>;
 
   /**
+   * Run `git status --porcelain=v2 --branch --no-renames` in a repository
+   * root and return a structured summary (branch, dirty flag, ahead/behind
+   * counts, detached-HEAD flag).
+   *
+   * Why a dedicated command rather than composing from `readTextFile`:
+   *   - dirty-state detection without `git` itself is unreliable — we'd
+   *     otherwise have to stat the working tree and compare timestamps,
+   *     which is both imprecise and quadratic in repo size;
+   *   - ahead/behind requires diff-ing local vs remote refs, which git
+   *     computes for us in a single process spawn;
+   *   - the porcelain-v2 `--branch` output is stable and machine-readable
+   *     so parsing is small and well-pinned.
+   *
+   * Security boundary: the host MUST direct-exec `git` (no shell), MUST
+   * validate `repoRoot` as an absolute existing directory containing a
+   * `.git` entry, and MUST kill the child after a short timeout (2 s is
+   * plenty — `git status` is dominated by the index scan and is reliably
+   * sub-second even on large repos).
+   *
+   * Returns `null` when:
+   *   - `repoRoot` is not a repo (no `.git` entry, git emits "fatal: not a
+   *     git repository", etc.);
+   *   - the host has no `git` binary on PATH;
+   *   - the command times out;
+   *   - the host simply does not support this capability (mock bridge,
+   *     browser dev mode). Callers should treat `null` as "no extra info".
+   *
+   * Never rejects — the UI polls this on every cwd change and a rejection
+   * would force every caller to swallow.
+   *
+   * OPTIONAL: hosts that cannot shell out (mock bridge, future
+   * webview-in-sandbox) may omit the method entirely. Callers MUST null-
+   * check `bridge.gitStatus` before invoking it — `readGitStatusForRepo`
+   * in `features/git-branch` does this automatically.
+   */
+  gitStatus?(options: GitStatusOptions): Promise<GitStatus | null>;
+
+  /**
+   * Read a small UTF-8 text file from disk through the host.
+   *
+   * Intended for tiny metadata files the UI inspects to enrich the status
+   * bar (e.g. `.git/HEAD` for the current branch). To keep the IPC surface
+   * boring and safe:
+   *   - reads are capped at {@link ReadTextFileOptions.maxBytes} bytes
+   *     (hosts SHOULD enforce an absolute cap of 64 KiB);
+   *   - the path MUST be absolute; hosts reject relative paths;
+   *   - a missing file resolves to `null` (not a rejection) so pollers
+   *     don't have to pattern-match ENOENT;
+   *   - any other failure (I/O error, permission denied, invalid UTF-8)
+   *     rejects with a human-readable message — the caller is expected to
+   *     swallow it and treat the path as unreadable for now.
+   *
+   * Hosts that have no disk access (e.g. the mock bridge) resolve `null`
+   * for every call so the UI never has to branch on `readTextFile === undefined`.
+   */
+  readTextFile(options: ReadTextFileOptions): Promise<string | null>;
+
+  /**
+   * Return the absolute path of the user's home directory, or `null` when the
+   * host cannot determine it (mock bridge, browser-dev, cgroup-jailed
+   * containers). Used by the shell-history import feature to locate
+   * `~/.zsh_history` / `~/.bash_history` / `~/.config/fish/fish_history` via
+   * the existing {@link HostBridge.readTextFile} surface.
+   *
+   * OPTIONAL. Callers MUST null-check `bridge.getHomeDir` before invoking and
+   * MUST treat a `null` resolution as "home unknown, skip feature". Never
+   * rejects — any host-side failure (HOME env missing, permission denied on
+   * `/etc/passwd`, etc.) collapses to `null` at the wire boundary. This
+   * matches the {@link HostBridge.gitStatus} null-convention and means UIs
+   * can call it unconditionally and branch on the result.
+   */
+  getHomeDir?(): Promise<string | null>;
+
+  /**
    * Ask the host for an AI suggestion given a natural-language prompt.
    *
    * Phase 5 (ADR 0012): the Tauri host delegates to the `quanta-ai` crate's
@@ -287,6 +443,74 @@ export interface NotifyOptions {
   readonly title: string;
   readonly body: string;
 }
+
+/**
+ * Input to `HostBridge.openExternalUrl`. The host validates scheme +
+ * well-formedness before spawning the platform open-url syscall; callers
+ * SHOULD already have presented the URL to the user for confirmation.
+ *
+ * `url` is the canonical URL string (trailing punctuation already stripped
+ * by the caller). Schemes the host is expected to accept at minimum:
+ * http, https, ftp, ssh, mailto, file.
+ */
+export interface OpenExternalUrlOptions {
+  readonly url: string;
+}
+
+/**
+ * Input to `HostBridge.readTextFile`. The path MUST be absolute; hosts
+ * reject relative paths with an error. `maxBytes` is a caller-supplied cap
+ * so a pathological large file cannot blow the IPC budget — hosts SHOULD
+ * still enforce an absolute cap (64 KiB) on their side regardless of the
+ * value passed here.
+ */
+export interface ReadTextFileOptions {
+  readonly path: string;
+  readonly maxBytes?: number;
+}
+
+/**
+ * Input to `HostBridge.gitStatus`. The `repoRoot` MUST be an absolute path
+ * that the host can stat. Hosts reject relative paths and paths containing
+ * control characters / NUL bytes.
+ *
+ * We pass a root (not a cwd anywhere in the tree) so the host does not have
+ * to walk ancestors to find `.git` — the UI already did that via the
+ * existing `readGitBranchForCwd` helper and knows where the repo lives.
+ */
+export interface GitStatusOptions {
+  readonly repoRoot: string;
+}
+
+/**
+ * Result of `HostBridge.gitStatus`. Matches the small subset of
+ * `git status --porcelain=v2 --branch` the UI cares about.
+ *
+ *   - `branch`    — name (e.g. "main") when on a branch, short sha when
+ *                   detached, or `null` when the host could not determine
+ *                   it (very fresh repo with no commits, weird HEAD).
+ *   - `dirty`     — true when the working tree has any untracked OR
+ *                   modified OR staged entry (unified "workspace is not
+ *                   clean" signal; matches the `*` suffix convention in
+ *                   zsh prompts).
+ *   - `ahead`     — local is ahead of the configured upstream by N commits.
+ *                   0 when there is no upstream or they are in sync.
+ *   - `behind`    — local is behind the upstream by N commits.
+ *   - `detached`  — HEAD points at a commit, not a branch.
+ */
+export interface GitStatus {
+  readonly branch: string | null;
+  readonly dirty: boolean;
+  readonly ahead: number;
+  readonly behind: number;
+  readonly detached: boolean;
+}
+
+/** Default cap applied when the caller omits `maxBytes`. 64 KiB is ample for
+ *  the small metadata files (`.git/HEAD`, workspace manifests) the UI reads
+ *  through this channel and still leaves plenty of headroom under the Tauri
+ *  IPC string payload limit. */
+export const READ_TEXT_FILE_DEFAULT_MAX_BYTES = 64 * 1024;
 
 /** Input to `aiSuggest`. Phase 5 only uses `prompt`; `cwd` is reserved for a
  *  later phase where the classifier weighs workspace-relative paths.

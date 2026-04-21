@@ -1,56 +1,47 @@
-/*
- * BlockList — row-range virtualized scroll surface (EPIC-H §4.1).
- *
- * `.scroll` is the scroll container measured by @tanstack/react-virtual.
- * `.inner` holds absolutely-positioned block chrome wrappers; each wrapper
- * anchors to `cellToScreen(startRow, 0).y` via an inline `translateY`.
- *
- * Per EPIC-H §4.1.2, selection across block boundaries is owned by
- * `TerminalCanvas.screenToCell`; the block-chrome wrapper has
- * `pointer-events: none` so click-through to the cell grid is preserved.
- * Interactive parts of the chrome (header, buttons) re-enable pointer events
- * on themselves via `.row > *`.
- */
+/* BlockList — natural flex column scroll surface for command cards. */
+
+.scrollWrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 .scroll {
   position: relative;
   flex: 1 1 auto;
+  /* scrollWrap is the flex parent; scroll grows to fill it */
   min-height: 0;
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--q-space-4);
+  padding: var(--q-space-3) var(--q-space-4) var(--q-space-2) var(--q-space-4);
   background: var(--q-bg);
   scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--q-border-strong) transparent;
 }
-/* Preserve responsiveness when the user prefers reduced motion. */
+.scroll::-webkit-scrollbar { width: 5px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--q-border-strong);
+  border-radius: 3px;
+}
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
 @media (prefers-reduced-motion: reduce) {
   .scroll { scroll-behavior: auto; }
 }
 
 .inner {
-  /*
-   * Switched from absolutely-positioned virtualizer rows to a natural
-   * flex column. The virtualizer math used `rowsForBlock × 16px` to
-   * anchor each card, but BlockCard's real layout (header + padding +
-   * body) routinely renders taller than that prediction, which caused
-   * cards to overlap visually (the user's "겹치는거 다 나오게" report).
-   *
-   * For interactive shells with a handful of cards on screen, a plain
-   * flex column is the right trade-off: simple, correct, and cheap.
-   * Per-card virtualization can return later as a card-height-aware
-   * layout (not row-grid-based) once the PTY-side boundary signals
-   * stabilize.
-   */
   display: flex;
   flex-direction: column;
-  gap: var(--q-space-3); /* 12px gap between cards */
+  gap: 8px;
   width: 100%;
   min-height: 100%;
 }
 
 .row {
-  /* Stacks naturally in the flex column; no absolute positioning. */
   width: 100%;
 }
 
@@ -62,7 +53,7 @@
   gap: var(--q-space-2);
   height: 100%;
   padding: var(--q-space-6);
-  color: var(--q-fg-muted);
+  color: var(--q-fg-faint);
   font-family: var(--q-font-sans);
   font-size: var(--q-font-size-md);
   text-align: center;
@@ -74,4 +65,62 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  opacity: 0.7;
+}
+
+/* Scroll-to-bottom pill — floats above the block list when user scrolls up */
+.scrollDownBtn {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  background: var(--q-bg-elev-3);
+  border: 1px solid var(--q-border-strong);
+  border-radius: 15px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(107, 163, 255, 0.1);
+  cursor: pointer;
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: 12px;
+  white-space: nowrap;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    border-color var(--q-dur-fast) var(--q-ease-out),
+    box-shadow var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+  animation: q-scroll-btn-in 160ms var(--q-ease-out) both;
+}
+.scrollDownBtn:hover,
+.scrollDownBtn:focus-visible {
+  background: rgba(107, 163, 255, 0.12);
+  border-color: var(--q-accent);
+  color: var(--q-fg);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(107, 163, 255, 0.25);
+  outline: none;
+}
+.scrollDownBtn:active {
+  transform: translateX(-50%) translateY(1px);
+}
+
+.scrollDownArrow {
+  font-size: 13px;
+  color: var(--q-accent);
+  line-height: 1;
+}
+.scrollDownLabel {
+  color: inherit;
+}
+
+@keyframes q-scroll-btn-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scrollDownBtn { animation: none; }
 }

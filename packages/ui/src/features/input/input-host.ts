@@ -10,6 +10,7 @@
  * because the file lives under `features/input/`.
  */
 import { createLogger } from '../../shared/lib/logger';
+import { getPlatform as sharedGetPlatform } from '../../shared/lib/platform';
 
 import type { Focus } from './Focus';
 import type { KeyEncoder } from './KeyEncoder';
@@ -63,6 +64,18 @@ export interface InputHostMountOptions {
   clearTimeoutFn?: (handle: unknown) => void;
   /** Optional platform-disconnect signal source for sidecar-restart flow. */
   onSidecarDisconnectSubscribe?: (handler: () => void) => () => void;
+  /**
+   * Optional paste safety gate. When provided, every `paste` event is passed
+   * through this predicate BEFORE the Paste encoder runs. Return `true` to
+   * allow the paste (bytes emitted normally); return a promise that resolves
+   * to `false` to abort. The host always calls `preventDefault()` on the
+   * DOM event so the browser's default behavior is suppressed either way.
+   *
+   * Decoupling the decision is deliberate: the UI layer owns the modal and
+   * the user's choice, the encoder layer only knows about bytes. The
+   * promise contract lets the caller await a user confirmation dialog.
+   */
+  onPasteGate?: (text: string) => boolean | Promise<boolean>;
 }
 
 export interface InputHostHandle {
@@ -74,13 +87,15 @@ export interface InputHostHandle {
   unmount(): void;
 }
 
-/** Auto-detect the platform via `navigator.platform` / `navigator.userAgent`. */
+/**
+ * Auto-detect the platform. Delegates to the shared memoized
+ * `getPlatform()` helper so every call site inside the UI package agrees
+ * on the same answer without each duplicating their own regex. Retained
+ * as a re-export rather than inlined so existing callers (and the
+ * `features/input` barrel) keep compiling.
+ */
 export function detectPlatform(): Platform {
-  if (typeof navigator === 'undefined') return 'linux';
-  const ua = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase();
-  if (ua.includes('mac')) return 'macos';
-  if (ua.includes('win')) return 'windows';
-  return 'linux';
+  return sharedGetPlatform();
 }
 
 function normalizeKey(ev: KeyboardEvent, kind: 'keydown' | 'keyup'): QuantaKeyEvent {
@@ -254,9 +269,33 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
 
   const onPaste = (ev: ClipboardEvent): void => {
     const text = ev.clipboardData?.getData('text') ?? '';
-    const out = opts.paste.encode({ text, length: text.length });
-    if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    // Always suppress the browser default so the gate's async decision
+    // cannot race the native insertion. When there is no gate, we emit
+    // synchronously; with a gate, we await the async decision before
+    // emitting.
     ev.preventDefault();
+    const gate = opts.onPasteGate;
+    if (!gate) {
+      const out = opts.paste.encode({ text, length: text.length });
+      if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+      return;
+    }
+    const decision = gate(text);
+    const emit = (allowed: boolean): void => {
+      if (!allowed) return;
+      const out = opts.paste.encode({ text, length: text.length });
+      if (out.bytes.length > 0) opts.onBytesOut(out.bytes);
+    };
+    if (typeof decision === 'boolean') {
+      emit(decision);
+      return;
+    }
+    // Bug 2 fix: surface gate errors via console.warn so the user knows
+    // the paste was discarded instead of silently dropping it.
+    void decision.then(emit).catch((err) => {
+      log.warn('input-host: paste gate rejected', err);
+      console.warn('[paste-gate] gate threw unexpectedly; paste discarded', err);
+    });
   };
 
   const pointerMouse = (ev: PointerEvent, kind: QuantaMouseEvent['kind']): void => {
@@ -287,6 +326,22 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
   const onWheel = (ev: WheelEvent): void => {
     const cell = screenToCell(ev.clientX, ev.clientY);
     const button: QuantaMouseEvent['button'] = ev.deltaY < 0 ? 'wheel-up' : 'wheel-down';
+    // Approximate a line count for the alt-screen wheel→arrow fallback.
+    // `deltaMode`: 0 = pixels, 1 = lines, 2 = pages. When pixels, divide
+    // by a fixed ~16 px cell-height proxy; the encoder only needs a
+    // rough count to multiply the arrow keystroke. Clamped to [1,10] so
+    // one trackpad burst cannot spew dozens of arrows.
+    const absDelta = Math.abs(ev.deltaY);
+    let lines: number;
+    if (ev.deltaMode === 1) {
+      lines = Math.max(1, Math.floor(absDelta));
+    } else if (ev.deltaMode === 2) {
+      lines = Math.max(1, Math.floor(absDelta * 10));
+    } else {
+      const raw = Math.floor(absDelta / 16);
+      lines = Math.max(1, raw || 1);
+    }
+    if (lines > 10) lines = 10;
     const me: QuantaMouseEvent = {
       xCell: cell.xCell,
       yCell: cell.yCell,
@@ -298,6 +353,7 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
         meta: ev.metaKey,
       },
       kind: 'wheel',
+      wheelLines: lines,
     };
     const out = opts.mouseEncoder.encode(me);
     if (out.bytes.length > 0) opts.onBytesOut(out.bytes);

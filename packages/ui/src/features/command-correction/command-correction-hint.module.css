@@ -1,0 +1,88 @@
+/*
+ * CommandCorrectionHint — styling for the "did you mean `ls`?" row.
+ *
+ * The hint sits just below the BlockCard in the BlockList flow, so it
+ * inherits the list's block-level stacking. It reads as a secondary
+ * affordance: low-contrast background, small type, accent-colored rerun
+ * button to draw the eye for the one action that matters.
+ */
+
+.hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+  margin-top: calc(-1 * var(--q-space-2));
+  margin-bottom: var(--q-space-2);
+  padding: 4px var(--q-space-3);
+  background: rgba(94, 160, 255, 0.06);
+  border: 1px solid rgba(94, 160, 255, 0.22);
+  border-radius: var(--q-radius-sm);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+}
+
+.hint[data-confidence='medium'] {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--q-border-subtle);
+}
+
+.text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.rerunButton {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--q-accent);
+  color: var(--q-accent);
+  padding: 2px var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.rerunButton:hover,
+.rerunButton:focus-visible {
+  background: var(--q-accent);
+  color: var(--q-bg);
+  outline: none;
+}
+
+.dismissButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-md);
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--q-radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.dismissButton:hover,
+.dismissButton:focus-visible {
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  outline: none;
+}

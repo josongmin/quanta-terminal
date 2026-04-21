@@ -202,6 +202,9 @@ function makeBridge(): HostBridge & { resize: ReturnType<typeof vi.fn> } {
     async close() {},
     async cancelBlock() {},
     async notify() {},
+    async readTextFile() {
+      return null;
+    },
     async openInEditor() {},
     async installShellIntegration() {
       return {

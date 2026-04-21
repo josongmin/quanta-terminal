@@ -7,9 +7,19 @@ export type { ClearBlocksResult } from './clear.js';
 export {
   exportBlockAs,
   exportAsMarkdown,
+  exportAsMarkdownSelection,
   exportAsJson,
   exportAsText,
   inferCodeFenceLang,
+  renderBlockPlainText,
   stripAnsi,
 } from './export.js';
-export type { ExportFormat } from './export.js';
+export type { ExportFormat, SelectionRange } from './export.js';
+export {
+  copyBlockAsMarkdown,
+  computeBlockSelectionRange,
+} from './copy-as-markdown.js';
+export type {
+  CopyAsMarkdownOptions,
+  CopyAsMarkdownResult,
+} from './copy-as-markdown.js';

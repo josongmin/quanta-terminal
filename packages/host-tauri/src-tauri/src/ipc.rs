@@ -13,6 +13,8 @@
 //! naming policy covers both planes.
 
 use std::collections::HashMap;
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -133,6 +135,14 @@ pub struct SpawnReply {
     pub session_id: SessionId,
     pub shell: String,
     pub cwd: String,
+    /// `true` when the host kernel is the Linux shim embedded in Windows —
+    /// Windows Subsystem for Linux (WSL 1 or 2). Detected by probing
+    /// `/proc/version` for "Microsoft" / "WSL" tokens; see
+    /// [`crate::embedded_shell::is_wsl_from_proc_version`]. The UI reads this
+    /// to surface a WSL badge on the status bar so users who cross-mount
+    /// Windows drives under `/mnt/` see at a glance which kernel they are
+    /// talking to.
+    pub is_wsl: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -222,6 +232,10 @@ pub async fn quanta_spawn_session(
             session_id,
             shell,
             cwd,
+            // Sidecar path: the sidecar itself runs inside the host kernel,
+            // so WSL detection runs on the Tauri process (same kernel the
+            // sidecar forked from).
+            is_wsl: crate::embedded_shell::is_wsl(),
         });
     }
 
@@ -256,6 +270,7 @@ pub async fn quanta_spawn_session(
             session_id,
             shell,
             cwd,
+            is_wsl: crate::embedded_shell::is_wsl(),
         });
     }
 
@@ -801,6 +816,363 @@ async fn quanta_ai_suggest_impl(
     quanta_ai_suggest_with_provider(args, provider).await
 }
 
+/* -------------------- read_text_file -------------------- */
+
+/// Hard absolute cap on `ReadTextFileArgs::max_bytes`. Callers can request
+/// smaller caps but we refuse to read more than this many bytes in one IPC
+/// round-trip. 64 KiB is ample for tiny metadata files (`.git/HEAD`, config
+/// snippets) while keeping the IPC string payload bounded.
+pub const READ_TEXT_FILE_ABSOLUTE_CAP: u64 = 64 * 1024;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReadTextFileArgs {
+    /// Absolute filesystem path. Relative paths are rejected.
+    pub path: String,
+    /// Caller-supplied byte cap. Clamped to [`READ_TEXT_FILE_ABSOLUTE_CAP`].
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReadTextFileReply {
+    /// UTF-8 contents; `None` when the file does not exist.
+    pub content: Option<String>,
+    /// `true` iff the file did not exist at read time. A caller that polls
+    /// `.git/HEAD` uses this to decide "not a git repo" without a rejection.
+    pub missing: bool,
+    /// `true` iff the on-disk file was larger than the effective cap and we
+    /// returned only the leading bytes.
+    pub truncated: bool,
+}
+
+/// Read a small UTF-8 text file. Used by the UI to enrich the status bar
+/// (branch indicator, etc.) without shelling out. The path is validated
+/// (absolute + no control chars) and the payload is capped at
+/// [`READ_TEXT_FILE_ABSOLUTE_CAP`] regardless of the `max_bytes` argument.
+///
+/// A missing file is NOT an error — callers (e.g. `features/git-branch`)
+/// explicitly poll a path that may or may not exist depending on cwd.
+#[tauri::command]
+pub async fn quanta_read_text_file(
+    args: ReadTextFileArgs,
+) -> Result<ReadTextFileReply, TauriError> {
+    read_text_file_impl(args)
+}
+
+fn read_text_file_impl(args: ReadTextFileArgs) -> Result<ReadTextFileReply, TauriError> {
+    validate_read_path(&args.path).map_err(TauriError::bridge_internal)?;
+
+    let cap = args
+        .max_bytes
+        .map(|n| n.min(READ_TEXT_FILE_ABSOLUTE_CAP))
+        .unwrap_or(READ_TEXT_FILE_ABSOLUTE_CAP)
+        .max(1);
+
+    let path = Path::new(&args.path);
+    let mut file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(ReadTextFileReply {
+                content: None,
+                missing: true,
+                truncated: false,
+            });
+        }
+        Err(err) => {
+            return Err(TauriError::bridge_internal(format!(
+                "read-text-file: open failed ({})",
+                err.kind()
+            )));
+        }
+    };
+
+    // Read up to cap + 1 so we can detect truncation without allocating a
+    // ballooned buffer for enormous files.
+    let to_read = cap.saturating_add(1).min(usize::MAX as u64) as usize;
+    let mut buf = Vec::with_capacity(to_read.min(4096));
+    file.by_ref()
+        .take(to_read as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| {
+            TauriError::bridge_internal(format!("read-text-file: read failed ({})", e.kind()))
+        })?;
+
+    let truncated = buf.len() > cap as usize;
+    if truncated {
+        buf.truncate(cap as usize);
+    }
+    let text = String::from_utf8(buf)
+        .map_err(|_| TauriError::bridge_internal("read-text-file: not valid UTF-8"))?;
+
+    Ok(ReadTextFileReply {
+        content: Some(text),
+        missing: false,
+        truncated,
+    })
+}
+
+/* -------------------- get_home_dir -------------------- */
+
+/// Reply for [`quanta_get_home_dir`]. `path` is `None` when HOME could not
+/// be determined — callers branch on `null` and skip whatever feature
+/// needed it (e.g. shell-history auto-import).
+#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct GetHomeDirReply {
+    pub path: Option<String>,
+}
+
+/// Return the current user's home directory as the OS reports it.
+/// Never rejects — an absent HOME resolves to `{ path: null }`.
+///
+/// Implementation prefers the platform-native lookup (via `std::env::home_dir`
+/// on all platforms) over reading `$HOME` directly so we still answer
+/// correctly in cgroup-jailed environments that strip env vars but keep the
+/// passwd database populated.
+#[tauri::command]
+pub async fn quanta_get_home_dir() -> Result<GetHomeDirReply, TauriError> {
+    Ok(get_home_dir_impl())
+}
+
+fn get_home_dir_impl() -> GetHomeDirReply {
+    #[allow(deprecated)]
+    let path = std::env::home_dir().and_then(|p| p.to_str().map(|s| s.to_string()));
+    GetHomeDirReply { path }
+}
+
+/* -------------------- git_status -------------------- */
+
+/// Hard wall-clock deadline for `git status`. The command is dominated by
+/// the index scan and is reliably sub-second on real repos; 2 s is generous
+/// and keeps the UI responsive if the repo lives on a slow mount or the
+/// user just cancelled a pack operation.
+pub const GIT_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct GitStatusArgs {
+    /// Absolute path to the repo root. MUST contain a `.git` entry (file
+    /// or directory — submodules and worktrees use a `.git` FILE pointing
+    /// at the real gitdir; either form is acceptable).
+    pub repo_root: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct GitStatusReply {
+    pub branch: Option<String>,
+    pub dirty: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub detached: bool,
+}
+
+/// Parsed porcelain-v2 output. Pulled out of the command handler so the
+/// parser can be unit-tested without spawning `git`.
+pub(crate) fn parse_porcelain_v2(stdout: &str) -> GitStatusReply {
+    // Defaults: treat "we couldn't parse anything" as a conservative clean
+    // state with no branch. The UI falls back to the `.git/HEAD` reader for
+    // branch-only when this returns an empty result.
+    let mut branch: Option<String> = None;
+    let mut detached = false;
+    let mut dirty = false;
+    let mut ahead: u32 = 0;
+    let mut behind: u32 = 0;
+
+    for line in stdout.lines() {
+        // Branch / upstream headers are `# branch.<field> <value>`. The
+        // fields we care about:
+        //   # branch.head <name|(detached)>
+        //   # branch.ab +N -M         (only emitted when upstream is set)
+        // Anything else (oid, upstream name) is fine to ignore.
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            let value = rest.trim();
+            if value == "(detached)" {
+                detached = true;
+            } else if !value.is_empty() {
+                branch = Some(value.to_string());
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            // "+3 -1" — tolerate arbitrary whitespace, ignore missing signs.
+            let mut it = rest.split_whitespace();
+            if let Some(tok) = it.next() {
+                ahead = tok.trim_start_matches('+').parse().unwrap_or(0);
+            }
+            if let Some(tok) = it.next() {
+                behind = tok.trim_start_matches('-').parse().unwrap_or(0);
+            }
+            continue;
+        }
+        // Header lines we don't care about start with `# `.
+        if line.starts_with("# ") {
+            continue;
+        }
+        // Any non-header line is a tracked/untracked/unmerged entry.
+        // Porcelain-v2 prefixes:
+        //   "1 " = changed entry (modified / added / etc.)
+        //   "2 " = renamed/copied entry
+        //   "u " = unmerged
+        //   "? " = untracked
+        //   "! " = ignored (we never emit this without --ignored, but
+        //          stay defensive)
+        // Ignored files do NOT make the tree dirty; everything else does.
+        match line.chars().next() {
+            Some('1') | Some('2') | Some('u') | Some('?') => dirty = true,
+            _ => {}
+        }
+    }
+
+    GitStatusReply {
+        branch,
+        dirty,
+        ahead,
+        behind,
+        detached,
+    }
+}
+
+/// Run `git status --porcelain=v2 --branch --no-renames` in `repo_root` and
+/// return a parsed summary, or `None` when the directory is not a git repo
+/// / git is not on PATH / the command timed out.
+///
+/// Pure `std::process::Command` — direct exec, no shell. The only caller-
+/// controlled input (`repo_root`) is passed as a `current_dir`, not as an
+/// argv element, so there is no shell-metacharacter attack surface.
+#[tauri::command]
+pub async fn quanta_git_status(args: GitStatusArgs) -> Result<Option<GitStatusReply>, TauriError> {
+    // Validate on the async thread so we don't block Tokio with the
+    // process spawn.
+    validate_repo_root(&args.repo_root).map_err(TauriError::bridge_internal)?;
+
+    let repo_root = args.repo_root.clone();
+    tokio::task::spawn_blocking(move || run_git_status_blocking(&repo_root))
+        .await
+        .map_err(|e| TauriError::bridge_internal(format!("git-status: join error ({e})")))
+}
+
+/// Blocking body: spawn git, wait with a bounded timeout, parse.
+///
+/// A missing/invalid repo OR git-not-found OR timeout all collapse to
+/// `Ok(None)` — the UI treats them identically as "no extra info for this
+/// cwd". We only ever emit `Err` for genuinely unexpected I/O failures
+/// (OOM during spawn, etc.), which the UI wrapper swallows anyway.
+fn run_git_status_blocking(repo_root: &str) -> Option<GitStatusReply> {
+    use std::process::Stdio;
+
+    // Defense in depth: the repo MUST exist and be a directory. Git would
+    // error out itself, but a pre-check lets us skip the spawn entirely
+    // when the cwd is obviously not a repo.
+    let path = Path::new(repo_root);
+    if !path.is_dir() {
+        return None;
+    }
+    let dot_git = path.join(".git");
+    if !dot_git.exists() {
+        return None;
+    }
+
+    let mut cmd = Command::new("git");
+    // --no-optional-locks keeps git from fighting a concurrent `git gc`
+    // over the `.git/index.lock` — we're read-only, we don't need a write
+    // lock. Plus a couple of belt-and-braces env hygiene flags:
+    //   - GIT_OPTIONAL_LOCKS=0 mirrors the flag for older gits;
+    //   - GIT_TERMINAL_PROMPT=0 prevents a runaway credential prompt on a
+    //     misconfigured repo (unlikely on `status` but cheap to set).
+    cmd.arg("-c")
+        .arg("core.optionalLocks=false")
+        .arg("status")
+        .arg("--porcelain=v2")
+        .arg("--branch")
+        .arg("--no-renames")
+        .current_dir(path)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return None, // git not on PATH — degrade silently.
+    };
+
+    // Busy-wait-with-sleep is ugly but portable and keeps the dependency
+    // surface tiny. The timeout window is 2 s with 25 ms polling, so we
+    // burn at most ~80 polls per call.
+    let deadline = std::time::Instant::now() + GIT_STATUS_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Best-effort kill; on Unix this delivers SIGKILL.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    // At this point the child is reaped; collect stdout.
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(_) => return None,
+    };
+    if !output.status.success() {
+        // "fatal: not a git repository" etc. Treat as no-info.
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Some(parse_porcelain_v2(&stdout))
+}
+
+/// Reject obviously bad repo-root paths at the IPC boundary. Same shape as
+/// `validate_read_path` — absolute, no control chars — plus we additionally
+/// stat the path so a hostile frontend can't push us to spawn `git` in an
+/// unrelated directory (e.g. `/` or a mount we don't own).
+fn validate_repo_root(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("git-status: empty repo_root".into());
+    }
+    for ch in path.chars() {
+        if ch == '\0' || ch == '\n' || ch == '\r' {
+            return Err("git-status: repo_root contains control chars".into());
+        }
+    }
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err("git-status: repo_root must be absolute".into());
+    }
+    Ok(())
+}
+
+/// Reject obviously bad paths at the IPC boundary. We require an absolute
+/// path (no relative-path surprises bound to whatever Tauri's cwd happens to
+/// be) and reject control chars that never appear in legitimate POSIX/NT
+/// paths — consistent with `validate_editor_path` elsewhere in this module.
+fn validate_read_path(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("read-text-file: empty path".into());
+    }
+    for ch in path.chars() {
+        if ch == '\0' || ch == '\n' || ch == '\r' {
+            return Err("read-text-file: path contains control chars".into());
+        }
+    }
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err("read-text-file: path must be absolute".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,6 +1200,203 @@ mod tests {
     fn validate_editor_path_accepts_normal_paths() {
         assert!(validate_editor_path("/tmp/foo.rs").is_ok());
         assert!(validate_editor_path("/Users/alice/Code new/main.ts").is_ok());
+    }
+
+    #[test]
+    fn parse_porcelain_v2_clean_tree_on_branch() {
+        let out = "# branch.oid 1234abcd\n\
+                   # branch.head main\n\
+                   # branch.upstream origin/main\n\
+                   # branch.ab +0 -0\n";
+        let r = parse_porcelain_v2(out);
+        assert_eq!(r.branch.as_deref(), Some("main"));
+        assert!(!r.detached);
+        assert!(!r.dirty);
+        assert_eq!(r.ahead, 0);
+        assert_eq!(r.behind, 0);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_detached_head() {
+        let out = "# branch.oid abcd1234\n\
+                   # branch.head (detached)\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.detached);
+        assert!(r.branch.is_none());
+        assert!(!r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_untracked_makes_tree_dirty() {
+        let out = "# branch.head main\n\
+                   ? src/new-file.rs\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_staged_and_unstaged_are_dirty() {
+        let out = "# branch.head main\n\
+                   1 .M N... 100644 100644 100644 aaa bbb src/foo.rs\n\
+                   1 M. N... 100644 100644 100644 aaa bbb src/bar.rs\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_unmerged_is_dirty() {
+        let out = "# branch.head main\n\
+                   u UU N... 100644 100644 100644 100644 aaa bbb ccc src/conflict.rs\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_rename_entry_is_dirty() {
+        let out = "# branch.head main\n\
+                   2 R. N... 100644 100644 100644 aaa bbb R100 new\tsrc/old\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_ahead_behind() {
+        let out = "# branch.head feature/x\n\
+                   # branch.ab +3 -1\n";
+        let r = parse_porcelain_v2(out);
+        assert_eq!(r.branch.as_deref(), Some("feature/x"));
+        assert_eq!(r.ahead, 3);
+        assert_eq!(r.behind, 1);
+        assert!(!r.dirty);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_ahead_only() {
+        let out = "# branch.head main\n# branch.ab +5 -0\n";
+        let r = parse_porcelain_v2(out);
+        assert_eq!(r.ahead, 5);
+        assert_eq!(r.behind, 0);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_behind_only() {
+        let out = "# branch.head main\n# branch.ab +0 -2\n";
+        let r = parse_porcelain_v2(out);
+        assert_eq!(r.ahead, 0);
+        assert_eq!(r.behind, 2);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_diverged_and_dirty() {
+        let out = "# branch.head main\n\
+                   # branch.ab +2 -3\n\
+                   1 .M N... 100644 100644 100644 aaa bbb src/foo.rs\n\
+                   ? src/new-file.rs\n";
+        let r = parse_porcelain_v2(out);
+        assert!(r.dirty);
+        assert_eq!(r.ahead, 2);
+        assert_eq!(r.behind, 3);
+    }
+
+    #[test]
+    fn parse_porcelain_v2_empty_is_clean() {
+        let r = parse_porcelain_v2("");
+        assert!(r.branch.is_none());
+        assert!(!r.dirty);
+        assert_eq!(r.ahead, 0);
+        assert_eq!(r.behind, 0);
+        assert!(!r.detached);
+    }
+
+    #[test]
+    fn validate_repo_root_rejects_bad_inputs() {
+        assert!(validate_repo_root("").is_err());
+        assert!(validate_repo_root("relative/dir").is_err());
+        assert!(validate_repo_root("/tmp/a\0b").is_err());
+        assert!(validate_repo_root("/tmp/a\nb").is_err());
+        assert!(validate_repo_root("/tmp/ok").is_ok());
+    }
+
+    #[test]
+    fn run_git_status_blocking_returns_none_for_non_repo_dir() {
+        let tmp = std::env::temp_dir().join("quanta-git-status-not-a-repo-xyz");
+        let _ = std::fs::create_dir_all(&tmp);
+        let r = run_git_status_blocking(&tmp.to_string_lossy());
+        assert!(r.is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn run_git_status_blocking_returns_none_for_missing_dir() {
+        let r = run_git_status_blocking("/tmp/quanta-definitely-nonexistent-xyz-789");
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn validate_read_path_rejects_relative_and_control_chars() {
+        assert!(validate_read_path("").is_err());
+        assert!(validate_read_path("relative/path").is_err());
+        assert!(validate_read_path("/tmp/a\0b").is_err());
+        assert!(validate_read_path("/tmp/a\nb").is_err());
+        assert!(validate_read_path("/tmp/ok.txt").is_ok());
+    }
+
+    #[test]
+    fn read_text_file_returns_missing_for_nonexistent_path() {
+        // Use a path that definitely does not exist.
+        let tmp = std::env::temp_dir().join("quanta-nonexistent-xyz-readtest-unique-12345");
+        let reply = read_text_file_impl(ReadTextFileArgs {
+            path: tmp.to_string_lossy().to_string(),
+            max_bytes: None,
+        })
+        .expect("missing file is not an error");
+        assert!(reply.missing);
+        assert!(reply.content.is_none());
+        assert!(!reply.truncated);
+    }
+
+    #[test]
+    fn read_text_file_returns_content_for_small_file() {
+        let tmp = std::env::temp_dir().join("quanta-read-text-file-test.txt");
+        std::fs::write(&tmp, "hello world").unwrap();
+        let reply = read_text_file_impl(ReadTextFileArgs {
+            path: tmp.to_string_lossy().to_string(),
+            max_bytes: Some(1024),
+        })
+        .expect("readable file should succeed");
+        assert!(!reply.missing);
+        assert_eq!(reply.content.as_deref(), Some("hello world"));
+        assert!(!reply.truncated);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn read_text_file_truncates_when_file_exceeds_cap() {
+        let tmp = std::env::temp_dir().join("quanta-read-text-file-cap.txt");
+        std::fs::write(&tmp, "abcdefghij").unwrap();
+        let reply = read_text_file_impl(ReadTextFileArgs {
+            path: tmp.to_string_lossy().to_string(),
+            max_bytes: Some(4),
+        })
+        .expect("cap should apply, not error");
+        assert!(!reply.missing);
+        assert_eq!(reply.content.as_deref(), Some("abcd"));
+        assert!(reply.truncated);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn get_home_dir_impl_returns_something_or_none() {
+        // We can't assume a specific HOME in CI, but the call must never
+        // panic and the result must be well-formed (either a non-empty
+        // string or `None`). This guards against a regression where the
+        // implementation might start to propagate an error on a missing
+        // HOME rather than resolving to `None`.
+        let reply = get_home_dir_impl();
+        match reply.path {
+            Some(s) => assert!(!s.is_empty()),
+            None => {}
+        }
     }
 
     #[test]

@@ -13,19 +13,25 @@
 
 .toast {
   pointer-events: auto;
-  max-width: 480px;
-  padding: 8px 12px;
-  font-family: var(--q-font-mono);
-  font-size: 12px;
+  max-width: 460px;
+  padding: 10px 14px;
+  font-family: var(--q-font-sans);
+  font-size: 12.5px;
   line-height: 16px;
   color: var(--q-fg);
-  background: var(--q-bg);
+  background: var(--q-bg-elev-2);
   border: 1px solid var(--q-border-strong);
-  border-radius: var(--q-radius-sm);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  border-radius: var(--q-radius-md);
+  box-shadow: var(--q-shadow-pop);
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
+  animation: q-toast-in 140ms var(--q-ease-out);
+}
+
+@keyframes q-toast-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .kind-info {

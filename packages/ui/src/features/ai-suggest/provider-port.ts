@@ -15,17 +15,59 @@
  */
 
 import type { AiSuggestion } from '../../entities/ai/index.js';
+import { suggestCorrection } from '../command-correction/index.js';
 
 export interface SuggestRequest {
   readonly prompt: string;
   readonly cwd?: string;
 }
 
+/**
+ * Request payload for `explainError`. Carries the triggering command, a
+ * utf-8 decoded slice of its stdout/stderr, and the exit code so the AI
+ * provider has enough context to explain *why* a non-zero termination
+ * occurred. The output is left to the caller to bound — callers should
+ * truncate to roughly the last ~4kB of text since older output is almost
+ * never load-bearing for an explanation.
+ */
+export interface ExplainErrorRequest {
+  readonly command: string;
+  readonly output: string;
+  readonly exitCode: number;
+}
+
+/**
+ * Returned by `suggestCorrection`. A stub/mock returns an empty array to
+ * signal "nothing useful to suggest" — UIs gate the hint strip on a
+ * non-empty result so a missing provider renders nothing. Callers should
+ * treat the first entry as the preferred suggestion; the rest are
+ * alternates for a multi-chip affordance.
+ */
+export type CorrectionCandidates = readonly string[];
+
 export type SuggestionPort = {
   /** Returns a suggestion for the prompt, or throws. The caller is expected
    *  to log + swallow the error and show an empty bar — the hook does this
    *  so the UI never surfaces a raw stack trace. */
   readonly suggest: (req: SuggestRequest) => Promise<AiSuggestion>;
+
+  /**
+   * Explain a non-zero exit. Stub implementations return a fixed
+   * "AI provider not configured" string so the UI has a sentinel to render
+   * without special-casing "no provider" at the call site. A real provider
+   * wraps the request into a prompt and returns a short markdown paragraph.
+   */
+  readonly explainError: (req: ExplainErrorRequest) => Promise<string>;
+
+  /**
+   * Suggest alternate commands for a "command not found" typo. The port
+   * implementation is a local Levenshtein pass (see `command-correction/`)
+   * and does NOT require a network provider — returning a non-empty array
+   * is still the default even on the mock port. The method is on the port
+   * so a future real provider can augment the list with contextual picks
+   * (e.g. "did you mean `docker ps` — the docker daemon is running").
+   */
+  readonly suggestCorrection: (typoCmd: string) => CorrectionCandidates;
 };
 
 /**
@@ -34,6 +76,11 @@ export type SuggestionPort = {
  * mirrors the mock on the Rust side (crates/quanta-ai/src/adapters/mock_provider.rs)
  * so the two environments report the same tiers for the same prompts.
  */
+/** Sentinel returned by the mock `explainError`. Kept exported so UI tests
+ *  and call sites can assert on the exact string without a magic-constant
+ *  copy. Real providers must NOT return this value. */
+export const EXPLAIN_NOT_CONFIGURED_MESSAGE = 'AI provider not configured';
+
 export function createMockSuggestionPort(): SuggestionPort {
   return {
     suggest: async (req) => {
@@ -53,6 +100,13 @@ export function createMockSuggestionPort(): SuggestionPort {
         rationale: entry.rationale,
         receivedAt: Date.now(),
       };
+    },
+    explainError: async () => EXPLAIN_NOT_CONFIGURED_MESSAGE,
+    // The mock port runs the local Levenshtein corrector so the composer
+    // correction chip works in tests and dev without a real AI provider.
+    suggestCorrection: (typoCmd) => {
+      const result = suggestCorrection({ command: typoCmd, cwd: '', history: [] });
+      return result ? [result.suggested] : [];
     },
   };
 }

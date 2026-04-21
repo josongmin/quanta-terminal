@@ -79,6 +79,9 @@ function makeBridge(spawnResult: Partial<SpawnSessionResult> = {}): ScriptedBrid
         rulesetVersion: 1,
       };
     },
+    async readTextFile() {
+      return null;
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return {

@@ -8,4 +8,4 @@
  */
 
 export { VtEmulator } from './VtEmulator.js';
-export type { VtEmulatorOptions } from './VtEmulator.js';
+export type { RgbColor, VtEmulatorOptions } from './VtEmulator.js';

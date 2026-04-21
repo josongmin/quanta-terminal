@@ -245,7 +245,111 @@ fn default_shell() -> String {
         "/bin/zsh".to_string()
     } else if cfg!(target_os = "windows") {
         "cmd.exe".to_string()
+    } else if is_wsl() {
+        // Running on the Linux kernel shim embedded in Windows: the Linux
+        // branch already picks `/bin/bash`, but we spell out the WSL case
+        // explicitly so future changes (e.g. prefer `wsl.exe bash` to
+        // straddle a Windows-host process) have an obvious seam.
+        "/bin/bash".to_string()
     } else {
         "/bin/bash".to_string()
+    }
+}
+
+/// Detect whether the current Linux kernel is running inside WSL.
+///
+/// WSL1 / WSL2 both surface a `/proc/version` string containing
+/// "Microsoft" (capital M, historical) or "WSL" (lowercase, WSL2+). We
+/// check both — the test harness swaps `/proc/version` for a fixture via
+/// the `QUANTA_WSL_PROC_VERSION_OVERRIDE` env var to exercise this
+/// without a real Microsoft kernel. On non-Linux targets this is a
+/// compile-time false.
+pub fn is_wsl() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+    #[cfg(target_os = "linux")]
+    {
+        is_wsl_from_proc_version(read_wsl_proc_version().as_deref())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_wsl_proc_version() -> Option<String> {
+    // Test-friendly override: when set, tests inject a synthetic version
+    // string so we don't need the real `/proc/version` (which on the CI
+    // runners is always vanilla Linux, never Microsoft).
+    if let Ok(override_text) = std::env::var("QUANTA_WSL_PROC_VERSION_OVERRIDE") {
+        return Some(override_text);
+    }
+    std::fs::read_to_string("/proc/version").ok()
+}
+
+/// Pure detection helper — exported for unit tests. The `version` string is
+/// whatever `/proc/version` would have returned (or a fixture).
+pub fn is_wsl_from_proc_version(version: Option<&str>) -> bool {
+    let Some(v) = version else {
+        return false;
+    };
+    v.contains("Microsoft") || v.contains("microsoft") || v.contains("WSL")
+}
+
+/// Best-effort home directory for the current session.
+///
+/// On WSL the Linux `$HOME` is the preferred launch cwd — it matches user
+/// expectations when they drop into the terminal (code/bash under `~`). The
+/// `/mnt/c/Users/...` fallback is retained for hosts that launch without
+/// `$HOME` (rare but seen on some startup scripts); we probe `USER` /
+/// `USERNAME` to synthesize the Windows home path.
+#[allow(dead_code)]
+pub fn wsl_default_cwd() -> Option<String> {
+    if !is_wsl() {
+        return None;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Some(home);
+        }
+    }
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("USERNAME").ok().filter(|s| !s.is_empty()))?;
+    Some(format!("/mnt/c/Users/{user}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_microsoft_capital_m() {
+        assert!(is_wsl_from_proc_version(Some(
+            "Linux version 5.10.102.1-microsoft-standard-WSL2 (...)"
+        )));
+        assert!(is_wsl_from_proc_version(Some(
+            "Linux version 4.4.0-19041-Microsoft"
+        )));
+    }
+
+    #[test]
+    fn detects_wsl_token() {
+        assert!(is_wsl_from_proc_version(Some(
+            "Linux version 5.15.90.1-WSL2-standard"
+        )));
+    }
+
+    #[test]
+    fn rejects_vanilla_linux() {
+        assert!(!is_wsl_from_proc_version(Some(
+            "Linux version 6.5.0-21-generic (buildd@ubuntu)"
+        )));
+        assert!(!is_wsl_from_proc_version(Some("Linux version 5.10.0-0-arm64")));
+    }
+
+    #[test]
+    fn rejects_missing_file() {
+        assert!(!is_wsl_from_proc_version(None));
     }
 }

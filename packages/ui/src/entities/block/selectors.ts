@@ -85,6 +85,9 @@ export interface BlockHeaderView {
   readonly errorMessage: string | null;
   /** Rerun lineage pointer; the Compare button is gated on this being set. */
   readonly rerunOfId: string | null;
+  /** User-applied tags — empty when the block has none. Included in the
+   *  header view so BlockTagStrip can render without a second subscription. */
+  readonly tags: readonly string[];
 }
 
 export function useBlockHeader(id: string): BlockHeaderView | undefined {
@@ -105,6 +108,7 @@ export function useBlockHeader(id: string): BlockHeaderView | undefined {
         pinned: b.pinned,
         errorMessage: b.errorMessage,
         rerunOfId: b.rerunOfId,
+        tags: b.tags,
       };
     }),
   );
@@ -138,6 +142,17 @@ export function useBlockOutputChunks(id: string): BlockStreamView | undefined {
       };
     }),
   );
+}
+
+/**
+ * O(1) lookup — id of the most recent rerun whose `rerunOfId === id`, or
+ * `undefined` if none. Backed by the store's `rerunChildByParent` index
+ * maintained by `createBlock` / `startBlock` / `clearHistory` /
+ * `hydrateBlocks`, so the read is a single map hit. Replaces the legacy
+ * O(n) scan that every BlockCard previously ran on each store mutation.
+ */
+export function useBlockSuccessor(id: string): string | undefined {
+  return useBlockStore((s) => s.rerunChildByParent[id]);
 }
 
 /**
@@ -187,6 +202,48 @@ export function getRerunLineage(id: string): Block[] {
 /** Stateless helper — same semantics as `getRerunLineage`, taking a snapshot.
  *  Exposed for tests that construct a minimal state fixture without the
  *  Zustand store. */
+/**
+ * Every distinct tag across all blocks, sorted by descending frequency then
+ * alphabetically. Powers the typeahead in the add-tag popover AND the filter
+ * bar suggestions — "show me all blocks with `deploy`" needs the set of
+ * existing tags to propose completions. Returns a readonly list; the caller
+ * treats it as immutable.
+ *
+ * Shallow-compared via `useShallow` so the hook only re-runs when the
+ * frequency-ordered shape actually changes.
+ */
+export function useAllTags(): readonly TagFrequency[] {
+  return useBlockStore(useShallow((s: BlockState) => listAllTagsFromState(s)));
+}
+
+/** Tag plus its occurrence count across the block entity map. */
+export interface TagFrequency {
+  readonly tag: string;
+  readonly count: number;
+}
+
+/** Stateless variant — same contract as `useAllTags`, callable from non-React
+ *  code (keyboard handler, command palette). */
+export function listAllTagsFromState(state: BlockState): readonly TagFrequency[] {
+  const counts = new Map<string, number>();
+  for (const id of state.order) {
+    const b = state.entities[id];
+    if (!b) continue;
+    for (const tag of b.tags) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  const out: TagFrequency[] = [];
+  for (const [tag, count] of counts) out.push({ tag, count });
+  out.sort((a, b) => (b.count - a.count) || a.tag.localeCompare(b.tag));
+  return out;
+}
+
+/** Imperative helper — listAllTags from the live store. */
+export function listAllTags(): readonly TagFrequency[] {
+  return listAllTagsFromState(useBlockStore.getState());
+}
+
 export function getRerunLineageFromState(state: BlockState, id: string): Block[] {
   const head = state.entities[id];
   if (!head) return [];

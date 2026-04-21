@@ -64,11 +64,75 @@ import {
   type InternalSgrStyle,
 } from './types.js';
 
+/**
+ * Module-scoped grapheme segmenter.
+ *
+ * Instantiating `Intl.Segmenter` pulls in ICU grapheme tables — 10-80 µs
+ * per construction on V8. Previously this was allocated inside every
+ * `flushText()` call, meaning a vim-style feed with ~40 CSIs per paint
+ * would construct ~40 Segmenters per PTY chunk and thousands per second
+ * during active editing. Hoisting to module scope makes every emulator
+ * instance share the same table pointer — zero allocations per feed.
+ *
+ * `Intl.Segmenter` is thread-safe and stateless across `.segment()`
+ * calls (returns a fresh iterator each time), so sharing is correct.
+ */
+const GRAPHEME_SEG = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
 export interface VtEmulatorOptions {
   readonly sessionId?: string;
   readonly rows?: number;
   readonly cols?: number;
   readonly onEnvelope: (env: GridEventEnvelope<GridPayload>) => void;
+  /**
+   * Called when the emulator wants to send bytes back to the PTY in response
+   * to a query it consumed. Used for:
+   *   - DSR (CSI 5n / CSI 6n) status / cursor reports.
+   *   - DA (CSI c / CSI >0c) device attribute reports.
+   *   - OSC 10 / OSC 11 `?` fg/bg color queries.
+   * When unset, queries are silently dropped (pre-existing behaviour).
+   */
+  readonly onRespond?: (bytes: Uint8Array) => void;
+  /**
+   * Optional hook called when OSC 7 reports a new working directory. The
+   * parser strips the `file://host/` prefix and passes the decoded path.
+   * Invalid payloads (missing scheme, un-decodable) are dropped — the hook
+   * is only called for successfully parsed values.
+   */
+  readonly onCwdChanged?: (cwd: string) => void;
+  /**
+   * Optional source for the current theme's fg/bg colours, used to answer
+   * OSC 10 / OSC 11 queries. Each component is 0-255. If absent, the
+   * emulator falls back to pure white on pure black — same defaults xterm
+   * would otherwise report.
+   */
+  readonly themeColors?: () => { readonly fg: RgbColor; readonly bg: RgbColor };
+  /** Reported as the "version" field in Secondary DA (`CSI > 0 c` response). */
+  readonly secondaryDaVersion?: number;
+  /**
+   * Optional callback invoked whenever the top-of-stack kitty keyboard flags
+   * change (via `CSI > <flags> u`, `CSI < u`, or `CSI = <flags> u`). Hosts
+   * wire this into `GridMirror.applyMode` so `TerminalModeSnapshot.kittyKeyboard`
+   * stays in sync with what apps have requested from the emulator. When unset,
+   * the emulator still tracks the state internally so query responses remain
+   * correct; only downstream mirrors stay unnotified.
+   */
+  readonly onKittyKeyboardFlagsChanged?: (flags: number) => void;
+  /**
+   * Optional hook fired when a **bare** BEL (0x07) is received in the Ground
+   * state. BEL bytes that terminate OSC / DCS / APC / PM strings do NOT fire
+   * this hook — they are string terminators, not real bells. The host wires
+   * this into the bell store which drives the visual flash and optional
+   * audible beep.
+   */
+  readonly onBell?: () => void;
+}
+
+/** 8-bit-per-channel RGB triple. */
+export interface RgbColor {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
 }
 
 type FsmState =
@@ -93,7 +157,36 @@ const DEFAULT_COLS = 80;
 export class VtEmulator {
   private readonly sessionId: string;
   private readonly onEnvelope: (env: GridEventEnvelope<GridPayload>) => void;
+  private readonly onRespond: ((bytes: Uint8Array) => void) | undefined;
+  private readonly onCwdChanged: ((cwd: string) => void) | undefined;
+  private readonly themeColors:
+    | (() => { readonly fg: RgbColor; readonly bg: RgbColor })
+    | undefined;
+  private readonly secondaryDaVersion: number;
+  private readonly onKittyKeyboardFlagsChanged:
+    | ((flags: number) => void)
+    | undefined;
+  private readonly onBell: (() => void) | undefined;
   private readonly classifier = new DefaultClassifier('narrow');
+
+  /**
+   * Kitty keyboard protocol flags stack.
+   *
+   * Apps push/pop via:
+   *   - `CSI > <flags> u`  → push a new top with `<flags>`.
+   *   - `CSI < [n] u`       → pop `n` (default 1) entries.
+   *   - `CSI = <flags> u`   → set the current top (mode 1 / OR).
+   *   - `CSI = <flags> ; 2 u` → set (replace). `;3` = AND (reset bits).
+   *   - `CSI ? u`           → query: reply `CSI ? <top> u`.
+   *
+   * We initialise with a single `0` entry so queries before any push still
+   * answer (`ESC [ ? 0 u`). xterm / kitty both cap the stack at 10; beyond
+   * that, the oldest entry is dropped. We model the same limit.
+   */
+  private kittyFlagStack: number[] = [0];
+  private static readonly KITTY_STACK_MAX = 10;
+  /** Only the low 5 bits are defined by the kitty spec (flags 1/2/4/8/16). */
+  private static readonly KITTY_FLAG_MASK = 0x1f;
 
   private rows_: number;
   private cols_: number;
@@ -150,6 +243,12 @@ export class VtEmulator {
   constructor(opts: VtEmulatorOptions) {
     this.sessionId = opts.sessionId ?? 'tui-local';
     this.onEnvelope = opts.onEnvelope;
+    this.onRespond = opts.onRespond;
+    this.onCwdChanged = opts.onCwdChanged;
+    this.themeColors = opts.themeColors;
+    this.secondaryDaVersion = opts.secondaryDaVersion ?? 0;
+    this.onKittyKeyboardFlagsChanged = opts.onKittyKeyboardFlagsChanged;
+    this.onBell = opts.onBell;
     this.rows_ = Math.max(1, opts.rows ?? DEFAULT_ROWS);
     this.cols_ = Math.max(1, opts.cols ?? DEFAULT_COLS);
     this.allocateGrid(this.rows_, this.cols_);
@@ -191,15 +290,25 @@ export class VtEmulator {
       const decoded = this.decoder.decode(new Uint8Array(textChunk), { stream: true });
       textChunk = [];
       if (decoded.length === 0) return;
-      for (const { segment } of new Intl.Segmenter(undefined, {
-        granularity: 'grapheme',
-      }).segment(decoded)) {
+      for (const { segment } of GRAPHEME_SEG.segment(decoded)) {
         this.printGrapheme(segment);
       }
     };
 
     for (let i = 0; i < bytes.length; i += 1) {
       const b = bytes[i]!;
+      // After `ESC ( ` (or `) * +`), the very next byte — printable OR
+      // control — is consumed as the charset designator. xterm spec: this
+      // slot is a single G-set designator (e.g. 'B' = ASCII). If the next
+      // byte is a control like LF, a previous implementation would leave
+      // the flag set and silently drop the next printable. Consume here
+      // before the FSM sees the byte.
+      if (this.pendingCharsetSkip && this.state === 'Ground') {
+        // Flush any pending text so printable drops aren't ambiguous.
+        flushText();
+        this.pendingCharsetSkip = false;
+        continue;
+      }
       if (this.state === 'Ground') {
         // Fast path for printable ASCII / UTF-8 continuation bytes.
         if (b >= 0x20 && b !== 0x7f) {
@@ -280,6 +389,9 @@ export class VtEmulator {
     this.oscEscPending = false;
     this.cursorAtFeedStart = { ...this.cursor };
     this.dirtyRows.clear();
+    const hadKittyFlags = this.currentKittyFlags() !== 0;
+    this.kittyFlagStack = [0];
+    if (hadKittyFlags) this.onKittyKeyboardFlagsChanged?.(0);
     this.emitSnapshot();
   }
 
@@ -311,7 +423,17 @@ export class VtEmulator {
         this.state = 'Escape';
         return;
       case BEL:
-        // no-op (BEL is a no-op for the grid; upstream may surface via telemetry)
+        // Bare BEL in Ground state: fire the host-supplied bell hook so the
+        // UI can surface a visual flash / optional beep. BELs that terminate
+        // OSC / DCS / APC / PM strings are handled in stepOsc / stepIgnore
+        // and never reach here — those are string terminators, not bells.
+        if (this.onBell !== undefined) {
+          try {
+            this.onBell();
+          } catch {
+            // Host callback failures must never corrupt parser state.
+          }
+        }
         return;
       case BS:
         this.executeBackspace();
@@ -447,8 +569,9 @@ export class VtEmulator {
   private stepOsc(b: number): void {
     if (this.oscEscPending) {
       if (b === 0x5c) {
-        // ESC \ terminator. We don't act on OSC in this scope.
+        // ESC \ terminator — dispatch any recognised OSC command.
         this.oscEscPending = false;
+        this.dispatchOsc(this.seqBuf);
         this.state = 'Ground';
         this.seqBuf = '';
         return;
@@ -458,6 +581,7 @@ export class VtEmulator {
       this.seqBuf += '\x1b';
     }
     if (b === BEL) {
+      this.dispatchOsc(this.seqBuf);
       this.state = 'Ground';
       this.seqBuf = '';
       return;
@@ -470,6 +594,89 @@ export class VtEmulator {
     if (this.seqBuf.length < 4096) {
       this.seqBuf += String.fromCharCode(b);
     }
+  }
+
+  /**
+   * Handle a complete OSC payload (the bytes between `ESC ]` and the
+   * terminator). We recognise:
+   *   - OSC 7 — working-directory report (`file://host/path`)
+   *   - OSC 10 — fg color: `?` queries, everything else dropped
+   *   - OSC 11 — bg color: `?` queries, everything else dropped
+   * Unknown or malformed commands are silently ignored; this matches real
+   * xterm's tolerance for other emitters' OSC payloads.
+   */
+  private dispatchOsc(payload: string): void {
+    if (payload.length === 0) return;
+    // Command is the digit run before the first `;`. Anything else (e.g.
+    // `OSC 8;id=..;url`) is delegated to a per-command branch.
+    const semi = payload.indexOf(';');
+    const cmdRaw = semi === -1 ? payload : payload.slice(0, semi);
+    const rest = semi === -1 ? '' : payload.slice(semi + 1);
+    const cmd = parseInt(cmdRaw, 10);
+    if (!Number.isFinite(cmd)) return;
+    switch (cmd) {
+      case 7:
+        this.handleOscCwd(rest);
+        return;
+      case 10:
+        this.handleOscColorQuery(rest, 'fg');
+        return;
+      case 11:
+        this.handleOscColorQuery(rest, 'bg');
+        return;
+      default:
+        return;
+    }
+  }
+
+  /**
+   * OSC 7 payload is `file://<host>/<path>`. We tolerate an empty host
+   * (`file:///Users/...`) and percent-decode the path. Payloads without
+   * the `file://` scheme are treated as raw paths for friendliness with
+   * test fixtures but REAL shells always emit the scheme form. If decoding
+   * throws (malformed %-escape), we drop.
+   */
+  private handleOscCwd(raw: string): void {
+    if (this.onCwdChanged === undefined) return;
+    if (raw.length === 0) return;
+    let path: string | null = null;
+    if (raw.startsWith('file://')) {
+      const afterScheme = raw.slice('file://'.length);
+      // host ends at the first `/`; anything before is the host portion
+      // (often empty for local paths).
+      const slash = afterScheme.indexOf('/');
+      const hostAndPath = slash === -1 ? '' : afterScheme.slice(slash);
+      if (hostAndPath.length === 0) return;
+      try {
+        path = decodeURIComponent(hostAndPath);
+      } catch {
+        return;
+      }
+    } else {
+      // Non-conformant payload — drop so a misconfigured shell doesn't set
+      // a nonsense cwd. Real emitters always ship the scheme.
+      return;
+    }
+    if (path === null || path.length === 0) return;
+    this.onCwdChanged(path);
+  }
+
+  /** OSC 10/11 color query — only `?` is acted on; setters are ignored. */
+  private handleOscColorQuery(raw: string, which: 'fg' | 'bg'): void {
+    if (raw !== '?') return;
+    if (this.onRespond === undefined) return;
+    const colours = this.themeColors?.() ?? {
+      fg: { r: 0xff, g: 0xff, b: 0xff },
+      bg: { r: 0x00, g: 0x00, b: 0x00 },
+    };
+    const c = which === 'fg' ? colours.fg : colours.bg;
+    const cmd = which === 'fg' ? '10' : '11';
+    const hex = (n: number): string =>
+      Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0');
+    // Standard xterm response: `ESC ] <cmd> ; rgb:RR/GG/BB BEL`. We use the
+    // two-digit form which xterm / vte accept without complaint.
+    const reply = `\x1b]${cmd};rgb:${hex(c.r)}/${hex(c.g)}/${hex(c.b)}\x07`;
+    this.onRespond(new TextEncoder().encode(reply));
   }
 
   private stepIgnore(b: number): void {
@@ -520,7 +727,14 @@ export class VtEmulator {
     if (priv === '?') {
       if (final === 'h') this.executeDecSet(params, true);
       else if (final === 'l') this.executeDecSet(params, false);
+      else if (final === 'u') this.executeKittyQuery();
       // Unknown DEC private command → drop.
+      return;
+    }
+    // Kitty keyboard protocol push/pop/set (`CSI > <flags> u`, `CSI < [n] u`,
+    // `CSI = <flags> [; <mode>] u`). DECRC is `CSI u` with no private byte.
+    if (final === 'u' && (priv === '>' || priv === '<' || priv === '=')) {
+      this.executeKittyFlagsOp(priv, params);
       return;
     }
     switch (final) {
@@ -596,15 +810,135 @@ export class VtEmulator {
         this.executeRestore();
         return;
       case 'n':
-        // Device status report — we don't write back to PTY, so no-op.
+        this.executeDsr(params);
         return;
       case 'c':
-        // Device attributes — no reply surface.
+        this.executeDa(priv, params);
         return;
       default:
         // Unknown / out-of-scope — silently drop.
         return;
     }
+  }
+
+  /* ------------------------- Query responses ------------------------- */
+
+  /**
+   * DSR (Device Status Report).
+   *   - `CSI 5 n` — report status. Reply `CSI 0 n` (ready).
+   *   - `CSI 6 n` — report cursor position. Reply `CSI <row>;<col> R` with
+   *     1-indexed values, matching xterm / ECMA-48. When the `?` private
+   *     marker is present the reply would use `CSI ? <row>;<col> R`; we don't
+   *     model DECORD so we always reply with the non-private form.
+   *
+   * All responses require `onRespond` to be wired; silent no-op otherwise.
+   */
+  private executeDsr(params: readonly number[]): void {
+    if (this.onRespond === undefined) return;
+    const mode = params[0] ?? 0;
+    if (mode === 5) {
+      this.onRespond(new TextEncoder().encode('\x1b[0n'));
+      return;
+    }
+    if (mode === 6) {
+      const row = (this.cursor.row | 0) + 1;
+      const col = (this.cursor.col | 0) + 1;
+      this.onRespond(new TextEncoder().encode(`\x1b[${row};${col}R`));
+      return;
+    }
+    // Other DSR variants are out of scope.
+  }
+
+  /**
+   * DA (Device Attributes).
+   *   - `CSI c` / `CSI 0 c` → Primary DA. Reply `CSI ? 1 ; 2 c`
+   *     (VT100 with advanced video option — same as xterm's default).
+   *   - `CSI > 0 c` / `CSI > c` → Secondary DA. Reply
+   *     `CSI > 0 ; <version> ; 0 c` where `<version>` defaults to 0 and can
+   *     be overridden via `secondaryDaVersion`.
+   *
+   * Tertiary DA (`CSI = c`) and any other private variants are dropped.
+   */
+  private executeDa(priv: string, params: readonly number[]): void {
+    if (this.onRespond === undefined) return;
+    const first = params[0] ?? 0;
+    if (priv === '' && first === 0) {
+      this.onRespond(new TextEncoder().encode('\x1b[?1;2c'));
+      return;
+    }
+    if (priv === '>' && first === 0) {
+      const v = Math.max(0, this.secondaryDaVersion | 0);
+      this.onRespond(new TextEncoder().encode(`\x1b[>0;${v};0c`));
+      return;
+    }
+    // Unknown / tertiary — drop.
+  }
+
+  /* ------------------------- Kitty keyboard flags ------------------------- */
+
+  /**
+   * `CSI ? u` — report the flags on the top of the stack. When the stack is
+   * empty (should never happen — we seed with `0`) we answer with `0` so
+   * well-behaved apps don't spin. Silently dropped if `onRespond` is unset,
+   * mirroring DSR / DA behaviour.
+   */
+  private executeKittyQuery(): void {
+    if (this.onRespond === undefined) return;
+    const top = this.currentKittyFlags();
+    this.onRespond(new TextEncoder().encode(`\x1b[?${top}u`));
+  }
+
+  /**
+   * Dispatches the three "mutation" forms of `CSI u`:
+   *
+   *   - `CSI > <flags> u`   push a new top (stack grows by 1)
+   *   - `CSI < [n] u`       pop `n` (default 1) top entries
+   *   - `CSI = <flags> u`   set the current top (mode 1 = OR the bits in)
+   *   - `CSI = <flags> ; 2 u`  set (replace top exactly)
+   *   - `CSI = <flags> ; 3 u`  clear (AND-NOT the bits from top)
+   *
+   * We keep a bounded stack (`KITTY_STACK_MAX`) — extra pushes drop the
+   * oldest entry, matching both xterm and kitty behaviour under deep
+   * nesting. Flags are masked to the 5 bits defined by the spec; higher
+   * bits are tolerated on input but lost on echo.
+   */
+  private executeKittyFlagsOp(priv: string, params: readonly number[]): void {
+    const prev = this.currentKittyFlags();
+    if (priv === '>') {
+      const flags = (params[0] ?? 0) & VtEmulator.KITTY_FLAG_MASK;
+      this.kittyFlagStack.push(flags);
+      // Cap stack depth — drop oldest on overflow so memory stays bounded.
+      if (this.kittyFlagStack.length > VtEmulator.KITTY_STACK_MAX) {
+        this.kittyFlagStack.shift();
+      }
+    } else if (priv === '<') {
+      const n = Math.max(1, params[0] ?? 1);
+      for (let i = 0; i < n; i++) {
+        if (this.kittyFlagStack.length > 1) this.kittyFlagStack.pop();
+        else this.kittyFlagStack[0] = 0;
+      }
+    } else if (priv === '=') {
+      const flags = (params[0] ?? 0) & VtEmulator.KITTY_FLAG_MASK;
+      const mode = params[1] ?? 1;
+      const top = this.currentKittyFlags();
+      let next: number;
+      if (mode === 2) next = flags;
+      else if (mode === 3) next = top & ~flags & VtEmulator.KITTY_FLAG_MASK;
+      else next = (top | flags) & VtEmulator.KITTY_FLAG_MASK; // mode 1 / default — OR
+      const idx = this.kittyFlagStack.length - 1;
+      this.kittyFlagStack[idx >= 0 ? idx : 0] = next;
+      if (this.kittyFlagStack.length === 0) this.kittyFlagStack.push(next);
+    }
+    const nowTop = this.currentKittyFlags();
+    if (nowTop !== prev) {
+      this.onKittyKeyboardFlagsChanged?.(nowTop);
+    }
+  }
+
+  /** Convenience — current top-of-stack flags (always defined thanks to seed). */
+  private currentKittyFlags(): number {
+    if (this.kittyFlagStack.length === 0) return 0;
+    return this.kittyFlagStack[this.kittyFlagStack.length - 1] ?? 0;
   }
 
   /* ------------------------- Control byte ops ------------------------- */
@@ -655,8 +989,12 @@ export class VtEmulator {
   /* ------------------------- Text printing ------------------------- */
 
   private printGrapheme(g: string): void {
+    // `pendingCharsetSkip` is now consumed at the feed() top-level loop so
+    // control bytes (LF/HT/etc.) between `ESC (` and the designator byte
+    // don't leave the flag set and drop the next printable. Keep a
+    // defensive check here in case the flag is set via a path that
+    // reaches printGrapheme directly — still swallow one grapheme.
     if (this.pendingCharsetSkip) {
-      // Consume exactly one byte/grapheme as the charset designator arg.
       this.pendingCharsetSkip = false;
       return;
     }
@@ -860,8 +1198,22 @@ export class VtEmulator {
   private eraseRowRange(row: number, fromCol: number, toCol: number): void {
     const rowArr = this.grid[row];
     if (!rowArr) return;
-    const start = Math.max(0, fromCol);
-    const end = Math.min(this.cols_ - 1, toCol);
+    let start = Math.max(0, fromCol);
+    let end = Math.min(this.cols_ - 1, toCol);
+    if (start > end) return;
+    // Wide-char invariant: a 2-col grapheme is stored as
+    //   [col]  { width: 2, grapheme: 'X' }   (leader)
+    //   [col+1]{ width: 0, grapheme: '' }    (trailer)
+    // Erasing only one half would leave a half-wide ghost. Expand the
+    // range outward when a boundary splits a wide-char pair.
+    if (start > 0 && rowArr[start]?.width === 0) {
+      // `start` points at a trailer — include its leader one column left.
+      start -= 1;
+    }
+    if (end < this.cols_ - 1 && rowArr[end]?.width === 2) {
+      // `end` points at a leader — include its trailer one column right.
+      end += 1;
+    }
     for (let c = start; c <= end; c += 1) {
       rowArr[c] = blankCellWithSgr(this.sgr);
     }
@@ -994,9 +1346,16 @@ export class VtEmulator {
   /* ------------------------- Scroll region ------------------------- */
 
   private executeDecstbm(topParam: number | undefined, bottomParam: number | undefined): void {
-    const top = (topParam ?? 1) - 1;
-    const bottom = (bottomParam ?? this.rows_) - 1;
-    if (top >= 0 && bottom < this.rows_ && top < bottom) {
+    // Per xterm spec: parameter value 0 means "default". DECSTBM's defaults
+    // are top=1 (first row) and bottom=rows (last row). Handling 0 here
+    // keeps `CSI 0;24 r` working — it should set the full-screen region
+    // on a 24-row terminal, not collapse to an invalid negative-top state.
+    const topRaw = topParam === undefined || topParam === 0 ? 1 : topParam;
+    const bottomRaw =
+      bottomParam === undefined || bottomParam === 0 ? this.rows_ : bottomParam;
+    const top = topRaw - 1;
+    const bottom = bottomRaw - 1;
+    if (top >= 0 && bottom < this.rows_ && top <= bottom) {
       this.scrollRegion = { top, bottom };
     } else {
       // Invalid values — reset to full screen.
@@ -1011,10 +1370,14 @@ export class VtEmulator {
   /* ------------------------- Save / restore ------------------------- */
 
   private executeSave(): void {
+    // Per xterm spec (DECSC): saves cursor position, SGR attributes,
+    // charset state, wrap flag (DECAWM), and origin mode. The scroll
+    // region is NOT saved — restoring it would violate xterm semantics
+    // and break apps like vim that DECSTBM between DECSC/DECRC pairs.
     this.savedState = {
       cursor: { ...this.cursor },
       sgr: { ...this.sgr },
-      scrollRegion: { ...this.scrollRegion },
+      autoWrap: this.autoWrap,
     };
   }
 
@@ -1027,7 +1390,7 @@ export class VtEmulator {
     }
     this.cursor = { ...this.savedState.cursor };
     this.sgr = { ...this.savedState.sgr };
-    this.scrollRegion = { ...this.savedState.scrollRegion };
+    this.autoWrap = this.savedState.autoWrap;
   }
 
   /* ------------------------- DEC private modes ------------------------- */
@@ -1318,12 +1681,41 @@ function parseExtendedColor(
     return { color: { kind: 'indexed', index: clamp255(n) }, consumed: 2 };
   }
   if (mode === 2) {
+    // Two wire forms are observed in the wild:
+    //   4-arg: `CSI 38;2;r;g;b m`  (xterm, most emitters)
+    //   5-arg: `CSI 38;2;cs;r;g;b m` (konsole, older vim patches —
+    //     `cs` is a colorspace id that nobody actually consumes)
+    //
+    // Also: when an emitter uses colon subparams `CSI 38:2::r:g:b m`
+    // our CSI parser (stepCsi L438) folds `:` into `;`. The ECMA-48 /
+    // ITU-T T.416 colon form carries an empty "colorspace" slot between
+    // `2` and `r`, which after collapse becomes `[38, 2, 0, r, g, b]`
+    // — indistinguishable from the 5-arg semicolon form. So the same
+    // heuristic handles both.
+    //
+    // Heuristic: if at least 5 params follow (`mode, a, b, c, d` after `i`),
+    // try the 5-arg form first (skip the colorspace). If only 4 follow,
+    // use them directly as r/g/b.
+    const avail = params.length - i - 1;
+    if (avail >= 5) {
+      // 5-arg form: skip [i+1] (colorspace), use [i+2..i+4] as r/g/b.
+      const r = params[i + 2];
+      const g = params[i + 3];
+      const b = params[i + 4];
+      if (r === undefined || g === undefined || b === undefined) {
+        return { color: undefined, consumed: 1 };
+      }
+      return {
+        color: { kind: 'rgb', r: clamp255(r), g: clamp255(g), b: clamp255(b) },
+        consumed: 5,
+      };
+    }
     const r = params[i + 1];
     const g = params[i + 2];
     const b = params[i + 3];
     if (r === undefined || g === undefined || b === undefined) {
-      const avail = [r, g, b].filter((x) => x !== undefined).length;
-      return { color: undefined, consumed: 1 + avail };
+      const a = [r, g, b].filter((x) => x !== undefined).length;
+      return { color: undefined, consumed: 1 + a };
     }
     return {
       color: { kind: 'rgb', r: clamp255(r), g: clamp255(g), b: clamp255(b) },

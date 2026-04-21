@@ -92,6 +92,15 @@ export class AnsiParser {
    * without racing the parser.
    */
   public onMode?: (ev: AnsiModeEvent) => void;
+  /**
+   * Optional hook fired when a **bare** BEL (0x07) is seen in Ground state.
+   * BELs that terminate OSC / DCS / APC / PM strings do NOT fire this hook —
+   * those are string terminators, not bells (see stepOsc / stepIgnore).
+   *
+   * Additive and backwards-compatible: when unset the parser still drops the
+   * BEL silently, preserving historical behaviour.
+   */
+  public onBell?: () => void;
 
   feed(bytes: Uint8Array): AnsiSpan[] {
     const out: AnsiSpan[] = [];
@@ -161,7 +170,17 @@ export class AnsiParser {
       return;
     }
     if (b === BEL) {
-      // Bell is dropped. Some programs emit it inside prompts; we don't chime.
+      // Bare BEL in Ground — surface via the optional `onBell` side channel
+      // (features/bell wires this into the bell store). When unset we drop
+      // silently, matching pre-bell-hook behaviour. BEL inside OSC / DCS is
+      // a string terminator and is handled in stepOsc / stepIgnore.
+      if (this.onBell) {
+        try {
+          this.onBell();
+        } catch {
+          // Never let host callback failure corrupt parser state.
+        }
+      }
       return;
     }
     if (b === BS) {

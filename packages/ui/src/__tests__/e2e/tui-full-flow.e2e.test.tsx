@@ -211,6 +211,9 @@ function makeBridge(): FakeBridge {
       };
     },
     async notify() {},
+    async readTextFile() {
+      return null;
+    },
     async aiSuggest() {
       return {
         id: 'stub',

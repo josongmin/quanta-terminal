@@ -16,6 +16,8 @@ import type { SuggestionPort } from '../provider-port.js';
 function makePort(overrides: Partial<SuggestionPort> = {}): SuggestionPort {
   return {
     suggest: overrides.suggest ?? (async (req) => sample(req.prompt)),
+    explainError: overrides.explainError ?? (async () => 'AI provider not configured'),
+    suggestCorrection: overrides.suggestCorrection ?? (() => []),
   };
 }
 
@@ -64,7 +66,7 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('debounces multiple keystrokes into one call', async () => {
     const suggest = vi.fn().mockImplementation(async (req: { prompt: string }) => sample(req.prompt));
-    const port: SuggestionPort = { suggest };
+    const port: SuggestionPort = makePort({ suggest });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 100 }));
     act(() => {
       result.current.setPrompt('a');
@@ -83,7 +85,7 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('empty prompt clears the suggestion without calling the port', async () => {
     const suggest = vi.fn();
-    const port: SuggestionPort = { suggest };
+    const port: SuggestionPort = makePort({ suggest });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 0 }));
     act(() => {
       result.current.setPrompt('   ');
@@ -105,7 +107,7 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('surfaces provider errors on the hook state', async () => {
     const boom = new Error('nope');
-    const port: SuggestionPort = { suggest: async () => { throw boom; } };
+    const port: SuggestionPort = makePort({ suggest: async () => { throw boom; } });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 0 }));
     await act(async () => {
       result.current.setPrompt('err');
@@ -119,12 +121,12 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('clear() cancels in-flight requests', async () => {
     let resolveIt: ((v: AiSuggestion) => void) | null = null;
-    const port: SuggestionPort = {
+    const port: SuggestionPort = makePort({
       suggest: async () =>
         new Promise<AiSuggestion>((resolve) => {
           resolveIt = resolve;
         }),
-    };
+    });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 0 }));
     act(() => {
       result.current.setPrompt('slow');
@@ -145,12 +147,12 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('only commits the latest request when two are in flight', async () => {
     const pending: Array<(v: AiSuggestion) => void> = [];
-    const port: SuggestionPort = {
+    const port: SuggestionPort = makePort({
       suggest: async () =>
         new Promise<AiSuggestion>((resolve) => {
           pending.push(resolve);
         }),
-    };
+    });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 0 }));
     act(() => {
       result.current.setPrompt('one');
@@ -182,7 +184,7 @@ describe('features/ai-suggest useSuggest', () => {
 
   it('forwards cwd to the provider when provided', async () => {
     const suggest = vi.fn().mockImplementation(async () => sample('ok'));
-    const port: SuggestionPort = { suggest };
+    const port: SuggestionPort = makePort({ suggest });
     const { result } = renderHook(() => useSuggest({ port, debounceMs: 0, cwd: '/tmp/work' }));
     await act(async () => {
       result.current.setPrompt('hi');

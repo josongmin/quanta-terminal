@@ -1,5 +1,4 @@
-/* CommandPalette — centered modal at 680px wide with backdrop blur.
-   Everything inside obeys the motion tokens; no magic numbers in the JSX. */
+/* CommandPalette — Spotlight-style modal. Glassmorphism panel, spring pop-in. */
 
 .backdrop {
   position: fixed;
@@ -7,10 +6,10 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 12vh;
+  padding-top: 10vh;
   background: var(--q-overlay-bg);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: var(--q-glass-blur);
+  -webkit-backdrop-filter: var(--q-glass-blur);
   z-index: 100;
   animation: q-palette-backdrop-in var(--q-dur-fast) var(--q-ease-out);
 }
@@ -18,13 +17,15 @@
 .panel {
   width: 100%;
   max-width: var(--q-palette-width);
-  background: color-mix(in srgb, var(--q-bg-elev-2) 90%, transparent);
-  border: 1px solid var(--q-border-strong);
+  background: var(--q-palette-bg);
+  backdrop-filter: var(--q-palette-backdrop);
+  -webkit-backdrop-filter: var(--q-palette-backdrop);
+  border: 1px solid var(--q-palette-border);
   border-radius: var(--q-palette-radius);
-  box-shadow: var(--q-shadow-overlay);
+  box-shadow: var(--q-palette-shadow), var(--q-shadow-inset-top);
   overflow: hidden;
   transform-origin: center top;
-  animation: q-palette-panel-in var(--q-dur-med) var(--q-ease-standard);
+  animation: q-palette-panel-in var(--q-dur-med) var(--q-ease-spring);
 }
 
 @keyframes q-palette-backdrop-in {
@@ -32,7 +33,7 @@
   to   { opacity: 1; }
 }
 @keyframes q-palette-panel-in {
-  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
+  from { opacity: 0; transform: translateY(-6px) scale(0.975); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -43,15 +44,17 @@
   display: flex;
   align-items: center;
   gap: var(--q-space-3);
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--q-border-subtle);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--q-palette-border);
+  background: transparent;
 }
 
 .inputIcon {
   color: var(--q-fg-muted);
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .input {
@@ -64,28 +67,45 @@
   color: var(--q-fg);
   font-family: var(--q-font-sans);
   font-size: 15px;
-  line-height: 1.3;
+  line-height: 1.4;
   caret-color: var(--q-accent);
 }
-.input::placeholder { color: var(--q-fg-muted); }
+.input::placeholder { color: var(--q-fg-faint); }
 
 .results {
-  max-height: 60vh;
+  max-height: 58vh;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 6px 0 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--q-border-strong) transparent;
+}
+.results::-webkit-scrollbar { width: 4px; }
+.results::-webkit-scrollbar-thumb {
+  background: var(--q-border-strong);
+  border-radius: 2px;
 }
 
 .section { padding: 4px 0; }
 
 .sectionHeader {
-  padding: 6px 16px 4px 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px 4px 18px;
   color: var(--q-fg-faint);
   font-family: var(--q-font-sans);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   user-select: none;
+}
+.sectionHeader::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--q-border-subtle);
+  opacity: 0.6;
 }
 
 .sectionList {
@@ -98,20 +118,26 @@
   display: flex;
   align-items: center;
   gap: var(--q-space-3);
-  height: 48px;
-  padding: 0 16px;
+  height: 44px;
+  padding: 0 18px;
   cursor: pointer;
   color: var(--q-fg);
   border-left: 2px solid transparent;
   transition:
     background var(--q-dur-fast) var(--q-ease-out),
     border-color var(--q-dur-fast) var(--q-ease-out);
+  position: relative;
 }
 
-.row:hover,
-.rowActive {
-  background: rgba(255, 255, 255, 0.04);
+.row:hover {
+  background: var(--q-palette-item-hover);
   border-left-color: var(--q-accent);
+}
+
+.rowActive {
+  background: var(--q-palette-item-active);
+  border-left-color: var(--q-accent);
+  box-shadow: var(--q-glow-accent-soft);
 }
 
 .rowMain {
@@ -131,27 +157,28 @@
 
 .rowDescription {
   font-family: var(--q-font-sans);
-  font-size: 12px;
-  color: var(--q-fg-muted);
+  font-size: 11.5px;
+  color: var(--q-fg-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .rowHint {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   flex: 0 0 auto;
 }
 
 .empty {
-  padding: 24px 16px;
+  padding: 28px 18px;
   text-align: center;
-  color: var(--q-fg-muted);
+  color: var(--q-fg-faint);
   font-family: var(--q-font-sans);
   font-size: var(--q-font-size-md);
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   gap: 6px;

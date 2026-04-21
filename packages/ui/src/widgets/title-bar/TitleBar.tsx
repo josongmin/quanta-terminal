@@ -18,6 +18,7 @@
 import type { ReactNode } from 'react';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { useSessionStore } from '../../entities/session/index.js';
+import { formatShortcutHint } from '../../shared/lib/keymap.js';
 import { t } from '../../shared/i18n/index.js';
 import styles from './title-bar.module.css';
 
@@ -39,15 +40,16 @@ export function TitleBar(props: TitleBarProps) {
   return (
     <header className={styles.bar} role="banner" aria-label={t('titleBar.region')}>
       <div className={styles.left}>
+        <span className={styles.brandIcon} aria-hidden>▲</span>
         <strong className={styles.brand}>Quanta</strong>
-        <span className={styles.sep} aria-hidden>
-          ·
+        <span className={styles.cwd} title={cwd || ''}>
+          {shell ? shortenCwd(cwd) : t('titleBar.booting')}
         </span>
-        <span className={styles.subtle}>{shell ? shortenCwd(cwd) : t('titleBar.booting')}</span>
       </div>
-      <div className={styles.center} aria-hidden />
-      <div className={styles.right}>
+      <div className={styles.center}>
         {rightSlot}
+      </div>
+      <div className={styles.right}>
         <button
           type="button"
           className={styles.paletteHint}
@@ -55,8 +57,8 @@ export function TitleBar(props: TitleBarProps) {
           aria-label={t('titleBar.openPalette')}
           title={t('titleBar.openPalette')}
         >
-          <Kbd>⌘</Kbd>
-          <Kbd>K</Kbd>
+          <span className={styles.paletteHintLabel}>Command Palette</span>
+          <Kbd>{formatShortcutHint('mod+k')}</Kbd>
         </button>
       </div>
     </header>

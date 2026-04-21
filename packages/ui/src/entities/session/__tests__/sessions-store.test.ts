@@ -209,6 +209,42 @@ describe('reorderSessions', () => {
   });
 });
 
+describe('isWsl flag plumbing', () => {
+  it('defaults to false when the seed omits isWsl', () => {
+    useSessionsStore.getState().addSession({ id: A, shell: '/bin/bash' });
+    expect(useSessionsStore.getState().entities[A]?.isWsl).toBe(false);
+    expect(useSessionStore.getState().isWsl).toBe(false);
+  });
+
+  it('propagates a WSL seed into the singular mirror', () => {
+    useSessionsStore.getState().addSession({
+      id: A,
+      shell: '/bin/bash',
+      cwd: '/home/me',
+      health: 'ready',
+      isWsl: true,
+    });
+    expect(useSessionsStore.getState().entities[A]?.isWsl).toBe(true);
+    expect(useSessionStore.getState().isWsl).toBe(true);
+  });
+
+  it('flips back to false when the mirror switches to a non-WSL active session', () => {
+    const coll = useSessionsStore.getState();
+    coll.addSession({ id: A, shell: '/bin/bash', isWsl: true });
+    coll.addSession({ id: B, shell: '/bin/zsh', isWsl: false });
+    expect(useSessionStore.getState().isWsl).toBe(true);
+    coll.setActive(B);
+    expect(useSessionStore.getState().isWsl).toBe(false);
+  });
+
+  it('can be patched in later via patchSession', () => {
+    useSessionsStore.getState().addSession({ id: A });
+    expect(useSessionStore.getState().isWsl).toBe(false);
+    useSessionsStore.getState().patchSession(A, { isWsl: true });
+    expect(useSessionStore.getState().isWsl).toBe(true);
+  });
+});
+
 describe('audit P1 (fix 3): bindSessionRemovalHook', () => {
   let unbind: (() => void) | undefined;
   afterEach(() => {

@@ -64,6 +64,9 @@ function makeBridge(): FakeBridge {
       };
     },
     async notify() {},
+    async readTextFile() {
+      return null;
+    },
     async aiSuggest() {
       return {
         id: 'stub',
@@ -616,6 +619,61 @@ describe('<TuiInputSurface />', () => {
     expect(bridge.writes.length).toBe(0);
   });
 
+  it('alt-screen wheel-up (tracking off) synthesizes ESC [ A arrow bytes', () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    act(() => {
+      const ev = new WheelEvent('wheel', {
+        bubbles: true,
+        deltaY: -32, // ~2 lines at the 16 px/cell proxy
+        deltaMode: 0,
+      });
+      surface.dispatchEvent(ev);
+    });
+    expect(bytesOut.length).toBe(1);
+    // ESC [ A ×2 = 1b5b41 1b5b41
+    expect(toHex(bytesOut)).toBe('1b5b411b5b41');
+  });
+
+  it('alt-screen wheel-down (tracking off) synthesizes ESC [ B arrow bytes', () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    act(() => {
+      const ev = new WheelEvent('wheel', {
+        bubbles: true,
+        deltaY: 16, // ~1 line
+        deltaMode: 0,
+      });
+      surface.dispatchEvent(ev);
+    });
+    expect(bytesOut.length).toBe(1);
+    expect(toHex(bytesOut)).toBe('1b5b42');
+  });
+
   it('surface without a session connection falls back to bridge.write (degraded-gate not bypassed)', async () => {
     // When `getSessionConnection(sid)` returns undefined the component falls
     // back to the raw host bridge — exercised implicitly by every test
@@ -649,5 +707,170 @@ describe('<TuiInputSurface />', () => {
     expect(bytesOut.length).toBe(2);
     expect(bridge.writes.length).toBe(2);
     expect(bridge.writes.map((w) => w.data).join('')).toBe('ab');
+  });
+
+  // ---------------------------------------------------------------------
+  // Escape-hatch (Cmd/Ctrl+Shift+Esc) + a11y attributes.
+  // ---------------------------------------------------------------------
+
+  it('Cmd+Shift+Esc (mac) triggers the escape hatch: sends alt-screen exit bytes + resets the tui store', async () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    Object.defineProperty(navigator, 'platform', {
+      value: 'MacIntel',
+      configurable: true,
+    });
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid, command: 'vim' });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    expect(useTuiStore.getState().active).toBe(true);
+    act(() => {
+      surface.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          shiftKey: true,
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    // ESC[?1049l ESC[?25h = 1b 5b 3f 31 30 34 39 6c 1b 5b 3f 32 35 68
+    const hex = toHex(bytesOut);
+    expect(hex).toBe('1b5b3f313034396c1b5b3f323568');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bridge.writes.length).toBe(1);
+    // The tui store was forcibly reset.
+    expect(useTuiStore.getState().active).toBe(false);
+    expect(useTuiStore.getState().depth).toBe(0);
+  });
+
+  it('Ctrl+Shift+Esc (non-mac) triggers the escape hatch', async () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    Object.defineProperty(navigator, 'platform', {
+      value: 'Linux x86_64',
+      configurable: true,
+    });
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    act(() => {
+      surface.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          shiftKey: true,
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(toHex(bytesOut)).toBe('1b5b3f313034396c1b5b3f323568');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTuiStore.getState().active).toBe(false);
+  });
+
+  it('plain Escape (no modifiers) does NOT trigger the escape hatch and stays active', async () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    act(() => {
+      surface.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    // Plain Escape is forwarded as 0x1b by KeyEncoder — NOT the escape-hatch
+    // multi-byte sequence. The tui store is still active.
+    expect(useTuiStore.getState().active).toBe(true);
+    // Only one byte was emitted: 0x1b. No alt-screen exit sequence.
+    expect(toHex(bytesOut)).toBe('1b');
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it('Shift+Esc without the mod modifier is NOT an escape hatch', () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    const bytesOut: Uint8Array[] = [];
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(
+      <TuiInputSurface
+        sessionId={sid}
+        bridge={bridge}
+        onBytesOut={(b) => bytesOut.push(b)}
+      />,
+    );
+    const surface = screen.getByTestId('tui-input-surface');
+    act(() => {
+      surface.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(useTuiStore.getState().active).toBe(true);
+    // Whatever KeyEncoder emits for Shift+Escape, it is NOT the multi-byte
+    // alt-screen-exit sequence.
+    expect(toHex(bytesOut)).not.toContain('1b5b3f313034396c');
+  });
+
+  it('carries the application role, localized aria-label, and aria-roledescription', () => {
+    const bridge = makeBridge();
+    const sid = 'sess-1' as SessionId;
+    act(() => {
+      useTuiStore.getState().enter({ sessionId: sid });
+    });
+    render(<TuiInputSurface sessionId={sid} bridge={bridge} />);
+    const surface = screen.getByTestId('tui-input-surface');
+    expect(surface.getAttribute('role')).toBe('application');
+    expect(surface.getAttribute('aria-roledescription')).toBe('terminal');
+    const label = surface.getAttribute('aria-label') ?? '';
+    // i18n copy includes the escape-hatch hint so users know how to get out.
+    expect(label.toLowerCase()).toContain('escape');
   });
 });

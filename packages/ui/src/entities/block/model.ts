@@ -99,6 +99,42 @@ export interface Block {
    * O(n) and avoids invalidating unrelated rerun chains.
    */
   readonly rerunOfId: string | null;
+  /**
+   * User-applied tags — short labels like `bug`, `deploy`, `demo` the user
+   * attaches to a block so the list can be filtered. Normalized to lowercase,
+   * deduped, validated against `TAG_PATTERN`. Empty array for untagged blocks.
+   * Persisted alongside the block; hydration falls back to `[]` when the
+   * stored row lacks the field (forward-compat).
+   */
+  readonly tags: readonly string[];
+}
+
+/**
+ * Maximum tag length. Chosen so a run of chips still fits one line on a
+ * narrow block card (roughly 3–4 chips of average length).
+ */
+export const MAX_TAG_LENGTH = 24;
+
+/**
+ * Tag validation pattern — first char must be [a-z0-9]; remaining chars may
+ * include `_` and `-`. Length bounded to MAX_TAG_LENGTH. Rejects leading/
+ * trailing whitespace, uppercase, emoji, punctuation. The model normalizes
+ * incoming tags (trim + lowercase) BEFORE matching so casual input like
+ * `  Bug  ` becomes `bug` and passes.
+ */
+export const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,23}$/;
+
+/** Normalize a candidate tag: trim + lowercase. Returns empty string on bad
+ *  input so the caller can early-return. Shared with selectors / UI. */
+export function normalizeTag(raw: string): string {
+  if (typeof raw !== 'string') return '';
+  return raw.trim().toLowerCase();
+}
+
+/** Validate a normalized tag. Use after `normalizeTag`. */
+export function isValidTag(tag: string): boolean {
+  if (tag.length === 0 || tag.length > MAX_TAG_LENGTH) return false;
+  return TAG_PATTERN.test(tag);
 }
 
 export interface BlockState {
@@ -125,6 +161,19 @@ export interface BlockState {
    * code obvious and allows tests to introspect size deterministically.
    */
   readonly appliedEventIds: ReadonlySet<string>;
+  /**
+   * O(1) successor lookup: for any parent block id, the id of the most recent
+   * rerun whose `rerunOfId` points at it (or `undefined` if none).
+   *
+   * Motivation: BlockCard's Compare gate needs to know whether *any* later
+   * block points at the card's id. The previous implementation scanned the
+   * full `order` list from every card on every store mutation
+   * (O(cards × blocks)); that cost compounds on chunk-append ticks during
+   * a heavy stream. Maintaining this index turns the lookup into a single
+   * map read. When a rerun survives and the parent is cleared, the dangling
+   * entry is cleaned up inside `clearHistory`/`resetAll`.
+   */
+  readonly rerunChildByParent: Readonly<Record<string, string | undefined>>;
 }
 
 export interface StartBlockOptions {
@@ -211,6 +260,18 @@ export interface BlockActions {
    * re-calling with the same list is a no-op shape-wise.
    */
   hydrateBlocks(blocks: readonly Block[]): void;
+  /**
+   * Add a tag to a block. Input is normalized (trim + lowercase) and
+   * validated against `TAG_PATTERN`. Duplicates within the block are a
+   * no-op. Returns `true` when a new tag was actually added, `false` when
+   * the tag was invalid or already present on the block — the UI uses the
+   * return to show a toast / flash the input on rejection.
+   */
+  addTag(blockId: string, tag: string): boolean;
+  /** Remove a tag if present. No-op when the tag isn't on the block. */
+  removeTag(blockId: string, tag: string): void;
+  /** Remove every tag from a block. No-op when none exist. */
+  clearTags(blockId: string): void;
   /** Test helper — wipe everything, including pinned. */
   resetAll(): void;
 }
@@ -220,6 +281,7 @@ const INITIAL: BlockState = {
   entities: {},
   activeBlockId: null,
   appliedEventIds: new Set<string>(),
+  rerunChildByParent: {},
 };
 
 /**
@@ -329,6 +391,7 @@ export const useBlockStore = create<BlockState & BlockActions>()(
       // Audit P0 (fix 5): wall-clock for the user-visible timestamp; monotonic
       // is reserved for durations and watchdog scheduling.
       const now = Date.now();
+      const rerunOf = options?.rerunOf ?? null;
       const block: Block = {
         id,
         sessionId: options?.sessionId ?? DEFAULT_BLOCK_SESSION_ID,
@@ -342,7 +405,8 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         collapsed: false,
         pinned: false,
         errorMessage: null,
-        rerunOfId: options?.rerunOf ?? null,
+        rerunOfId: rerunOf,
+        tags: [],
       };
       const eventId = options?.eventId;
       set((prev) => {
@@ -353,11 +417,20 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         if (eventId !== undefined && prev.appliedEventIds.has(eventId)) {
           return prev;
         }
+        // Successor-index maintenance: when this block is itself a rerun,
+        // register it as the child for its predecessor. Later reruns of the
+        // same parent overwrite (the "most recent rerun" is what the
+        // Compare gate cares about).
+        const nextRerunChild =
+          rerunOf !== null
+            ? { ...prev.rerunChildByParent, [rerunOf]: id }
+            : prev.rerunChildByParent;
         return {
           order: [...prev.order, id],
           entities: { ...prev.entities, [id]: block },
           appliedEventIds:
             eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
+          rerunChildByParent: nextRerunChild,
         };
       });
       return id;
@@ -369,6 +442,7 @@ export const useBlockStore = create<BlockState & BlockActions>()(
       // between-step pty_data race (see BlockActions.startBlock docblock).
       const id = nextId();
       const now = Date.now();
+      const rerunOf = options?.rerunOf ?? null;
       const block: Block = {
         id,
         sessionId: options?.sessionId ?? DEFAULT_BLOCK_SESSION_ID,
@@ -382,7 +456,8 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         collapsed: false,
         pinned: false,
         errorMessage: null,
-        rerunOfId: options?.rerunOf ?? null,
+        rerunOfId: rerunOf,
+        tags: [],
       };
       const eventId = options?.eventId;
       let previousActiveId: string | null = null;
@@ -409,12 +484,17 @@ export const useBlockStore = create<BlockState & BlockActions>()(
           }
         }
         nextEntities[id] = block;
+        const nextRerunChild =
+          rerunOf !== null
+            ? { ...prev.rerunChildByParent, [rerunOf]: id }
+            : prev.rerunChildByParent;
         return {
           order: [...prev.order, id],
           entities: nextEntities,
           activeBlockId: id,
           appliedEventIds:
             eventId !== undefined ? withAppliedEventId(prev.appliedEventIds, eventId) : prev.appliedEventIds,
+          rerunChildByParent: nextRerunChild,
         };
       });
       if (skipped) return id;
@@ -465,11 +545,11 @@ export const useBlockStore = create<BlockState & BlockActions>()(
           return prev;
         }
         const b = prev.entities[id];
-        if (!b) return prev;
+        if (!b || b.status !== 'running') return prev;
         // Copy the chunk defensively: callers often reuse buffers for the
         // next PTY read, and aliasing would let later bytes mutate history.
         const owned = new Uint8Array(chunk);
-        reset = b.status === 'running';
+        reset = true;
         return {
           ...prev,
           entities: {
@@ -612,16 +692,33 @@ export const useBlockStore = create<BlockState & BlockActions>()(
       set((prev) => {
         const nextOrder: string[] = [];
         const nextEntities: Record<string, Block> = {};
+        const survivingIds = new Set<string>();
         for (const id of prev.order) {
           const b = prev.entities[id];
           if (b && b.pinned) {
             nextOrder.push(id);
             nextEntities[id] = b;
+            survivingIds.add(id);
           } else if (id !== undefined) {
             clearWatchdog(id);
           }
         }
-        return { order: nextOrder, entities: nextEntities };
+        // Prune the successor index: drop entries whose parent OR child was
+        // evicted. A rerun that survives but whose parent was cleared has no
+        // pair to compare against — dropping the entry tells the Compare
+        // gate "no predecessor, no comparable successor".
+        const nextRerunChild: Record<string, string | undefined> = {};
+        for (const [parentId, childId] of Object.entries(prev.rerunChildByParent)) {
+          if (childId === undefined) continue;
+          if (survivingIds.has(parentId) && survivingIds.has(childId)) {
+            nextRerunChild[parentId] = childId;
+          }
+        }
+        return {
+          order: nextOrder,
+          entities: nextEntities,
+          rerunChildByParent: nextRerunChild,
+        };
       }),
 
     hydrateBlocks: (blocks) =>
@@ -644,18 +741,81 @@ export const useBlockStore = create<BlockState & BlockActions>()(
         // Order: hydrated blocks first (oldest → newest), then any
         // preserved in-memory ids that aren't in the hydration list, keeping
         // their relative order.
-        const hydratedIds = terminal.map((b) => b.id);
+        // Filter to only IDs that actually ended up in nextEntities — blocks
+        // dropped by the terminal-state filter must not leave holes in order.
+        const hydratedIds = terminal.map((b) => b.id).filter((id) => id in nextEntities);
         const surviving = prev.order.filter((id) => !incomingIds.has(id));
+
+        // Rebuild the successor index from the merged entity set so hydrated
+        // rerun chains become queryable without a per-card scan.
+        const nextRerunChild: Record<string, string | undefined> = {};
+        for (const b of Object.values(nextEntities)) {
+          if (b.rerunOfId !== null) nextRerunChild[b.rerunOfId] = b.id;
+        }
         return {
           ...prev,
           order: [...hydratedIds, ...surviving],
           entities: nextEntities,
+          rerunChildByParent: nextRerunChild,
+        };
+      }),
+
+    addTag: (blockId, rawTag) => {
+      const normalized = normalizeTag(rawTag);
+      if (!isValidTag(normalized)) return false;
+      let added = false;
+      set((prev) => {
+        const b = prev.entities[blockId];
+        if (!b) return prev;
+        if (b.tags.includes(normalized)) return prev;
+        added = true;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [blockId]: { ...b, tags: [...b.tags, normalized] },
+          },
+        };
+      });
+      return added;
+    },
+
+    removeTag: (blockId, rawTag) => {
+      const normalized = normalizeTag(rawTag);
+      if (normalized.length === 0) return;
+      set((prev) => {
+        const b = prev.entities[blockId];
+        if (!b || !b.tags.includes(normalized)) return prev;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [blockId]: { ...b, tags: b.tags.filter((t) => t !== normalized) },
+          },
+        };
+      });
+    },
+
+    clearTags: (blockId) =>
+      set((prev) => {
+        const b = prev.entities[blockId];
+        if (!b || b.tags.length === 0) return prev;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [blockId]: { ...b, tags: [] },
+          },
         };
       }),
 
     resetAll: () => {
       for (const id of [...watchdogTimers.keys()]) clearWatchdog(id);
-      set(() => ({ ...INITIAL, appliedEventIds: new Set<string>() }));
+      set(() => ({
+        ...INITIAL,
+        appliedEventIds: new Set<string>(),
+        rerunChildByParent: {},
+      }));
     },
   })),
 );

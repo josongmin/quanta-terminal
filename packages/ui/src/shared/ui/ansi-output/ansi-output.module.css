@@ -14,6 +14,8 @@
   font-size: var(--q-font-size-term);
   line-height: var(--q-line-height-term);
   letter-spacing: var(--q-letter-spacing-term);
+  /* Programming-ligature toggle — driven by --q-font-features on :root. */
+  font-feature-settings: var(--q-font-features, normal);
   color: var(--q-fg);
   background: transparent;
   white-space: pre-wrap;
@@ -62,6 +64,26 @@
   text-decoration-style: solid;
 }
 
+/* Plain-text URL autolink. Rendered as an <a>; inherits the surrounding span
+   color so the link still reads as part of terminal output, but uses a solid
+   underline to distinguish it from `.pathLink`'s dotted affordance. */
+.urlLink {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.urlLink:hover {
+  text-decoration-thickness: 2px;
+  background: var(--q-bg-elev-2, rgba(255, 255, 255, 0.06));
+}
+.urlLink:focus-visible {
+  outline: 1px solid var(--q-accent, #5ea0ff);
+  outline-offset: 1px;
+}
+
 /* SGR attribute classes.
    - `bold` and `dim` both intensify / attenuate the rendered color.
    - `inverse` flips fg/bg at render time (see React side); no CSS rule here.
@@ -78,6 +100,24 @@
   text-underline-offset: 2px;
 }
 .hidden { visibility: hidden; }
+
+/* Output-search hit. A yellow highlight on the background (scoped to the
+   <mark> element) so it reads as "Ctrl+F" inside otherwise-styled terminal
+   text. The active/current hit gets a thicker outline so the user can see
+   which match Enter is pointing at. Colors are theme-driven so the light-
+   theme hit stays legible against the pale surface. */
+.searchMark {
+  background: var(--q-warning, #f5c451);
+  color: var(--q-bg, #0b0c10);
+  border-radius: 2px;
+  padding: 0 1px;
+  /* Reset <mark>'s default to avoid double-background stacking. */
+  box-shadow: none;
+}
+.searchMarkActive {
+  outline: 2px solid var(--q-accent, #5ea0ff);
+  outline-offset: 1px;
+}
 
 /* Named ANSI colors (30-37 / 40-47). Foreground: color. Background: bg.
    The 0..7 indices correspond 1:1 to black / red / green / yellow / blue /

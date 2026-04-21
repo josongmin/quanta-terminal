@@ -13,7 +13,7 @@
  *   - switchSession flips activeId without touching connections.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   HostBridge,
   HostEvent,
@@ -26,7 +26,18 @@ import type {
 import { DEFAULT_CAPABILITIES } from '@quanta/host-common';
 import { createSession, closeSession, switchSession, getConnection } from '../index.js';
 import { __resetConnectionMapForTests } from '../connection-map.js';
-import { useSessionsStore } from '../../../entities/session/index.js';
+import { useSessionsStore, useSessionStore } from '../../../entities/session/index.js';
+import {
+  SHELL_PATHS,
+  useSessionProfiles,
+} from '../../../entities/session-profile/index.js';
+import type { BlockId } from '../../../shared/types/generated/index.js';
+import {
+  bindBlockStore,
+  type BlockStoreActions,
+  type StartBlockPortOptions,
+} from '../../command/block-store-port.js';
+import { __resetRouterForTests } from '../../command/route-output.js';
 
 interface ScriptedBridge extends HostBridge {
   emit: (event: HostEvent) => void;
@@ -86,6 +97,9 @@ function makeBridge(sessionIds: readonly SessionId[]): ScriptedBridge {
         rulesetVersion: 1,
       };
     },
+    async readTextFile() {
+      return null;
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return { unsubscribe: () => listeners.delete(listener) };
@@ -102,8 +116,54 @@ function makeBridge(sessionIds: readonly SessionId[]): ScriptedBridge {
 
 beforeEach(() => {
   useSessionsStore.getState().reset();
+  useSessionStore.getState().reset();
   __resetConnectionMapForTests();
+  __resetRouterForTests();
+  // Reset the profiles store so the built-in Default (no overrides) is the
+  // one observed by createSession. Every profile-specific test seeds its
+  // own profile on top.
+  useSessionProfiles.getState().reset();
 });
+
+/**
+ * Minimal block-store adapter used by the startup-commands test — enough
+ * for `submitCommand` to run end-to-end without instantiating the real
+ * block entity. We only assert how many times `startBlock` fires.
+ */
+function makeMockBlockStore(): BlockStoreActions & {
+  readonly startBlockMock: ReturnType<typeof vi.fn>;
+} {
+  let cursor = 0;
+  let active: BlockId | null = null;
+  const startBlockMock = vi.fn(
+    (_text: string, _cwd: string, _opts?: StartBlockPortOptions): BlockId => {
+      const id = (`blk-${cursor}` as BlockId);
+      cursor += 1;
+      active = id;
+      return id;
+    },
+  );
+  return {
+    createBlock: vi.fn((_t: string, _c: string) => `blk-${cursor++}` as BlockId),
+    startBlock: startBlockMock,
+    setActiveBlockId: (id) => {
+      active = id;
+    },
+    getActiveBlockId: () => active,
+    cancelBlock: vi.fn((id: BlockId) => {
+      if (active === id) active = null;
+    }),
+    completeBlock: vi.fn((id: BlockId) => {
+      if (active === id) active = null;
+    }),
+    errorBlock: vi.fn((id: BlockId) => {
+      if (active === id) active = null;
+    }),
+    appendBlockOutput: vi.fn(),
+    getRunningBlockIds: vi.fn((): readonly BlockId[] => []),
+    startBlockMock,
+  };
+}
 
 describe('createSession', () => {
   it('spawns a PTY, registers the connection, and adopts as active', async () => {
@@ -142,6 +202,60 @@ describe('createSession', () => {
       bytesB64: 'aGVsbG8=',
     });
     expect(onData).toHaveBeenCalledWith('sess-1', 'aGVsbG8=');
+  });
+
+  it('forwards shell/cwd/env from a supplied profile to bridge.spawn', async () => {
+    const bridge = makeBridge(['sess-1' as SessionId]);
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Work',
+      shell: SHELL_PATHS.fish,
+      cwd: '/Users/me/work',
+      env: { KUBECONFIG: '/tmp/kc' },
+    });
+    await createSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: vi.fn(),
+      profile: id,
+    });
+    expect(bridge.spawnMock).toHaveBeenCalledWith({
+      cols: 80,
+      rows: 24,
+      shell: SHELL_PATHS.fish,
+      cwd: '/Users/me/work',
+      env: { KUBECONFIG: '/tmp/kc' },
+    });
+  });
+
+  it('uses the current default profile when no profile is specified', async () => {
+    // Build a non-default profile, swap the default to it, and verify the
+    // spawn call picks it up without the caller mentioning it.
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Bash',
+      shell: SHELL_PATHS.bash,
+    });
+    useSessionProfiles.getState().setDefault(id);
+    const bridge = makeBridge(['sess-1' as SessionId]);
+    await createSession({ bridge, cols: 80, rows: 24, onData: vi.fn() });
+    expect(bridge.spawnMock).toHaveBeenCalledWith({
+      cols: 80,
+      rows: 24,
+      shell: SHELL_PATHS.bash,
+    });
+  });
+
+  it('falls back to host defaults when the profile id is unknown', async () => {
+    const bridge = makeBridge(['sess-1' as SessionId]);
+    await createSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: vi.fn(),
+      profile: 'nonexistent-id',
+    });
+    // Unknown id → default profile (which has no overrides) → host defaults.
+    expect(bridge.spawnMock).toHaveBeenCalledWith({ cols: 80, rows: 24 });
   });
 });
 
@@ -189,5 +303,61 @@ describe('switchSession', () => {
     expect(getConnection('sess-1' as SessionId)).toBeDefined();
     expect(getConnection('sess-2' as SessionId)).toBeDefined();
     expect(bridge.closeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSession startupCommands', () => {
+  let unbind: (() => void) | undefined;
+  afterEach(() => {
+    if (unbind) unbind();
+    unbind = undefined;
+  });
+
+  it('submits each startup command through submitCommand after ready', async () => {
+    const store = makeMockBlockStore();
+    unbind = bindBlockStore(store);
+    const bridge = makeBridge(['sess-1' as SessionId]);
+    // Build a profile with two startup commands.
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Dev',
+      shell: SHELL_PATHS.zsh,
+      startupCommands: ['cd ~/projects/foo', 'pnpm dev'],
+    });
+    await createSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: vi.fn(),
+      profile: id,
+    });
+    // The startup runner kicks off asynchronously (50 ms gap between
+    // commands). Wait past the gap before asserting.
+    await new Promise((r) => setTimeout(r, 150));
+    // Two startup commands → two startBlock calls → two bridge.write calls
+    // carrying the command text with a trailing newline.
+    expect(store.startBlockMock).toHaveBeenCalledTimes(2);
+    expect(store.startBlockMock.mock.calls[0]?.[0]).toBe('cd ~/projects/foo');
+    expect(store.startBlockMock.mock.calls[1]?.[0]).toBe('pnpm dev');
+  });
+
+  it('does nothing when the profile has no startup commands', async () => {
+    const store = makeMockBlockStore();
+    unbind = bindBlockStore(store);
+    const bridge = makeBridge(['sess-1' as SessionId]);
+    const id = useSessionProfiles.getState().addProfile({
+      name: 'Plain',
+      shell: SHELL_PATHS.zsh,
+    });
+    await createSession({
+      bridge,
+      cols: 80,
+      rows: 24,
+      onData: vi.fn(),
+      profile: id,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    // No startup commands → no block creation (aside from what the session
+    // itself might seed, which the mock block store does not do).
+    expect(store.startBlockMock).not.toHaveBeenCalled();
   });
 });

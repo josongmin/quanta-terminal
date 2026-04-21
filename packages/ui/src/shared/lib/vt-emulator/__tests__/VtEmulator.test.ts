@@ -843,3 +843,589 @@ describe('VtEmulator — styled output encoding', () => {
     expect(rd.spans[0]!.graphemes).toBe('blank');
   });
 });
+
+describe('VtEmulator — DECSC/DECRC spec compliance', () => {
+  it('DECSC/DECRC does NOT save or restore scroll region (xterm spec)', () => {
+    const h = new Harness(6, 5);
+    // Set a non-default scroll region and save state.
+    h.feed('\x1b[2;4r'); // scroll region rows 1..3
+    h.feed('\x1b7'); // DECSC
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 1, bottom: 3 });
+    // Mutate scroll region after save.
+    h.feed('\x1b[1;5r'); // new region rows 0..4
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 4 });
+    // Restore — scroll region should NOT revert; it stays at the post-save value.
+    h.feed('\x1b8'); // DECRC
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 4 });
+  });
+
+  it('DECSC/DECRC saves and restores DECAWM (autoWrap)', () => {
+    const h = new Harness(3, 5);
+    // Default autoWrap is on. Save state while on.
+    h.feed('\x1b7'); // DECSC (autoWrap=true saved)
+    // Disable autoWrap via DECRST 7.
+    h.feed('\x1b[?7l');
+    // Write past the right margin — with autoWrap off, the cursor should
+    // clamp to the last column instead of wrapping.
+    h.feed('ABCDEF'); // 6 chars into 5-col grid
+    expect(h.emulator._getCursor().row).toBe(0);
+    // Restore — autoWrap should come back on.
+    h.feed('\x1b8'); // DECRC
+    // Home the cursor, then write past margin. Wrap should now happen.
+    h.feed('\x1b[H');
+    h.feed('ABCDEF'); // 6 chars into 5-col grid; F wraps to row 1.
+    expect(h.cellGrapheme(1, 0)).toBe('F');
+  });
+
+  it('DECSC/DECRC restores cursor + SGR but leaves scroll region intact', () => {
+    const h = new Harness(6, 5);
+    h.feed('\x1b[3;4H'); // cursor to (2,3)
+    h.feed('\x1b[31m'); // red fg
+    h.feed('\x1b7'); // DECSC
+    h.feed('\x1b[1;1H'); // move elsewhere
+    h.feed('\x1b[32m'); // green fg
+    h.feed('\x1b[2;4r'); // mutate scroll region AFTER save
+    h.feed('\x1b8'); // DECRC
+    expect(h.emulator._getCursor()).toMatchObject({ row: 2, col: 3 });
+    // Scroll region from the mutation persists (not restored).
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 1, bottom: 3 });
+    // SGR restored — write one cell and check fg.
+    h.feed('X');
+    expect(h.emulator._getCell(2, 3)!.fg).toMatchObject({ kind: 'named', index: 1 });
+  });
+});
+
+describe('VtEmulator — charset designator robustness (A11)', () => {
+  it('ESC ( B LF X — next printable after LF is not dropped', () => {
+    const h = new Harness(3, 5);
+    // ESC ( B consumes 'B' as charset designator. Then LF is the next
+    // byte — previously the flag stayed set and 'X' was dropped. Now
+    // LF is consumed as the designator byte itself (no-op charset), and
+    // 'X' reaches the grid normally on row 0 col 0 (no LF executed).
+    h.feed('\x1b(B\nX');
+    // X must land somewhere — not be swallowed.
+    let found = false;
+    for (let r = 0; r < 3 && !found; r += 1) {
+      for (let c = 0; c < 5 && !found; c += 1) {
+        if (h.cellGrapheme(r, c) === 'X') found = true;
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it('ESC ( B TAB X — next printable after TAB is not dropped', () => {
+    const h = new Harness(3, 16);
+    h.feed('\x1b(B\tX');
+    // X must land somewhere — not be swallowed.
+    let found = false;
+    for (let c = 0; c < 16 && !found; c += 1) {
+      if (h.cellGrapheme(0, c) === 'X') found = true;
+    }
+    expect(found).toBe(true);
+  });
+});
+
+describe('VtEmulator — erase across wide-char boundary (A24)', () => {
+  it('erase starting mid wide-char also blanks the leader', () => {
+    const h = new Harness(2, 6);
+    // Write a wide char at (0,0-1), then narrow 'X' at (0,2).
+    h.feed('한X');
+    // Cursor now at col 3. Move cursor to col 1 (the trailer of '한').
+    h.feed('\x1b[1;2H'); // row 1, col 2 (1-indexed) → (0,1)
+    // Erase from cursor to end of line. Range starts at a trailer — fix
+    // must expand left to include the leader at col 0.
+    h.feed('\x1b[0K');
+    expect(h.emulator._getCell(0, 0)!.grapheme).toBe('');
+    expect(h.emulator._getCell(0, 0)!.width).toBe(1);
+    expect(h.emulator._getCell(0, 1)!.grapheme).toBe('');
+    expect(h.emulator._getCell(0, 1)!.width).toBe(1);
+  });
+
+  it('erase ending mid wide-char also blanks the trailer', () => {
+    const h = new Harness(2, 6);
+    // Layout: col0='X' col1='한'(leader) col2=(trailer) col3='Y' ...
+    h.feed('X한Y');
+    // Move cursor home and EL mode 1 (start → cursor inclusive) with
+    // cursor at col 1 — range endCol is the leader of the wide char.
+    // The fix must extend right to include the trailer at col 2.
+    h.feed('\x1b[1;2H'); // row 1, col 2 → (0,1)
+    h.feed('\x1b[1K'); // erase from start to cursor inclusive
+    expect(h.emulator._getCell(0, 0)!.grapheme).toBe('');
+    expect(h.emulator._getCell(0, 1)!.grapheme).toBe('');
+    expect(h.emulator._getCell(0, 1)!.width).toBe(1);
+    expect(h.emulator._getCell(0, 2)!.grapheme).toBe('');
+    expect(h.emulator._getCell(0, 2)!.width).toBe(1);
+    // 'Y' beyond should remain.
+    expect(h.emulator._getCell(0, 3)!.grapheme).toBe('Y');
+  });
+});
+
+describe('VtEmulator — DECSTBM with zero params (A1)', () => {
+  it('CSI 0;24 r on 24-row terminal sets full-screen region (0..23)', () => {
+    const h = new Harness(24, 80);
+    // `0;24` — top=0 should mean "default" (=1), bottom=24.
+    h.feed('\x1b[0;24r');
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 23 });
+  });
+
+  it('CSI 0;0 r treats both zeros as defaults (full region)', () => {
+    const h = new Harness(10, 5);
+    h.feed('\x1b[0;0r');
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 9 });
+  });
+
+  it('CSI r (no params) sets full-screen region', () => {
+    const h = new Harness(8, 5);
+    // First set a non-default region, then reset.
+    h.feed('\x1b[2;5r');
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 1, bottom: 4 });
+    h.feed('\x1b[r');
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 7 });
+  });
+});
+
+describe('VtEmulator — DECSTBM degenerate 1-row scroll region (bug 3)', () => {
+  it('CSI 5;5r on a 10-row terminal sets a 1-row region at row 4 (0-indexed)', () => {
+    const h = new Harness(10, 5);
+    h.feed('\x1b[5;5r');
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 4, bottom: 4 });
+    // DECSTBM homes the cursor.
+    expect(h.emulator._getCursor()).toMatchObject({ row: 0, col: 0 });
+  });
+
+  it('newline inside a 1-row scroll region is a no-op (no infinite loop)', () => {
+    const h = new Harness(10, 5);
+    h.feed('\x1b[5;5r'); // 1-row region at row 4
+    h.feed('\x1b[5;1H'); // move cursor into the region
+    // Feed a linefeed — the region is 1 row so scrollUpRegion should produce
+    // a no-op (scrolls top..top, count=1, no rows shift, blank replaces same
+    // row). Most importantly this must not hang or loop.
+    h.feed('\n');
+    // Cursor stays in the region (row 4, scrolled but same position).
+    expect(h.emulator._getCursor().row).toBe(4);
+  });
+
+  it('resetting with CSI r restores the full-screen region after a 1-row region', () => {
+    const h = new Harness(10, 5);
+    h.feed('\x1b[5;5r'); // 1-row region
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 4, bottom: 4 });
+    h.feed('\x1b[r'); // reset to full screen
+    expect(h.emulator._getScrollRegion()).toEqual({ top: 0, bottom: 9 });
+  });
+});
+
+describe('VtEmulator — OSC 7 working-directory report', () => {
+  it('parses file:///path payload and invokes onCwdChanged', () => {
+    const seen: string[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onCwdChanged: (cwd) => seen.push(cwd),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]7;file:///Users/songmin/project\x07'));
+    expect(seen).toEqual(['/Users/songmin/project']);
+  });
+
+  it('tolerates ESC \\ terminator and a host segment', () => {
+    const seen: string[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onCwdChanged: (cwd) => seen.push(cwd),
+    });
+    emulator.feed(
+      new TextEncoder().encode('\x1b]7;file://myhost/tmp/work%20dir\x1b\\'),
+    );
+    expect(seen).toEqual(['/tmp/work dir']);
+  });
+
+  it('drops payloads missing the file:// scheme', () => {
+    const seen: string[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onCwdChanged: (cwd) => seen.push(cwd),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]7;/raw/path\x07'));
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('VtEmulator — OSC 10/11 fg/bg color query', () => {
+  it('responds to OSC 10 ? with the current theme fg in rgb:RR/GG/BB', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+      themeColors: () => ({ fg: { r: 0xe6, g: 0xe8, b: 0xee }, bg: { r: 0x0b, g: 0x0c, b: 0x10 } }),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]10;?\x07'));
+    expect(replies).toHaveLength(1);
+    const text = new TextDecoder().decode(replies[0]!);
+    expect(text).toBe('\x1b]10;rgb:e6/e8/ee\x07');
+  });
+
+  it('responds to OSC 11 ? with the current theme bg', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+      themeColors: () => ({ fg: { r: 0xff, g: 0xff, b: 0xff }, bg: { r: 0x12, g: 0x34, b: 0x56 } }),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]11;?\x07'));
+    expect(replies).toHaveLength(1);
+    const text = new TextDecoder().decode(replies[0]!);
+    expect(text).toBe('\x1b]11;rgb:12/34/56\x07');
+  });
+
+  it('silently drops OSC 10/11 SET attempts (only ? is answered)', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+      themeColors: () => ({ fg: { r: 0, g: 0, b: 0 }, bg: { r: 0, g: 0, b: 0 } }),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]10;rgb:ff/00/00\x07'));
+    expect(replies).toHaveLength(0);
+  });
+});
+
+describe('VtEmulator — DSR / DA query responses', () => {
+  it('CSI 6n replies with the 1-indexed cursor position', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 5,
+      cols: 10,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+    });
+    // Move to row 3, col 7 (1-indexed), then query.
+    emulator.feed(new TextEncoder().encode('\x1b[3;7H\x1b[6n'));
+    const last = replies[replies.length - 1];
+    expect(last).toBeDefined();
+    expect(new TextDecoder().decode(last!)).toBe('\x1b[3;7R');
+  });
+
+  it('CSI 5n replies with CSI 0n (ready)', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b[5n'));
+    expect(replies).toHaveLength(1);
+    expect(new TextDecoder().decode(replies[0]!)).toBe('\x1b[0n');
+  });
+
+  it('CSI c replies with primary DA ?1;2c', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b[c'));
+    expect(replies).toHaveLength(1);
+    expect(new TextDecoder().decode(replies[0]!)).toBe('\x1b[?1;2c');
+  });
+
+  it('CSI 0c also replies with primary DA', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+    });
+    emulator.feed(new TextEncoder().encode('\x1b[0c'));
+    expect(replies).toHaveLength(1);
+    expect(new TextDecoder().decode(replies[0]!)).toBe('\x1b[?1;2c');
+  });
+
+  it('CSI >0c replies with secondary DA including the configured version', () => {
+    const replies: Uint8Array[] = [];
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b) => replies.push(b),
+      secondaryDaVersion: 42,
+    });
+    emulator.feed(new TextEncoder().encode('\x1b[>0c'));
+    expect(replies).toHaveLength(1);
+    expect(new TextDecoder().decode(replies[0]!)).toBe('\x1b[>0;42;0c');
+  });
+
+  it('queries are silently dropped when onRespond is unset', () => {
+    // Constructs without onRespond — must not throw on any query kind.
+    const emulator = new VtEmulator({ rows: 3, cols: 5, onEnvelope: () => {} });
+    emulator.feed(new TextEncoder().encode('\x1b[6n\x1b[5n\x1b[c\x1b[>0c\x1b]10;?\x07'));
+    // No assertion needed beyond "doesn't throw".
+    expect(emulator.getDimensions()).toEqual({ rows: 3, cols: 5 });
+  });
+});
+
+describe('VtEmulator — Kitty keyboard flag protocol (CSI u variants)', () => {
+  function makeEmulator(opts: {
+    onChange?: (flags: number) => void;
+  } = {}) {
+    const replies: Uint8Array[] = [];
+    const base = {
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onRespond: (b: Uint8Array) => {
+        replies.push(b);
+      },
+    } as const;
+    const emulator = opts.onChange
+      ? new VtEmulator({ ...base, onKittyKeyboardFlagsChanged: opts.onChange })
+      : new VtEmulator(base);
+    return {
+      emulator,
+      replies,
+      lastReplyText: () =>
+        replies.length === 0
+          ? null
+          : new TextDecoder().decode(replies[replies.length - 1]!),
+    };
+  }
+
+  it('CSI ? u on a fresh emulator answers CSI ? 0 u (no flags active)', () => {
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.replies).toHaveLength(1);
+    expect(h.lastReplyText()).toBe('\x1b[?0u');
+  });
+
+  it('CSI > 1 u pushes the disambiguate-escape-codes flag and notifies the host', () => {
+    const changes: number[] = [];
+    const h = makeEmulator({ onChange: (f) => changes.push(f) });
+    h.emulator.feed(new TextEncoder().encode('\x1b[>1u\x1b[?u'));
+    expect(changes).toEqual([1]);
+    expect(h.lastReplyText()).toBe('\x1b[?1u');
+  });
+
+  it('CSI = <flags> u ORs the bits into the current top', () => {
+    const changes: number[] = [];
+    const h = makeEmulator({ onChange: (f) => changes.push(f) });
+    // Start by pushing flags=2.
+    h.emulator.feed(new TextEncoder().encode('\x1b[>2u'));
+    expect(changes).toEqual([2]);
+    // `CSI = 1 u` with default mode (OR) → top becomes 3.
+    h.emulator.feed(new TextEncoder().encode('\x1b[=1u'));
+    expect(changes[changes.length - 1]).toBe(3);
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?3u');
+  });
+
+  it('CSI = <flags> ; 2 u replaces (mode=2) the current top exactly', () => {
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[>7u')); // push 7
+    h.emulator.feed(new TextEncoder().encode('\x1b[=2;2u')); // replace with 2
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?2u');
+  });
+
+  it('CSI = <flags> ; 3 u clears (AND-NOT) bits from the current top', () => {
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[>7u')); // push 7 (0b00111)
+    h.emulator.feed(new TextEncoder().encode('\x1b[=2;3u')); // clear bit 2 → 5
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?5u');
+  });
+
+  it('CSI < u pops the stack; query reflects the restored entry', () => {
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[>1u\x1b[>2u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?2u');
+    h.emulator.feed(new TextEncoder().encode('\x1b[<u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?1u');
+  });
+
+  it('CSI < <n> u pops n entries in one go', () => {
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[>1u\x1b[>2u\x1b[>4u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[<2u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?1u');
+  });
+
+  it('popping the last remaining entry resets to 0 (never leaves the stack empty)', () => {
+    const changes: number[] = [];
+    const h = makeEmulator({ onChange: (f) => changes.push(f) });
+    h.emulator.feed(new TextEncoder().encode('\x1b[>3u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[<u'));
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?0u');
+    expect(changes).toEqual([3, 0]);
+  });
+
+  it('stack overflow past 10 pushes drops the oldest entry', () => {
+    const h = makeEmulator();
+    // Stack seeded with [0]. Push 12 distinct values; max depth is 10,
+    // so the final 10 should be retained. We confirm by popping until we
+    // hit the oldest remaining value.
+    const pushes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    for (const v of pushes) {
+      h.emulator.feed(new TextEncoder().encode(`\x1b[>${v}u`));
+    }
+    // Top is still the last pushed flag (mask keeps low 5 bits → 12).
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?12u');
+    // Pop 9 times — we should still have entries left (depth capped at 10).
+    for (let i = 0; i < 9; i++) {
+      h.emulator.feed(new TextEncoder().encode('\x1b[<u'));
+    }
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    // After 12 pushes capped at 10 plus 9 pops, the value at the bottom
+    // is the earliest surviving push (index 12 - 10 + 1 = 3 → value "3").
+    expect(h.lastReplyText()).toBe('\x1b[?3u');
+  });
+
+  it('flag bits above the 5-bit spec mask are silently discarded', () => {
+    const h = makeEmulator();
+    // 0x40 = 64 — above the 0x1f mask.
+    h.emulator.feed(new TextEncoder().encode('\x1b[>64u\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?0u');
+  });
+
+  it('CSI u (no private byte) still routes to DECRC, not the Kitty handler', () => {
+    // We test this by observing that no reply is emitted and the cursor
+    // is set to (0,0) by the default DECRC path.
+    const h = makeEmulator();
+    h.emulator.feed(new TextEncoder().encode('\x1b[5;5H\x1b[u'));
+    expect(h.replies).toHaveLength(0); // DECRC never calls onRespond.
+  });
+
+  it('CSI ? u with no onRespond wired does not throw', () => {
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+    });
+    emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(emulator.getDimensions()).toEqual({ rows: 3, cols: 5 });
+  });
+
+  it('reset() clears the kitty flag stack back to [0] and notifies the host', () => {
+    const changes: number[] = [];
+    const h = makeEmulator({ onChange: (f) => changes.push(f) });
+    h.emulator.feed(new TextEncoder().encode('\x1b[>5u'));
+    expect(changes).toEqual([5]);
+    h.emulator.reset();
+    expect(changes).toEqual([5, 0]);
+    h.emulator.feed(new TextEncoder().encode('\x1b[?u'));
+    expect(h.lastReplyText()).toBe('\x1b[?0u');
+  });
+});
+
+describe('VtEmulator — BEL / onBell hook', () => {
+  it('fires onBell for a bare BEL byte in Ground state', () => {
+    let calls = 0;
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        calls += 1;
+      },
+    });
+    emulator.feed(new TextEncoder().encode('hi\x07there'));
+    expect(calls).toBe(1);
+  });
+
+  it('fires onBell once per bare BEL (multiple bells in one feed)', () => {
+    let calls = 0;
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        calls += 1;
+      },
+    });
+    emulator.feed(new TextEncoder().encode('\x07\x07\x07'));
+    expect(calls).toBe(3);
+  });
+
+  it('does NOT fire onBell when BEL terminates an OSC string', () => {
+    let calls = 0;
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        calls += 1;
+      },
+    });
+    // OSC 0 set-title payload — xterm uses BEL as the legacy terminator.
+    emulator.feed(new TextEncoder().encode('\x1b]0;window title\x07'));
+    expect(calls).toBe(0);
+  });
+
+  it('does NOT fire onBell for BEL inside DCS / APC / PM bodies', () => {
+    let calls = 0;
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        calls += 1;
+      },
+    });
+    // DCS with a BEL terminator — we accept BEL as string terminator in
+    // IgnoreUntilSt too (see stepIgnore).
+    emulator.feed(new TextEncoder().encode('\x1bPpayload\x07'));
+    // APC
+    emulator.feed(new TextEncoder().encode('\x1b_payload\x07'));
+    // PM
+    emulator.feed(new TextEncoder().encode('\x1b^payload\x07'));
+    expect(calls).toBe(0);
+  });
+
+  it('fires onBell for a bare BEL immediately after a completed OSC', () => {
+    // Regression guard: after OSC dispatches, we return to Ground. A
+    // subsequent bare BEL MUST count as a real bell.
+    let calls = 0;
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        calls += 1;
+      },
+    });
+    emulator.feed(new TextEncoder().encode('\x1b]0;title\x07\x07'));
+    expect(calls).toBe(1);
+  });
+
+  it('swallows host-thrown exceptions from onBell', () => {
+    const emulator = new VtEmulator({
+      rows: 3,
+      cols: 5,
+      onEnvelope: () => {},
+      onBell: () => {
+        throw new Error('boom');
+      },
+    });
+    // Must not propagate — parser state integrity is paramount.
+    expect(() => {
+      emulator.feed(new TextEncoder().encode('\x07'));
+    }).not.toThrow();
+  });
+});

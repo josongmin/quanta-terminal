@@ -14,6 +14,7 @@
 import type { ModeSnapshot } from './ModeSnapshot';
 import { encodeKitty } from './encoders/kitty';
 import { encodeLegacy } from './encoders/legacy';
+import { encodeModifyOtherKeysV1 } from './encoders/modify-other-keys-v1';
 import { encodeModifyOtherKeysV2 } from './encoders/modify-other-keys-v2';
 import type { EncoderOutput, EncodingMode, KeyEvent, TerminalModeSnapshot } from './types';
 
@@ -30,6 +31,9 @@ export function selectEncodingMode(snapshot: TerminalModeSnapshot): {
   }
   if (snapshot.modifyOtherKeys === 2) {
     return { mode: 'modify-other-keys-v2', deprecatedFallback: false };
+  }
+  if (snapshot.modifyOtherKeys === 1) {
+    return { mode: 'modify-other-keys-v1', deprecatedFallback: false };
   }
   return { mode: 'legacy', deprecatedFallback: false };
 }
@@ -72,6 +76,9 @@ export class KeyEncoder {
     switch (mode) {
       case 'legacy':
         bytes = encodeLegacy(event, used);
+        break;
+      case 'modify-other-keys-v1':
+        bytes = encodeModifyOtherKeysV1(event, used);
         break;
       case 'modify-other-keys-v2':
         bytes = encodeModifyOtherKeysV2(event, used);

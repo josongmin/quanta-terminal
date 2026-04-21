@@ -11,6 +11,8 @@ import type {
   AiSuggestOptions,
   AiSuggestion,
   BlockId,
+  GitStatus,
+  GitStatusOptions,
   HostBridge,
   HostEvent,
   HostEventListener,
@@ -18,6 +20,7 @@ import type {
   InstallShellIntegrationReply,
   NotifyOptions,
   OpenInEditorOptions,
+  ReadTextFileOptions,
   SessionId,
   SpawnSessionOptions,
   SpawnSessionResult,
@@ -70,6 +73,7 @@ export function createMockHostBridge(): HostBridge {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
 
     ready(): Promise<void> {
@@ -96,6 +100,7 @@ export function createMockHostBridge(): HostBridge {
         sessionId,
         shell: '/bin/mock',
         cwd: '/tmp',
+        isWsl: false,
       });
     },
 
@@ -208,6 +213,29 @@ export function createMockHostBridge(): HostBridge {
         mutated: false,
         lineCount: 0,
       });
+    },
+
+    readTextFile(_options: ReadTextFileOptions): Promise<string | null> {
+      // Browser-dev mode has no disk access. Resolving `null` for every
+      // call matches the "file missing" contract; features that enrich
+      // the UI from disk (e.g. `useGitBranch`) therefore degrade to
+      // "no extra info" rather than throwing.
+      return Promise.resolve(null);
+    },
+
+    gitStatus(_options: GitStatusOptions): Promise<GitStatus | null> {
+      // Browser-dev mode cannot shell out. Mirrors `readTextFile`: every
+      // call resolves to `null` so git-status-dependent UI silently degrades
+      // to "no dirty / ahead-behind info" rather than throwing.
+      return Promise.resolve(null);
+    },
+
+    getHomeDir(): Promise<string | null> {
+      // Browser-dev mode has no stable HOME concept. Resolve `null` so the
+      // shell-history import feature silently skips — the Settings panel
+      // still lets the user paste paths or trigger re-import if we grow
+      // that affordance; the mock just can't find the files for them.
+      return Promise.resolve(null);
     },
 
     aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {

@@ -15,6 +15,8 @@ import type {
   AiSuggestion,
   AiSuggestOptions,
   BlockId,
+  GitStatus,
+  GitStatusOptions,
   HostBridge,
   HostEvent,
   HostEventListener,
@@ -22,6 +24,7 @@ import type {
   InstallShellIntegrationReply,
   NotifyOptions,
   OpenInEditorOptions,
+  ReadTextFileOptions,
   SessionId,
   SpawnSessionOptions,
   SpawnSessionResult,
@@ -29,6 +32,7 @@ import type {
   UninstallShellIntegrationOptions,
   UninstallShellIntegrationReply,
 } from '@quanta/host-common';
+import { READ_TEXT_FILE_DEFAULT_MAX_BYTES } from '@quanta/host-common';
 
 import { invokeStructured } from './structured-error.js';
 export { HostBridgeErrorThrown } from './structured-error.js';
@@ -48,6 +52,14 @@ interface QuantaSpawnReply {
   session_id: string;
   shell: string;
   cwd: string;
+  /**
+   * Rust-side `is_wsl` probe (see
+   * `packages/host-tauri/src-tauri/src/embedded_shell::is_wsl`). Serialized
+   * as snake_case by the Tauri command (Serde default). Optional because
+   * older backends might not surface it — we default to `false` in the
+   * bridge wrapper.
+   */
+  is_wsl?: boolean;
 }
 
 interface QuantaDataEventPayload {
@@ -110,6 +122,42 @@ interface QuantaAiSuggestArgs {
    *  apply `AI_SUGGEST_DEFAULT_TIMEOUT_MS` (8 s). A non-positive value is
    *  normalised to `null` here so the Rust default always wins. */
   timeout_ms: number | null;
+}
+
+/* Read-text-file command — mirrors `ipc::ReadTextFileArgs` / reply on the
+   Rust side. A missing file surfaces as `content: null, missing: true` so
+   callers that poll `.git/HEAD` never see a rejection for the common
+   "not-in-a-repo" case. */
+interface QuantaReadTextFileArgs {
+  path: string;
+  max_bytes: number;
+}
+
+interface QuantaReadTextFileReply {
+  content: string | null;
+  missing: boolean;
+  truncated: boolean;
+}
+
+/* git-status command — mirrors `ipc::GitStatusArgs` / `GitStatusReply` on
+   the Rust side. A null reply surfaces as "no info" (not a repo, git
+   missing, timeout, etc.). */
+interface QuantaGitStatusArgs {
+  repo_root: string;
+}
+
+interface QuantaGitStatusReply {
+  branch: string | null;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+  detached: boolean;
+}
+
+/* get-home-dir command — mirrors `ipc::GetHomeDirReply` on the Rust side.
+   Returns `{ path: null }` when the host could not determine HOME. */
+interface QuantaGetHomeDirReply {
+  path: string | null;
 }
 
 interface QuantaAiSuggestReply {
@@ -184,6 +232,13 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       editorIntegration: true,
       windowsShellParity: false,
       embeddedDevShell: true,
+      // Populated lazily: Tauri host boots reporting `false`, then flips when
+      // the first `quanta_spawn_session` reply surfaces `is_wsl: true`. The
+      // session-side `isWsl` flag is the authoritative per-session signal;
+      // this cap is here so UI widgets that key off the host-level flag (e.g.
+      // a one-shot "WSL detected" hint) can render without waiting on a
+      // session mutation.
+      wslEnvironment: false,
     },
 
     async ready(): Promise<void> {
@@ -199,10 +254,22 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         env: options.env ? { ...options.env } : null,
       };
       const reply = await invokeStructured<QuantaSpawnReply>('quanta_spawn_session', { args });
+      // Flip the host-level capability the first time a WSL session appears.
+      // Once set it stays true — a mixed WSL / non-WSL mix in the same host
+      // process is not a shape we support, and the cap is a glanceable hint
+      // anyway. Per-session truth still lives on `isWsl` below.
+      const wsl = reply.is_wsl === true;
+      if (wsl) {
+        // `capabilities` is declared `readonly` in the type but is the same
+        // object reference held by the bridge. Mutation via index access is
+        // intentional here — the cap is a write-once latch.
+        (bridge.capabilities as { wslEnvironment: boolean }).wslEnvironment = true;
+      }
       return {
         sessionId: reply.session_id as SessionId,
         shell: reply.shell,
         cwd: reply.cwd,
+        isWsl: wsl,
       };
     },
 
@@ -294,6 +361,73 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         mutated: reply.mutated,
         lineCount: reply.line_count,
       };
+    },
+
+    async readTextFile(options: ReadTextFileOptions): Promise<string | null> {
+      // Small, read-only helper. `.git/HEAD` polling is its first caller —
+      // see `features/git-branch`. A missing file is an expected outcome
+      // (cwd not inside a git repo), so the Rust side surfaces it as a
+      // structured reply (`missing: true`) and we translate that to `null`
+      // here. Real errors (permission denied, invalid UTF-8, file too
+      // large) reject via `invokeStructured` and the caller is expected to
+      // swallow and treat the path as unreadable.
+      const cap =
+        typeof options.maxBytes === 'number' && options.maxBytes > 0
+          ? Math.floor(options.maxBytes)
+          : READ_TEXT_FILE_DEFAULT_MAX_BYTES;
+      const args: QuantaReadTextFileArgs = {
+        path: options.path,
+        max_bytes: cap,
+      };
+      try {
+        const reply = await invokeStructured<QuantaReadTextFileReply>('quanta_read_text_file', {
+          args,
+        });
+        if (reply.missing) return null;
+        return reply.content;
+      } catch {
+        // The UI caller treats any rejection as "unreadable for now" and
+        // retries on the next cwd change; swallowing here keeps the
+        // Promise<string | null> contract at the bridge boundary.
+        return null;
+      }
+    },
+
+    async gitStatus(options: GitStatusOptions): Promise<GitStatus | null> {
+      // Read-only "shell-out once, cache for a while" helper. See
+      // `features/git-branch/read-status` for the caching/debouncing wrapper;
+      // the bridge itself is a thin pass-through that normalises rejections
+      // into a null return (any failure = "no info", same as the mock path).
+      const args: QuantaGitStatusArgs = { repo_root: options.repoRoot };
+      try {
+        const reply = await invokeStructured<QuantaGitStatusReply | null>(
+          'quanta_git_status',
+          { args },
+        );
+        if (reply === null) return null;
+        return {
+          branch: reply.branch,
+          dirty: reply.dirty,
+          ahead: reply.ahead,
+          behind: reply.behind,
+          detached: reply.detached,
+        };
+      } catch {
+        return null;
+      }
+    },
+
+    async getHomeDir(): Promise<string | null> {
+      // Thin pass-through to `quanta_get_home_dir`. A non-resolving HOME is
+      // NOT an error — mirror `readTextFile`'s null convention so callers
+      // can branch on the result without a try/catch. Any unexpected IPC
+      // failure is swallowed and collapsed to `null` at this boundary.
+      try {
+        const reply = await invokeStructured<QuantaGetHomeDirReply>('quanta_get_home_dir');
+        return reply.path ?? null;
+      } catch {
+        return null;
+      }
     },
 
     async aiSuggest(options: AiSuggestOptions): Promise<AiSuggestion> {

@@ -72,6 +72,9 @@ function makeBridge(): HostBridge & { resize: ReturnType<typeof vi.fn> } {
         rulesetVersion: 1,
       };
     },
+    async readTextFile() {
+      return null;
+    },
     subscribe(listener: HostEventListener): Subscription {
       listeners.add(listener);
       return { unsubscribe: () => listeners.delete(listener) };

@@ -370,10 +370,15 @@ describe('malformed input resilience — security / injection defense', () => {
       // check below targets CALLBACKS specifically, i.e. `on*` surfaces
       // other than the closed-union `onMode`.)
       const parserProps = Object.getOwnPropertyNames(parser);
-      const callbackLike = parserProps.filter((k) => k.toLowerCase().startsWith('on'));
-      // `onMode` is the single allowed side channel; anything else is a
-      // regression.
-      expect(callbackLike).toEqual(['onMode']);
+      const callbackLike = parserProps
+        .filter((k) => k.toLowerCase().startsWith('on'))
+        .sort();
+      // `onMode` and `onBell` are the only allowed side channels. `onBell`
+      // carries no payload — it is fired by bare BEL (0x07) in Ground state
+      // so the UI can drive a visual flash / optional audible beep. Any
+      // other `on*` callback on this surface is a security regression
+      // (clipboard / title payloads MUST NOT leak through the parser).
+      expect(callbackLike).toEqual(['onBell', 'onMode']);
       for (const key of parserProps) {
         const lower = key.toLowerCase();
         expect(lower).not.toContain('clipboard');

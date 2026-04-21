@@ -32,11 +32,16 @@
   opacity: 0;
   pointer-events: none;
   transform: translateY(2px);
-  transition:
-    opacity var(--q-dur-fast) var(--q-ease-out),
-    transform var(--q-dur-fast) var(--q-ease-out);
   /* Sit above virtualized block chrome, modal overlays stay higher. */
   z-index: 1000;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bubble {
+    transition:
+      opacity var(--q-dur-fast) var(--q-ease-out),
+      transform var(--q-dur-fast) var(--q-ease-out);
+  }
 }
 
 .bubble[data-open='true'] {

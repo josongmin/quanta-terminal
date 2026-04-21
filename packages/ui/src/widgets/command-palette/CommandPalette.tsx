@@ -31,6 +31,7 @@ import { activateFocusTrap } from '../../shared/lib/focus-trap.js';
 import { t } from '../../shared/i18n/index.js';
 import {
   filterCommands,
+  getCommandHintChips,
   getDefaultCommands,
   SECTION_ORDER,
   SECTION_TITLE,
@@ -193,6 +194,23 @@ export function CommandPalette(props: CommandPaletteProps) {
 
 CommandPalette.displayName = 'CommandPalette';
 
+/**
+ * Render the keyboard-hint chip row for a command. Uses
+ * `getCommandHintChips()` to pull the platform-correct chips — the helper
+ * handles both the new `accelerator` spec and the legacy `hint` array.
+ */
+function renderHint(cmd: Command) {
+  const chips = getCommandHintChips(cmd);
+  if (chips.length === 0) return null;
+  return (
+    <div className={styles.rowHint}>
+      {chips.map((k, i) => (
+        <Kbd key={`${cmd.id}-h-${i}`}>{k}</Kbd>
+      ))}
+    </div>
+  );
+}
+
 function renderSections(
   filtered: readonly Command[],
   activeIndex: number,
@@ -229,13 +247,7 @@ function renderSections(
                     <div className={styles.rowDescription}>{cmd.description}</div>
                   ) : null}
                 </div>
-                {cmd.hint ? (
-                  <div className={styles.rowHint}>
-                    {cmd.hint.map((k, i) => (
-                      <Kbd key={`${cmd.id}-h-${i}`}>{k}</Kbd>
-                    ))}
-                  </div>
-                ) : null}
+                {renderHint(cmd)}
               </li>
             );
           })}

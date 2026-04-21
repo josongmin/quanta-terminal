@@ -1377,5 +1377,55 @@ describe('appendToActiveBlock — idle auto-completion', () => {
     expect(IDLE_COMPLETE_MS).toBeGreaterThan(0);
     expect(Number.isFinite(IDLE_COMPLETE_MS)).toBe(true);
   });
+
+  it('alt-screen active SUPPRESSES idle completion (user reading in vim/less must not trip the spinner off)', async () => {
+    // Regression for D1: the user opens `less` or `vim`, stops producing
+    // output, and sits reading. The idle timer used to fire 400 ms later
+    // and mark the block `complete` (with exit code 0 fabricated) while
+    // the program is obviously still running. Subsequent keystrokes'
+    // output would then land on a "done" block. The fix gates idle
+    // scheduling on `useTuiStore().active === false`.
+    const { useTuiStore } = await import('../../../entities/tui/index.js');
+    vi.useFakeTimers();
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null, idleCompletionMs: IDLE_COMPLETE_MS });
+    rec.setActive('blk-a' as BlockId);
+    // Enter alt-screen BEFORE any chunk arrives.
+    useTuiStore.getState().enter();
+    appendToActiveBlock(A, B64_FOO);
+    // Advance past the idle window — no completion should fire because
+    // we're inside a TUI.
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS + 50);
+    expect(rec.completes.length).toBe(0);
+    useTuiStore.getState().exit();
+    vi.useRealTimers();
+  });
+
+  it('entering alt-screen MID-WINDOW cancels a pending idle timer', async () => {
+    // Variant: user finished a shell command, idle timer armed. Before
+    // 400 ms elapses they invoke vim (say, via a shell alias) → alt
+    // screen active — we must NOT then still close the block.
+    const { useTuiStore } = await import('../../../entities/tui/index.js');
+    vi.useFakeTimers();
+    const rec = makeRecorder();
+    unbindStore = bindBlockStore(rec.store);
+    const A = 'sess-a' as SessionId;
+    installCommandRouter(A, { detector: null, idleCompletionMs: IDLE_COMPLETE_MS });
+    rec.setActive('blk-a' as BlockId);
+    appendToActiveBlock(A, B64_FOO);
+    // Timer armed. Advance half the window.
+    vi.advanceTimersByTime(Math.floor(IDLE_COMPLETE_MS / 2));
+    // User opens a TUI. The NEXT chunk re-schedules (or doesn't).
+    useTuiStore.getState().enter();
+    appendToActiveBlock(A, B64_BAR);
+    // Advance past what would have been the original fire time AND the
+    // re-armed window. No completion.
+    vi.advanceTimersByTime(IDLE_COMPLETE_MS * 2);
+    expect(rec.completes.length).toBe(0);
+    useTuiStore.getState().exit();
+    vi.useRealTimers();
+  });
 });
 

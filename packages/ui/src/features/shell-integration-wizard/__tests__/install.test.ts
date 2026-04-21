@@ -51,6 +51,9 @@ function makeBridge(spy: BridgeSpy): HostBridge {
         rulesetVersion: 1,
       };
     },
+    async readTextFile() {
+      return null;
+    },
     subscribe() {
       return { unsubscribe: () => {} };
     },

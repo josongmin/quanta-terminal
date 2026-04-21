@@ -28,6 +28,34 @@ export type UnhandledRejectionToast = (userMessage: string, context?: unknown) =
 let toastFn: UnhandledRejectionToast | null = null;
 let crashReportFn: ((reason: unknown) => void) | null = null;
 
+/** Generic observer called for every unhandled rejection or error. Receives the
+ *  raw reason (structured error or primitive) and the event source. */
+export type UnhandledRejectionObserver = (
+  reason: unknown,
+  source: 'promise' | 'error',
+) => void;
+
+// For tests: call registerUnhandledRejectionObserver's returned unregister fn to clean up.
+const extraObservers: UnhandledRejectionObserver[] = [];
+
+/**
+ * Register an additional observer that is called for every unhandled rejection
+ * or uncaught error. Returns an unregister function.
+ *
+ * Unlike `setUnhandledRejectionToast` / `setCrashReporter` (which allow only
+ * one handler per slot), multiple observers can be registered simultaneously.
+ * Use this for analytics, telemetry, or secondary reporting pipelines.
+ */
+export function registerUnhandledRejectionObserver(
+  fn: UnhandledRejectionObserver,
+): () => void {
+  extraObservers.push(fn);
+  return () => {
+    const idx = extraObservers.indexOf(fn);
+    if (idx >= 0) extraObservers.splice(idx, 1);
+  };
+}
+
 /**
  * Register the UI-owned toast dispatcher. The `@quanta/ui` track (which we
  * cannot import directly in this crate) calls this from its root layout so
@@ -111,6 +139,14 @@ export function handleUnhandledReason(reason: unknown, source: 'promise' | 'erro
       crashReportFn(reason);
     } catch (err) {
       loggerFn.warn('crash reporter threw while reporting unhandled reason', err);
+    }
+  }
+
+  for (const obs of extraObservers) {
+    try {
+      obs(reason, source);
+    } catch (err) {
+      loggerFn.warn('extra observer threw while handling unhandled reason', err);
     }
   }
 }

@@ -30,7 +30,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HostBridge, SessionId } from '@quanta/host-common';
-import { VtEmulator } from '../../shared/lib/vt-emulator/index.js';
+import { VtEmulator, type RgbColor } from '../../shared/lib/vt-emulator/index.js';
 import { GridMirror } from '../../shared/lib/grid-mirror/index.js';
 import {
   DEFAULT_METRICS,
@@ -40,8 +40,79 @@ import {
 import { TerminalCanvas } from '../../widgets/terminal-canvas/index.js';
 import { base64ToBytes } from '../../shared/lib/base64.js';
 import { useAltScreenMode } from '../../entities/tui/index.js';
+import { useBellStore } from '../../entities/bell/index.js';
+import { useSessionsStore } from '../../entities/session/index.js';
 import { createLogger } from '../../shared/lib/logger.js';
+import { t } from '../../shared/i18n/index.js';
 import styles from './tui-render-surface.module.css';
+
+/**
+ * Read the current theme's fg/bg from CSS custom properties. The ThemeProvider
+ * sets `--q-fg` / `--q-bg-terminal` (with `--q-bg` as a secondary fallback) on
+ * `document.documentElement`, so `getComputedStyle(root)` gives us whatever is
+ * live. When the values don't parse (SSR, unexpected format), we fall back to
+ * xterm's historical defaults — white on black — so TUI apps that query always
+ * see a plausible colour.
+ */
+function readThemeColors(): { fg: RgbColor; bg: RgbColor } {
+  const fallback: { fg: RgbColor; bg: RgbColor } = {
+    fg: { r: 0xe6, g: 0xe8, b: 0xee },
+    bg: { r: 0x0b, g: 0x0c, b: 0x10 },
+  };
+  if (typeof document === 'undefined' || !document.documentElement) return fallback;
+  try {
+    const cs = getComputedStyle(document.documentElement);
+    const fg = parseCssColor(cs.getPropertyValue('--q-fg'));
+    const bg =
+      parseCssColor(cs.getPropertyValue('--q-bg-terminal')) ??
+      parseCssColor(cs.getPropertyValue('--q-bg'));
+    return {
+      fg: fg ?? fallback.fg,
+      bg: bg ?? fallback.bg,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Parse a CSS color string into an RGB triple. Only `#RGB`, `#RRGGBB`, and
+ * `rgb()`/`rgba()` are handled — these are the forms our token sheet uses.
+ * Anything else returns `null` and the caller falls back.
+ */
+function parseCssColor(raw: string): RgbColor | null {
+  const v = raw.trim();
+  if (v.length === 0) return null;
+  if (v.startsWith('#')) {
+    const hex = v.slice(1);
+    if (hex.length === 3) {
+      const r = parseInt(hex[0]! + hex[0], 16);
+      const g = parseInt(hex[1]! + hex[1], 16);
+      const b = parseInt(hex[2]! + hex[2], 16);
+      if (![r, g, b].some((x) => Number.isNaN(x))) return { r, g, b };
+      return null;
+    }
+    if (hex.length === 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      if (![r, g, b].some((x) => Number.isNaN(x))) return { r, g, b };
+      return null;
+    }
+    return null;
+  }
+  const m = /^rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(v);
+  if (m) {
+    const r = Math.round(parseFloat(m[1]!));
+    const g = Math.round(parseFloat(m[2]!));
+    const b = Math.round(parseFloat(m[3]!));
+    if (![r, g, b].some((x) => Number.isNaN(x))) return { r, g, b };
+  }
+  return null;
+}
+
+/** Interval between hidden-text-mirror refreshes fed to assistive tech. */
+const AT_MIRROR_DEBOUNCE_MS = 200;
 
 const log = createLogger('tui.render-surface');
 
@@ -90,6 +161,9 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
   const { sessionId, bridge } = props;
   const { active } = useAltScreenMode();
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Hidden `<pre>` element populated with a plain-text mirror of the grid.
+  // Screen readers pick this up via `aria-live`; sighted users never see it.
+  const atMirrorRef = useRef<HTMLPreElement | null>(null);
   // We keep the core in state (not just a ref) so that mirror/source are
   // available to the JSX that mounts TerminalCanvas. The effect builds the
   // triple once per (active, sessionId, bridge) tuple and tears it down on
@@ -109,12 +183,40 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
     const mirror = new GridMirror({
       onChange: (dirty) => source.emit(dirty),
     });
+    // Responses to DSR/DA and OSC 10/11 color queries flow straight back to
+    // the PTY so apps like vim / neovim see a well-formed terminal.
+    const respond = (bytes: Uint8Array): void => {
+      if (bytes.length === 0) return;
+      const payload = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      bridge.write(sessionId, payload).catch((err: unknown) => {
+        log.warn('tui-render-surface: bridge.write (query response) failed', err);
+      });
+    };
     const emulator = new VtEmulator({
       sessionId: `tui-${sessionId}`,
       rows: 24,
       cols: 80,
       onEnvelope: (env) => {
         mirror.apply(env);
+      },
+      onRespond: respond,
+      onCwdChanged: (cwd) => {
+        // Route straight into the collection store so the tab label and any
+        // status-bar CWD consumer pick up the shell-emitted path. Source is
+        // 'osc7' so downstream UI can distinguish from shell-integration
+        // reports.
+        useSessionsStore.getState().patchSession(sessionId, {
+          cwd,
+          cwdSource: 'osc7',
+        });
+      },
+      themeColors: readThemeColors,
+      // Route bare BEL (0x07) into the bell store so the TerminalPage's
+      // BellFlash overlay (and optional audible beep) can surface it.
+      // OSC / DCS / APC / PM terminators don't reach this hook — the parser
+      // distinguishes by FSM state.
+      onBell: () => {
+        useBellStore.getState().trigger();
       },
     });
 
@@ -183,6 +285,62 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
     return () => ro.disconnect();
   }, [active, bridge, sessionId, core]);
 
+  // Canvas AT fallback: screen readers cannot read glyphs drawn to a
+  // `<canvas>`, so we keep a visually-hidden `<pre>` mirror of the grid rows
+  // and refresh it on a 200 ms debounce. Each emit coalesces dirty rows into
+  // a single textContent write — cheaper than re-rendering a whole tree and
+  // keeps us under the screen-reader's announcement cadence.
+  useEffect(() => {
+    if (!active) return;
+    if (!core) return;
+    const { mirror, source } = core;
+
+    const render = (): void => {
+      const el = atMirrorRef.current;
+      if (!el) return;
+      const { rows } = mirror.getDimensions();
+      const lines: string[] = [];
+      for (let r = 0; r < rows; r += 1) {
+        const row = mirror.getRow(r);
+        if (!row) {
+          lines.push('');
+          continue;
+        }
+        let text = '';
+        for (const cell of row.cells) {
+          text += cell.grapheme || ' ';
+        }
+        // Trailing whitespace clutters SR output — collapse it.
+        lines.push(text.replace(/\s+$/u, ''));
+      }
+      el.textContent = lines.join('\n');
+    };
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (): void => {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        render();
+      }, AT_MIRROR_DEBOUNCE_MS);
+    };
+
+    const unsub = source.subscribe(() => {
+      schedule();
+    });
+    // Seed the mirror with whatever is already in the grid (e.g. the initial
+    // snapshot received before this effect wired up).
+    render();
+
+    return () => {
+      unsub();
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+  }, [active, core]);
+
   const backendKind = useMemo(() => resolveBackendKind(), []);
   const platform = useMemo(() => detectPlatform(), []);
 
@@ -193,6 +351,7 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
       ref={containerRef}
       className={styles['tuiRenderSurface']!}
       data-testid="tui-render-surface"
+      aria-label={t('tui.render.ariaLabel')}
     >
       {core ? (
         <TerminalCanvas
@@ -204,6 +363,16 @@ export function TuiRenderSurface(props: TuiRenderSurfaceProps): JSX.Element | nu
           className={styles['tuiCanvas']!}
         />
       ) : null}
+      {/* Canvas AT fallback: a visually-hidden text mirror of the grid so
+          screen readers can follow the TUI. Debounced to 200 ms so the
+          announcement cadence stays sane under high-frequency repaints. */}
+      <pre
+        ref={atMirrorRef}
+        className={styles['tuiAtMirror']!}
+        aria-live="polite"
+        aria-atomic="false"
+        data-testid="tui-at-mirror"
+      />
     </div>
   );
 }

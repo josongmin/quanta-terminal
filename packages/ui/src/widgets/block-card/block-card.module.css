@@ -1,15 +1,11 @@
 /*
- * BlockCard — a single block rendered as a Warp-style card.
+ * BlockCard — Warp-style command block card.
  *
- * Card chrome
- * -----------
- * - Inset 1px hairline on --q-border-subtle, elevated surface on
- *   --q-bg-elev-1.
- * - 12px radius matches ADR 0010 overlay radius discipline.
- * - Left accent stripe differentiates running (accent) and error (danger)
- *   from the neutral quiescent completed/canceled states.
- *
- * Header/body layout is grid-based so collapsing just swaps template rows.
+ * Key design decisions:
+ *  - Minimal left stripe for status (running/error/canceled).
+ *  - Action buttons float in the top-right on card hover.
+ *  - Output body uses the terminal background for a seamless feel.
+ *  - Rounded card with subtle border and depth shadow.
  */
 
 .card {
@@ -17,27 +13,31 @@
   display: grid;
   grid-template-columns: 3px 1fr;
   grid-template-rows: auto auto;
-  background: var(--q-bg-elev-1);
-  border: 1px solid var(--q-border-subtle);
-  border-radius: var(--q-radius-lg);
+  background: var(--q-block-bg);
+  border: 1px solid var(--q-block-border);
+  border-radius: var(--q-block-radius);
   overflow: hidden;
   font-family: var(--q-font-sans);
   color: var(--q-fg);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
-  /* EPIC-H §4.2: combine the existing border-colour hover with a 160 ms fade
-     of the chrome padding/opacity on alt-screen transitions. The duration
-     is pinned to the RFC §7.7 constant; reduced-motion short-circuits via
-     the media query below. */
+  box-shadow: var(--q-block-shadow);
   transition:
     border-color var(--q-dur-fast) var(--q-ease-out),
+    box-shadow var(--q-dur-fast) var(--q-ease-out),
+    background var(--q-dur-fast) var(--q-ease-out),
     padding 160ms var(--q-ease-out),
     opacity 160ms var(--q-ease-out);
 }
+.card:hover {
+  border-color: var(--q-block-border-active);
+  box-shadow: var(--q-block-shadow-active);
+}
+.card[data-selected='true'] {
+  background: var(--q-block-bg-selected);
+  border-color: var(--q-block-border-active);
+  box-shadow: var(--q-block-shadow-active);
+}
 
-/* Alt-screen chrome collapse (EPIC-H §4.2). The card keeps rendering so its
- * children (the running status header, the body) can continue streaming;
- * the chrome pads/fades to a status-line footprint. The AltScreenStatusBar
- * widget renders the authoritative label on top of the terminal canvas. */
+/* Alt-screen chrome collapse */
 .card.altScreenCollapsed .header {
   padding-top: 2px;
   padding-bottom: 2px;
@@ -60,22 +60,20 @@
     transition: none;
   }
   .card.altScreenCollapsed .header {
-    /* Still collapse, but no fade. */
     transition: none;
   }
 }
-.card:hover {
-  border-color: var(--q-border-strong);
-}
 
+/* Left status stripe */
 .stripe {
   grid-row: 1 / span 2;
   grid-column: 1;
   background: transparent;
+  transition: background var(--q-dur-fast) var(--q-ease-out);
 }
 .card[data-status='running'] .stripe {
   background: var(--q-accent);
-  animation: q-stripe-pulse 1.8s var(--q-ease-in-out) infinite;
+  animation: q-stripe-pulse 2s var(--q-ease-in-out) infinite;
 }
 .card[data-status='error'] .stripe {
   background: var(--q-danger);
@@ -86,39 +84,40 @@
 
 @keyframes q-stripe-pulse {
   0%, 100% { opacity: 0.9; }
-  50% { opacity: 0.45; }
+  50% { opacity: 0.35; }
 }
 @media (prefers-reduced-motion: reduce) {
   .card[data-status='running'] .stripe { animation: none; }
 }
 
+/* Header row */
 .header {
   grid-row: 1;
   grid-column: 2;
   display: flex;
   align-items: center;
   gap: var(--q-space-2);
-  padding: var(--q-space-3) var(--q-space-3);
+  padding: 9px var(--q-space-3);
   min-width: 0;
   cursor: pointer;
   user-select: none;
 }
 .card[data-collapsed='true'] .header {
-  padding-top: var(--q-space-2);
-  padding-bottom: var(--q-space-2);
+  padding-top: 7px;
+  padding-bottom: 7px;
 }
 
+/* Status dot */
 .dot {
   flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--q-fg-faint);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 .card[data-status='running'] .dot {
   background: var(--q-accent);
-  animation: q-dot-pulse 1.8s var(--q-ease-in-out) infinite;
+  animation: q-dot-pulse 2s var(--q-ease-in-out) infinite;
 }
 .card[data-status='completed'] .dot[data-exit='0'] { background: var(--q-success); }
 .card[data-status='completed'] .dot[data-exit='nonzero'] { background: var(--q-danger); }
@@ -126,9 +125,9 @@
 .card[data-status='canceled'] .dot { background: var(--q-warning); }
 
 @keyframes q-dot-pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(94, 160, 255, 0.55); }
-  70%  { box-shadow: 0 0 0 5px rgba(94, 160, 255, 0);   }
-  100% { box-shadow: 0 0 0 0   rgba(94, 160, 255, 0);   }
+  0%   { box-shadow: 0 0 0 0   rgba(107, 163, 255, 0.6); }
+  70%  { box-shadow: 0 0 0 4px rgba(107, 163, 255, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(107, 163, 255, 0);   }
 }
 @media (prefers-reduced-motion: reduce) {
   .card[data-status='running'] .dot { animation: none; }
@@ -139,11 +138,23 @@
   min-width: 0;
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-md);
+  font-weight: 500;
   color: var(--q-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Syntax token colors — matches composer overlay palette. */
+.hlCommandKnown   { color: var(--color-syntax-command-known); }
+.hlCommandUnknown { color: var(--color-syntax-command-unknown); }
+.hlFlag           { color: var(--color-syntax-flag); }
+.hlString         { color: var(--color-syntax-string); }
+.hlPath           { color: var(--color-syntax-path); }
+.hlVar            { color: var(--color-syntax-var); }
+.hlOperator       { color: var(--color-syntax-operator); }
+.hlSubshell       { color: var(--color-syntax-subshell); font-weight: 600; }
+.hlComment        { color: var(--color-syntax-comment); font-style: italic; }
 
 .meta {
   flex: 0 0 auto;
@@ -157,41 +168,55 @@
 
 .exit {
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: var(--q-radius-sm);
 }
 .exit[data-nonzero='true'] {
   color: var(--q-danger);
+  background: rgba(255, 95, 95, 0.1);
 }
 .exit[data-nonzero='false'] {
   color: var(--q-success);
+  background: rgba(78, 201, 148, 0.08);
 }
 
 .duration {
   font-variant-numeric: tabular-nums;
   color: var(--q-fg-faint);
+  font-size: 11px;
 }
 
+/* Action buttons — hidden by default, revealed on card hover */
 .actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--q-dur-fast) var(--q-ease-out);
+}
+.card:hover .actions,
+.card:focus-within .actions {
+  opacity: 1;
 }
 
 .iconButton {
   appearance: none;
   border: none;
   background: transparent;
-  color: var(--q-fg-muted);
+  color: var(--q-fg-faint);
   padding: 4px;
   border-radius: var(--q-radius-sm);
   cursor: pointer;
   line-height: 0;
-  transition: background var(--q-dur-fast) var(--q-ease-out),
-              color var(--q-dur-fast) var(--q-ease-out);
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
 }
 .iconButton:hover,
 .iconButton:focus-visible {
-  background: var(--q-bg-elev-2);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--q-fg);
   outline: none;
 }
@@ -202,12 +227,21 @@
 .iconButton[aria-disabled='true'] {
   color: var(--q-fg-faint);
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.35;
 }
 .iconButton:disabled:hover,
 .iconButton[aria-disabled='true']:hover {
   background: transparent;
   color: var(--q-fg-faint);
+}
+
+/* Floating copy button — prominent on hover, positioned over top-right of body */
+.iconButton[data-testid*='copy'] {
+  color: var(--q-fg-muted);
+}
+.card:hover .iconButton[data-testid*='copy'],
+.card:focus-within .iconButton[data-testid*='copy'] {
+  color: var(--q-fg);
 }
 
 .exportWrap {
@@ -222,12 +256,22 @@
   z-index: 20;
   display: flex;
   flex-direction: column;
-  min-width: 180px;
+  min-width: 190px;
   padding: 4px;
-  background: var(--q-bg-elev-2);
-  border: 1px solid var(--q-border-subtle);
+  background: var(--q-glass-bg-strong);
+  backdrop-filter: var(--q-glass-blur);
+  -webkit-backdrop-filter: var(--q-glass-blur);
+  border: 1px solid var(--q-glass-border);
   border-radius: var(--q-radius-md);
-  box-shadow: var(--q-shadow-pop);
+  box-shadow: var(--q-shadow-elev-3), var(--q-shadow-inset-top);
+  animation: q-menu-pop-in var(--q-dur-fast) var(--q-ease-spring);
+}
+@keyframes q-menu-pop-in {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .exportMenu { animation: none; }
 }
 
 .exportMenuItem {
@@ -239,38 +283,46 @@
   font-family: inherit;
   font-size: var(--q-font-size-sm);
   text-align: left;
-  padding: var(--q-space-2) var(--q-space-3);
+  padding: 6px var(--q-space-3);
   cursor: pointer;
   transition: background var(--q-dur-fast) var(--q-ease-out);
 }
-
 .exportMenuItem:hover,
 .exportMenuItem:focus-visible {
-  background: var(--q-bg-elev-1);
+  background: rgba(255, 255, 255, 0.06);
   outline: none;
 }
 
 .caret {
   display: inline-flex;
+  color: var(--q-fg-faint);
   transition: transform var(--q-dur-fast) var(--q-ease-out);
 }
 .card[data-collapsed='true'] .caret {
   transform: rotate(-90deg);
 }
 
+/* Body */
 .body {
   grid-row: 2;
   grid-column: 2;
   padding: 0 var(--q-space-3) var(--q-space-3) var(--q-space-3);
   border-top: 1px solid var(--q-border-subtle);
   background: var(--q-bg);
+  position: relative;
+}
+
+/* Floating copy-all button that appears on body hover */
+.body::after {
+  content: '';
 }
 
 .output {
   margin: 0;
-  padding: var(--q-space-2) 0 0 0;
+  padding: 8px 0 0 0;
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-term);
+  font-feature-settings: var(--q-font-features, normal);
   line-height: var(--q-line-height-term);
   color: var(--q-fg);
   white-space: pre-wrap;
@@ -278,18 +330,27 @@
   overflow-wrap: anywhere;
   max-height: 60vh;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--q-border-strong) transparent;
+}
+.output::-webkit-scrollbar { width: 4px; }
+.output::-webkit-scrollbar-thumb {
+  background: var(--q-border-strong);
+  border-radius: 2px;
 }
 
 .empty {
   color: var(--q-fg-faint);
   font-style: italic;
+  font-size: var(--q-font-size-sm);
   padding: var(--q-space-2) 0;
 }
 
+/* Collapsed peek row */
 .peek {
   grid-row: 2;
   grid-column: 2;
-  padding: 0 var(--q-space-3) var(--q-space-2) var(--q-space-3);
+  padding: 0 var(--q-space-3) 8px var(--q-space-3);
   display: flex;
   align-items: center;
   gap: var(--q-space-2);
@@ -298,17 +359,12 @@
   font-size: var(--q-font-size-sm);
   border-top: 1px solid var(--q-border-subtle);
 }
-/*
- * Audit P1 (fix 7): the summary chip is the primary affordance in the
- * collapsed row — "cmd · N lines · 1.2s · exit 0" — so it gets the card's
- * foreground color and flexes naturally. The optional last-line preview to
- * its right fades to faint and ellipses when space runs out.
- */
 .peekSummary {
   flex: 0 0 auto;
-  color: var(--q-fg-muted);
+  color: var(--q-fg-faint);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  font-size: 11px;
 }
 .peekText {
   flex: 1 1 auto;
@@ -316,21 +372,63 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--q-fg-faint);
+  color: var(--q-fg-muted);
+  font-size: 11.5px;
 }
 .peekBytes {
   flex: 0 0 auto;
   color: var(--q-fg-faint);
   font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  opacity: 0.6;
 }
 
+/* Error and secret banners */
 .errorBanner {
   margin-top: var(--q-space-2);
   padding: var(--q-space-2) var(--q-space-3);
-  background: rgba(255, 107, 107, 0.08);
-  border: 1px solid rgba(255, 107, 107, 0.25);
+  background: rgba(255, 95, 95, 0.07);
+  border: 1px solid rgba(255, 95, 95, 0.2);
   border-radius: var(--q-radius-sm);
   color: var(--q-danger);
   font-family: var(--q-font-mono);
   font-size: var(--q-font-size-sm);
+}
+
+.secretBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+  margin-bottom: var(--q-space-2);
+  padding: 5px var(--q-space-3);
+  background: rgba(230, 184, 74, 0.07);
+  border: 1px solid rgba(230, 184, 74, 0.25);
+  border-radius: var(--q-radius-sm);
+  color: var(--q-fg-faint);
+  font-size: var(--q-font-size-sm);
+}
+
+.secretBannerText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.secretToggleButton {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px var(--q-space-2);
+  background: transparent;
+  border: 1px solid rgba(230, 184, 74, 0.4);
+  border-radius: var(--q-radius-sm);
+  color: var(--q-warning);
+  font-size: inherit;
+  cursor: pointer;
+  transition: background var(--q-dur-fast) var(--q-ease-out);
+}
+.secretToggleButton:hover,
+.secretToggleButton:focus-visible {
+  background: rgba(230, 184, 74, 0.1);
 }

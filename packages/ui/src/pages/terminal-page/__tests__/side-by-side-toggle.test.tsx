@@ -85,6 +85,7 @@ vi.mock('../../../shared/api/host-bridge.js', async () => {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     ready: async () => {},
     spawn: async () => ({ sessionId: 'mock-sess', shell: '/bin/sh', cwd: '/tmp' }),

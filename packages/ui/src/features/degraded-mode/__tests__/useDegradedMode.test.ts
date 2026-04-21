@@ -29,6 +29,7 @@ function fakeBridge(): { bridge: HostBridge; emit: (event: HostEvent) => void } 
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     ready: async () => {},
     spawn: async () => ({ sessionId: 'x', shell: '/bin/sh', cwd: '/' }),
@@ -53,6 +54,7 @@ function fakeBridge(): { bridge: HostBridge; emit: (event: HostEvent) => void } 
       lineCount: 0,
     }),
     notify: async () => {},
+    readTextFile: async () => null,
     aiSuggest: async () => ({
       id: '',
       command: '',
@@ -279,6 +281,53 @@ describe('useDegradedMode', () => {
       });
     });
     expect(result.current.state).toBe('degraded');
+  });
+
+  it('`currentSessionId: undefined → null` prop transition flips gate from legacy to strict (no stale-closure)', () => {
+    // Regression: `hasSessionGate` was previously a plain const captured
+    // in the subscribe effect's closure. A caller that started with
+    // `undefined` (option omitted) then rendered again with `null`
+    // (option explicitly provided-but-nullable) kept the first render's
+    // `hasSessionGate === false`, so strict filtering never activated
+    // for the rest of the hook's lifetime. Both values now live in a
+    // ref, so the transition takes effect on the very next event.
+    const { bridge, emit } = fakeBridge();
+    const { result, rerender } = renderHook(
+      (props: { currentSessionId?: string | null }) =>
+        useDegradedMode({
+          bridge,
+          disableTimers: true,
+          ...(props.currentSessionId !== undefined
+            ? { currentSessionId: props.currentSessionId }
+            : {}),
+        }),
+      { initialProps: {} },
+    );
+    // First render: option omitted → legacy behavior.
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'anything',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('degraded');
+    act(() => {
+      result.current.recover();
+    });
+    // Re-render with the option explicitly null. Gate MUST become strict
+    // immediately — a mismatched stale event must not flip again.
+    rerender({ currentSessionId: null });
+    act(() => {
+      emit({
+        kind: 'pty_exit',
+        sessionId: 'old-stale-session',
+        exitCode: null,
+        signal: 'sidecar_crash_recovered',
+      });
+    });
+    expect(result.current.state).toBe('healthy');
   });
 
   it('treats any other bridge event as a liveness touch', () => {

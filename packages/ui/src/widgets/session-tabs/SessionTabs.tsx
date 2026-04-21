@@ -44,7 +44,15 @@ import type { SessionId } from '../../shared/types/generated/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import { showToast } from '../../shared/ui/toast/index.js';
 import { t } from '../../shared/i18n/index.js';
+import { TabHoverPreview } from './TabHoverPreview.js';
 import styles from './session-tabs.module.css';
+
+/**
+ * Dwell time before showing the hover preview card. Matches the rough timing
+ * of macOS tab hover and keeps the card from flickering in while the user is
+ * skimming across the tab strip with the cursor.
+ */
+const HOVER_PREVIEW_DELAY_MS = 600;
 
 /** DataTransfer MIME we use for tab reorder payloads. */
 const DND_TAB_MIME = 'application/x-quanta-session-tab';
@@ -115,6 +123,31 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
   const menuRef = useRef<HTMLSpanElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dropSide, setDropSide] = useState<'none' | 'left' | 'right'>('none');
+
+  // Hover-preview state. We only track the preview for INACTIVE tabs — the
+  // active tab is what the user is already looking at, so a preview would be
+  // redundant (and potentially obscure the real content). The timer is held
+  // in a ref so a rapid mouseenter / mouseleave oscillation doesn't produce a
+  // stale setTimeout that fires after the pointer has moved on.
+  const [preview, setPreview] = useState<{
+    readonly anchorRight: number;
+    readonly anchorBottom: number;
+  } | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const clearPreviewTimer = useCallback(() => {
+    if (previewTimerRef.current !== null) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }, []);
+  const hidePreview = useCallback(() => {
+    clearPreviewTimer();
+    setPreview(null);
+  }, [clearPreviewTimer]);
+  // Clean up any pending timer on unmount so we don't setState on a dead tree.
+  useEffect(() => {
+    return () => clearPreviewTimer();
+  }, [clearPreviewTimer]);
   useEffect(() => {
     if (!menuOpen) return;
     const onDoc = (ev: globalThis.MouseEvent) => {
@@ -150,8 +183,44 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
   }, [tab.isActive]);
 
   const handleSelect = useCallback(() => {
+    // Clicking a tab dismisses any pending / visible preview — we're about to
+    // switch to that session and the preview would compete with the real view.
+    hidePreview();
     onSelect?.(tab.id);
-  }, [onSelect, tab.id]);
+  }, [hidePreview, onSelect, tab.id]);
+
+  // Hover preview is suppressed for the active tab (redundant) and when the
+  // drop indicator is showing (a drag in progress is a different intent).
+  const previewEligible = !tab.isActive;
+  const handleMouseEnter = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      if (!previewEligible) return;
+      clearPreviewTimer();
+      const el = e.currentTarget;
+      previewTimerRef.current = window.setTimeout(() => {
+        previewTimerRef.current = null;
+        // Re-read the trigger's rect at fire time — the tab may have scrolled
+        // inside the overflow row during the 600ms dwell. Falls back gracefully
+        // when the element has been unmounted.
+        const rect =
+          typeof el.getBoundingClientRect === 'function'
+            ? el.getBoundingClientRect()
+            : null;
+        if (!rect) return;
+        setPreview({ anchorRight: rect.right, anchorBottom: rect.bottom });
+      }, HOVER_PREVIEW_DELAY_MS);
+    },
+    [clearPreviewTimer, previewEligible],
+  );
+  const handleMouseLeave = useCallback(() => {
+    hidePreview();
+  }, [hidePreview]);
+  // Any keystroke on the tab dismisses the preview — the user moved from a
+  // pointer-driven exploration to keyboard intent, so the decorative card
+  // should get out of the way.
+  const handleFocusOut = useCallback(() => {
+    hidePreview();
+  }, [hidePreview]);
 
   const handleClose = useCallback(
     (e: MouseEvent<HTMLButtonElement>) => {
@@ -167,6 +236,11 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
+      // Any keyboard interaction dismisses the hover preview. The card is
+      // pointer-only affordance; the moment the user starts typing or navigating
+      // with the keyboard they have a different intent and the card would just
+      // occlude content.
+      hidePreview();
       // Native buttons handle Enter/Space activation for free; with a div
       // we wire it explicitly. Only fire when the event originates on the
       // tab element itself — interactive descendants (kebab, close) handle
@@ -181,7 +255,7 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
         onClose?.(tab.id);
       }
     },
-    [onClose, onSelect, tab.id],
+    [hidePreview, onClose, onSelect, tab.id],
   );
 
   const handleMenuToggle = useCallback(
@@ -283,8 +357,10 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
 
   const label = buildLabel(tab);
   const ariaLabel = buildAriaLabel(tab);
+  const previewTitle = buildPreviewTitle(tab);
 
   return (
+    <>
     <div
       role="tab"
       ref={tabRef}
@@ -303,6 +379,9 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
       data-drop-side={dropSide}
       onClick={handleSelect}
       onKeyDown={handleKeyDown}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onBlur={handleFocusOut}
       draggable
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
@@ -319,6 +398,9 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
         aria-hidden
       />
       <span className={styles.label}>{label}</span>
+      {!tab.isActive && tab.lastActivityAt !== null && (
+        <span className={styles.activityDot} aria-label={t('sessionTabs.unreadActivity')} />
+      )}
       <span className={styles.menuWrap} ref={menuRef}>
         <button
           type="button"
@@ -384,6 +466,19 @@ function SessionTab({ tab, onSelect, onClose }: SessionTabProps) {
         </span>
       )}
     </div>
+    {preview && previewEligible && (
+      <TabHoverPreview
+        sessionId={tab.id}
+        shell={tab.shell}
+        cwd={tab.cwd}
+        health={tab.health}
+        title={previewTitle}
+        anchorRight={preview.anchorRight}
+        anchorBottom={preview.anchorBottom}
+        open={preview !== null}
+      />
+    )}
+    </>
   );
 }
 
@@ -411,6 +506,18 @@ function buildLabel(tab: SessionTabView): string {
   const cwd = shortCwd(tab.cwd);
   if (shell && cwd) return `${shell}  ${cwd}`;
   return shell || cwd || 'session';
+}
+
+/**
+ * Preview card title — prefers the last cwd segment ("project/") because that
+ * is typically the most distinguishing info between sibling tabs. Falls back
+ * to the shell basename when cwd is empty.
+ */
+function buildPreviewTitle(tab: SessionTabView): string {
+  const dir = basename(tab.cwd);
+  if (dir) return dir;
+  const sh = basename(tab.shell) || tab.shell;
+  return sh || 'session';
 }
 
 function buildAriaLabel(tab: SessionTabView): string {

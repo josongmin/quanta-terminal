@@ -1,0 +1,51 @@
+/*
+ * BellFlash — a thin absolute-positioned overlay that flashes when the bell
+ * store advances. Pointer-events: none so the terminal keeps mouse focus.
+ */
+
+.flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Low-alpha white highlight. The terminal background is usually dark,
+   * so this reads as a brief bloom. On light themes the same alpha is
+   * still visible because the tint is semi-transparent. */
+  background-color: rgba(255, 255, 255, 0.18);
+  opacity: 0;
+  z-index: 5;
+}
+
+/*
+ * Active flash animation. 80 ms total: quick fade-in, quick fade-out. The
+ * animation is keyed by `data-bell-seq` (a React key wrapper) so the same
+ * element restarts on every bell by being remounted.
+ */
+.flashActive {
+  animation: qt-bell-flash 80ms ease-out both;
+}
+
+@keyframes qt-bell-flash {
+  0% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * Reduced-motion fallback: no animation, just hold a static low-alpha
+ * shade for 80 ms (rendered via data-reduced="true" + a CSS fallback).
+ * Because we cannot schedule a static hold purely in CSS without a
+ * keyframe, the JS side removes the element after 80 ms when reduced
+ * motion is active.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .flashActive {
+    animation: none;
+    opacity: 0.6;
+  }
+}

@@ -5,6 +5,10 @@ export {
   DEFAULT_BLOCK_SESSION_ID,
   DEFAULT_BLOCK_WATCHDOG_MS,
   APPLIED_EVENT_ID_LRU_CAPACITY,
+  MAX_TAG_LENGTH,
+  TAG_PATTERN,
+  normalizeTag,
+  isValidTag,
   __hasWatchdogForTests,
 } from './model.js';
 export type {
@@ -22,11 +26,15 @@ export {
   useBlock,
   useBlockHeader,
   useBlockOutputChunks,
+  useBlockSuccessor,
   useActiveBlockId,
+  useAllTags,
+  listAllTags,
+  listAllTagsFromState,
   getRerunLineage,
   getRerunLineageFromState,
 } from './selectors.js';
-export type { BlockHeaderView, BlockStreamView } from './selectors.js';
+export type { BlockHeaderView, BlockStreamView, TagFrequency } from './selectors.js';
 export {
   installBlockPersistence,
   hydrateFromPersistence,

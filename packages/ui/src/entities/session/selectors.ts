@@ -81,6 +81,8 @@ export interface SessionTabView {
   readonly cwd: string;
   readonly health: SessionHealth;
   readonly isActive: boolean;
+  /** Epoch-ms of the last background activity; null when session is current or has none. */
+  readonly lastActivityAt: number | null;
 }
 
 /**
@@ -103,6 +105,7 @@ export function useSessionTabs(): readonly SessionTabView[] {
           cwd: e.cwd,
           health: e.health,
           isActive: active === e.id,
+          lastActivityAt: e.lastActivityAt ?? null,
         });
       }
       return out;

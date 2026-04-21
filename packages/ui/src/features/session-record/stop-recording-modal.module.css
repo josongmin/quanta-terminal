@@ -1,0 +1,68 @@
+/* StopRecordingModal — mirrors the paste-safety dialog shell so focus-trap
+   and hit-target sizing stay consistent across modal surfaces. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.panel {
+  min-width: 380px;
+  max-width: min(560px, 90vw);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-floating);
+  padding: var(--q-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-3);
+  outline: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-lg);
+  color: var(--q-fg);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+}
+
+.statRow {
+  display: contents;
+}
+
+.statRow dt {
+  color: var(--q-fg-muted);
+}
+
+.statRow dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--q-space-2);
+}

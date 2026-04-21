@@ -54,6 +54,13 @@ import {
 // during degraded state") for every caller — command/submit today, and
 // input-host keystrokes once EPIC-F wires them through this seam.
 import { tryGetDegradedGate } from '../degraded-mode/degraded-gate.js';
+// Session-record byte bus: optional fan-out of pty_data to the recorder
+// controller. The publish is a zero-listener no-op when no recording is live,
+// so the hot path stays unaffected for users who never open the recorder.
+// FIXME(fsd-layer-skip): cross-feature publish by design — the session-record
+// feature subscribes via its own module; connect only emits into the bus.
+import { base64ToBytes } from '../../shared/lib/base64.js';
+import { publishSessionChunk } from '../session-record/byte-bus.js';
 
 const log = createLogger('session.connect');
 
@@ -63,6 +70,16 @@ export interface ConnectOptions {
   readonly rows: number;
   /** Called on every pty_data event. Receives raw base64 bytes. */
   readonly onData: (bytesB64: string) => void;
+  /**
+   * Optional profile-derived spawn overrides. Fed through verbatim to
+   * `bridge.spawn`; the host applies its defaults when any field is
+   * omitted. Surfaced here (rather than the feature layer) so any caller
+   * that wants to bypass `features/session-tabs.createSession` — e.g. tests
+   * or future "open in new pane" actions — can still supply them.
+   */
+  readonly shell?: string;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface ConnectedSession {
@@ -74,7 +91,7 @@ export interface ConnectedSession {
 }
 
 export async function connectSession(opts: ConnectOptions): Promise<ConnectedSession> {
-  const { bridge, cols, rows, onData } = opts;
+  const { bridge, cols, rows, onData, shell, cwd, env } = opts;
 
   await bridge.ready();
 
@@ -106,7 +123,17 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
 
   let spawn;
   try {
-    spawn = await bridge.spawn({ cols, rows });
+    // Profile overrides are optional; only forward the fields the caller
+    // actually supplied so the host's default-resolution path keeps firing
+    // for unset values (matches the SpawnSessionOptions contract that every
+    // override field is optional except cols/rows).
+    spawn = await bridge.spawn({
+      cols,
+      rows,
+      ...(shell !== undefined && shell.length > 0 ? { shell } : {}),
+      ...(cwd !== undefined && cwd.length > 0 ? { cwd } : {}),
+      ...(env !== undefined ? { env } : {}),
+    });
   } catch (err) {
     subscription.unsubscribe();
     throw err;
@@ -172,6 +199,9 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
     shellIntegration: 'missing',
     health: 'ready',
     exitCode: null,
+    // Surfaced by the Tauri bridge when `/proc/version` carries the WSL token.
+    // Unknown → treat as not-WSL so the default-false seed stays authoritative.
+    isWsl: spawn.isWsl === true,
   });
 
   // Drain the pre-buffer in original order, keeping events that match the
@@ -238,6 +268,18 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
         // pre-EPIC-I it fed the xterm fallback surface; the custom VT
         // engine now owns rendering end-to-end).
         appendToActiveBlock(sessionId, event.bytesB64);
+        // Session-record fan-out: publish the decoded chunk to the byte
+        // bus so an in-flight asciicast recorder can capture it. The
+        // publish is a zero-cost no-op when there is no subscriber.
+        if (publishSessionChunk.length >= 0) {
+          try {
+            const bytes = base64ToBytes(event.bytesB64);
+            publishSessionChunk(sessionId, bytes, Date.now());
+          } catch {
+            // A malformed base64 frame must not derail the block-router
+            // fanout; the recorder simply loses that chunk.
+          }
+        }
       }
       onData(event.bytesB64);
       return;

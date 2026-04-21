@@ -36,6 +36,7 @@ import { useBlockStore } from '../../entities/block/index.js';
 import { useSessionsStore } from '../../entities/session/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';
 import { cx } from '../../shared/lib/cx.js';
+import { formatShortcutHint } from '../../shared/lib/keymap.js';
 import styles from './block-hover-card.module.css';
 
 export interface BlockHoverCardProps {
@@ -276,7 +277,7 @@ function BlockHoverCardImpl(props: BlockHoverCardProps) {
       )}
       {(lineage.rerunOf || lineage.successor) && (
         <div className={styles.similar}>
-          <span className={styles.similarValue}>⌘D</span> opens compare panel
+          <span className={styles.similarValue}>{formatShortcutHint('mod+d')}</span> opens compare panel
         </div>
       )}
 
@@ -307,22 +308,22 @@ function BlockHoverCardImpl(props: BlockHoverCardProps) {
           <span className={styles.actionLabel}>open</span>
         </span>
         <span className={styles.action}>
-          <Kbd>⌘C</Kbd>
+          <Kbd>{formatShortcutHint('mod+c')}</Kbd>
           <span className={styles.actionLabel}>copy output</span>
         </span>
         <span className={styles.action}>
-          <Kbd>⌘R</Kbd>
+          <Kbd>{formatShortcutHint('mod+r')}</Kbd>
           <span className={styles.actionLabel}>rerun</span>
         </span>
         <span className={styles.action}>
-          <Kbd>⌘E</Kbd>
+          <Kbd>{formatShortcutHint('mod+e')}</Kbd>
           <span className={styles.actionLabel}>export</span>
         </span>
         <span
           className={styles.action}
           data-disabled={lineage.rerunOf || lineage.successor ? 'false' : 'true'}
         >
-          <Kbd>⌘D</Kbd>
+          <Kbd>{formatShortcutHint('mod+d')}</Kbd>
           <span className={styles.actionLabel}>diff</span>
         </span>
       </div>

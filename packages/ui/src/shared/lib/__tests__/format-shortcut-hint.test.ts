@@ -81,4 +81,35 @@ describe('formatShortcutHint', () => {
     restore = stubPlatform('Linux x86_64');
     expect(formatShortcutHint('mod+alt+shift+a')).toBe('Ctrl+Alt+Shift+A');
   });
+
+  describe('explicit platform arg (no navigator probe)', () => {
+    it('formats mod+k as ⌘K when platform="macos"', () => {
+      expect(formatShortcutHint('mod+k', 'macos')).toBe('⌘K');
+    });
+
+    it('formats mod+k as Ctrl+K when platform="linux"', () => {
+      expect(formatShortcutHint('mod+k', 'linux')).toBe('Ctrl+K');
+    });
+
+    it('formats mod+shift+p as ⌘⇧P on macos', () => {
+      expect(formatShortcutHint('mod+shift+p', 'macos')).toBe('⌘⇧P');
+    });
+
+    it('formats mod+alt+c as Ctrl+Alt+C on windows', () => {
+      expect(formatShortcutHint('mod+alt+c', 'windows')).toBe('Ctrl+Alt+C');
+    });
+
+    it('treats the legacy "mac" alias as "macos"', () => {
+      expect(formatShortcutHint('mod+k', 'mac')).toBe('⌘K');
+    });
+
+    it('falls back to linux-style when navigator is indeterminate ("auto")', () => {
+      // `auto` + unknown navigator (the stub leaves navigator.platform = '')
+      // must not reach for a Mac layout; verify by asserting the non-mac
+      // split. Empty string means `isMac()` returns false, so the format is
+      // `Ctrl+K` with a literal plus.
+      restore = stubPlatform('');
+      expect(formatShortcutHint('mod+k')).toBe('Ctrl+K');
+    });
+  });
 });

@@ -25,6 +25,7 @@ function installNoNotifyBridge(): void {
       editorIntegration: false,
       windowsShellParity: false,
       embeddedDevShell: false,
+      wslEnvironment: false,
     },
     async ready() {},
     async spawn() {

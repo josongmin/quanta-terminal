@@ -38,6 +38,7 @@ import type { BlockId, SessionId } from '@quanta/host-common';
 import { base64ToBytes } from '../../shared/lib/base64.js';
 import { tryGetBlockStore } from './block-store-port.js';
 import { createLogger } from '../../shared/lib/logger.js';
+import { useTuiStore } from '../../entities/tui/index.js';
 import {
   createMockBoundaryDetector,
   type BoundaryDetector,
@@ -383,25 +384,22 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
     log.debug('drop pty_data: block store not bound');
     return;
   }
+  const chunk = base64ToBytes(bytesB64);
+
   const active = store.getActiveBlockId();
   if (active === null) {
     // Legitimate: shell greeting, motd, idle noise. Drop.
     return;
   }
 
-  const chunk = base64ToBytes(bytesB64);
-  // Side-channel: let feature-layer observers (Phase 3 TUI alt-screen
-  // detector) inspect the full raw chunk BEFORE boundary detection. The
-  // mock prompt terminator never contains alt-screen bytes so passing the
-  // full chunk cannot confuse the TUI detector.
+  // Fan out to raw observers AFTER the early-drop guard so observers only
+  // see bytes that are actually going to be routed into a block. The TUI
+  // detector gets PTY bytes via the bridge subscription (a separate channel),
+  // not via these observers, so guarding here is safe.
   //
-  // Robustness contract: observer exceptions MUST NOT break routing. A
-  // throwing observer is a programming error — if it propagated through
-  // this loop, every subsequent observer would be skipped AND the boundary
-  // detector below would never run, which leaves the active block stuck
-  // in "running" forever (never completes on its terminator). We isolate
-  // each observer with try/catch and surface the fault at `error` level so
-  // it is loud in dev/prod consoles but does not silently eat data.
+  // Robustness: observer exceptions MUST NOT break routing — we isolate with
+  // try/catch so a throwing observer never skips the boundary detector below
+  // (which would leave the active block stuck "running" forever).
   if (rawChunkObservers.size > 0) {
     for (const observer of rawChunkObservers) {
       try {
@@ -483,10 +481,30 @@ function scheduleIdleCompletion(
   active: BlockId,
 ): void {
   if (handle.idleTimeoutMs === null) return;
+  // Alt-screen gate: when the user is inside a TUI program (vim, less,
+  // htop…) the PTY legitimately sits idle while the user reads or
+  // thinks. Auto-completing the block after 400 ms of idle would stop
+  // the spinner and — worse — subsequent output would append to a block
+  // the UI considers "done", producing a visibly wrong exit code / exit
+  // moment. TUIs also have a natural close signal (`ESC[?1049l` fires
+  // `alt_screen_exit` which the orchestrator can route to an explicit
+  // block-close). So: no idle-completion while alt-screen is active,
+  // and cancel any pending timer that was armed before enter.
+  if (useTuiStore.getState().active) {
+    if (handle.idleTimer !== null) {
+      clearTimeout(handle.idleTimer);
+      handle.idleTimer = null;
+    }
+    return;
+  }
   if (handle.idleTimer !== null) clearTimeout(handle.idleTimer);
   const activeAtScheduleTime = active;
   handle.idleTimer = setTimeout(() => {
     handle.idleTimer = null;
+    // Re-check alt-screen at fire time too — the user may have entered a
+    // TUI between schedule and fire, in which case we must not
+    // auto-complete (same reasoning as the schedule-time gate).
+    if (useTuiStore.getState().active) return;
     // Re-resolve the store at fire time. The bound store is the same
     // singleton but we take the defensive path in case of test teardown.
     const liveStore = tryGetBlockStore();

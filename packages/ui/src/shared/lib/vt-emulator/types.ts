@@ -65,7 +65,11 @@ export interface InternalSgrStyle {
 export interface InternalSavedState {
   cursor: InternalCursor;
   sgr: InternalSgrStyle;
-  scrollRegion: InternalScrollRegion;
+  /**
+   * DECAWM (auto-wrap). Per xterm, DECSC saves cursor position, SGR,
+   * charset, wrap flag, and origin mode — NOT the scroll region.
+   */
+  autoWrap: boolean;
 }
 
 export function defaultSgr(): InternalSgrStyle {

@@ -55,6 +55,14 @@ import {
   installBlockPersistence,
   hydrateFromPersistence,
 } from '../../entities/block/index.js';
+import {
+  useWorkspaceSnapshotStore,
+  bindAutoCapture,
+  // `autoRestoreIfPresent` is exported for future boot orchestration — see
+  // the "Workspace snapshots" effect below. Intentionally unused here.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  autoRestoreIfPresent as _autoRestoreIfPresent,
+} from '../../features/workspace-snapshot/index.js';
 import { computeWorkspaceFingerprint } from '../../shared/lib/persistence/index.js';
 import { useBannerStore, selectVisibleConditions } from '../../entities/banner/index.js';
 import { useAltScreenMode, useTuiStore } from '../../entities/tui/index.js';
@@ -71,6 +79,11 @@ import {
   bindDegradedGate,
   useDegradedMode,
 } from '../../features/degraded-mode/index.js';
+import { OutputSearch } from '../../widgets/output-search/index.js';
+import { useOutputSearchStore } from '../../features/output-search/index.js';
+import { BellFlash } from '../../widgets/bell-flash/index.js';
+import { useBellStore } from '../../entities/bell/index.js';
+import { useBellSettings, playBeep } from '../../features/bell/index.js';
 import type { ConnectedSession } from '../../features/session/index.js';
 import {
   createSession,
@@ -78,6 +91,16 @@ import {
   switchSession,
   getSessionConnection,
 } from '../../features/session-tabs/index.js';
+import {
+  splitActivePane,
+  closeActivePane,
+  focusPaneSibling,
+} from '../../features/pane-tabs/index.js';
+import {
+  usePaneStore,
+  getActivePaneSessionId,
+} from '../../entities/pane/index.js';
+import { PaneGrid, PANE_ZOOM_SHORTCUT } from '../../widgets/pane-grid/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
 import { pickBannerCondition } from '../../shared/lib/banner-precedence.js';
 import { getHostBridge, tryGetHostBridge } from '../../shared/api/host-bridge.js';
@@ -87,6 +110,14 @@ import { createLogger } from '../../shared/lib/logger.js';
 import { t } from '../../shared/i18n/index.js';
 import { useZoomStore } from '../../features/zoom/index.js';
 import { installNotificationDetector } from '../../features/notifications/index.js';
+import { runAutoImport } from '../../features/shell-history-import/index.js';
+import { LiveRegion, useA11yAnnounceSettings } from '../../features/a11y-announce/index.js';
+import {
+  StopRecordingModal,
+  subscribeStopResult,
+  toggleRecording,
+  type StopRecordingResult,
+} from '../../features/session-record/index.js';
 
 import styles from './terminal-page.module.css';
 
@@ -148,7 +179,19 @@ function TerminalPageContent() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [stopRecordingResult, setStopRecordingResult] =
+    useState<StopRecordingResult | null>(null);
   const [hydrating, setHydrating] = useState(true);
+  // Screen-reader announcement for alt-screen enter / exit transitions. The
+  // value is re-computed every time `altScreen.active` changes so a11y users
+  // hear "Entered vim" / "Exited TUI mode, back to shell" even though the
+  // canvas itself is opaque to the AT tree.
+  const [altScreenAnnounce, setAltScreenAnnounce] = useState('');
+  // Screen-reader announcement for pane zoom / unzoom. Written inside the
+  // `mod+shift+enter` handler; the aria-live region at the bottom of the
+  // page clears itself after a short timeout so repeat zoom-toggles fire
+  // fresh utterances.
+  const [paneZoomAnnounce, setPaneZoomAnnounce] = useState('');
   const activeSessionId = useSessionsStore((s) => s.activeId);
   const [activeConnection, setActiveConnection] = useState<ConnectedSession | null>(null);
   // A shared flag so the boot effect doesn't spawn a second session under
@@ -174,6 +217,21 @@ function TerminalPageContent() {
     }
   }, [activeSessionId]);
 
+  // Sync the pane tree's focus with the active session id. Two directions:
+  //   1. When tabs change the active session, move pane focus to the matching
+  //      leaf (if it exists in the tree). Drops gracefully when the session
+  //      is not in the tree (e.g. a freshly created tab that isn't a split).
+  //   2. Pane focus → switchSession is handled inline by the click / keymap
+  //      handlers so the dependency graph stays unidirectional here.
+  useEffect(() => {
+    if (activeSessionId === null) return;
+    const paneState = usePaneStore.getState();
+    if (!paneState.root) return;
+    const activePaneId = getActivePaneSessionId();
+    if (activePaneId === activeSessionId) return;
+    paneState.focusSession(activeSessionId);
+  }, [activeSessionId]);
+
   // End the 160 ms CSS fade once it completes — the store reads this to
   // clear the `transitioning` flag so the next enter/exit can raise it
   // again. Runs only when the flag is set.
@@ -184,6 +242,31 @@ function TerminalPageContent() {
     }, 180);
     return () => clearTimeout(timer);
   }, [altScreen.transitioning]);
+
+  // Alt-screen announcer: on every enter/exit transition, update the polite
+  // live region so screen-reader users are told the UI is switching into or
+  // out of TUI mode. The command label (e.g. "vim") is included when the
+  // store's `command` is populated. A ref tracks the previous `active` value
+  // so we don't announce "Exited TUI mode" on the initial render.
+  const prevAltActiveRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const prev = prevAltActiveRef.current;
+    prevAltActiveRef.current = altScreen.active;
+    if (prev === null) return; // First observation: no transition to announce.
+    if (altScreen.active === prev && altScreen.active) {
+      // Still active but the command label changed — refresh the message.
+      const cmd = tuiCommand ? ` (${tuiCommand})` : '';
+      setAltScreenAnnounce(t('tui.announce.entered', { command: cmd }));
+      return;
+    }
+    if (altScreen.active === prev) return; // No real transition.
+    if (altScreen.active) {
+      const cmd = tuiCommand ? ` (${tuiCommand})` : '';
+      setAltScreenAnnounce(t('tui.announce.entered', { command: cmd }));
+    } else {
+      setAltScreenAnnounce(t('tui.announce.exited'));
+    }
+  }, [altScreen.active, tuiCommand]);
 
   // Install banner detectors once. The handle unsubs on unmount so HMR / tests
   // do not accumulate subscriptions.
@@ -214,6 +297,33 @@ function TerminalPageContent() {
     return () => handle.unsubscribe();
   }, []);
 
+  // Shell-history import: on first mount after `ranOnce === false`, scrape
+  // the user's existing zsh / bash / fish history file so autosuggest and
+  // the command palette are useful immediately. Fire-and-forget: any
+  // failure flips `ranOnce` so we don't retry on every boot, and logs
+  // via the feature's own `createLogger`. Sits outside the boot effect so
+  // a slow home-dir lookup can't delay session spawn.
+  useEffect(() => {
+    const bridge = tryGetHostBridge();
+    if (!bridge) return;
+    void runAutoImport({ bridge }).catch((err: unknown) => {
+      log.warn('terminal-page: shell-history auto-import failed', err);
+    });
+  }, []);
+
+  // Audible bell: when a new bell arrives AND the audibleBell setting is
+  // enabled, synthesise a short sine beep via WebAudio. The store already
+  // throttles rapid bells so we don't need to de-dupe here. Gating is
+  // read-once inside the effect because re-running the subscription on
+  // every settings change is wasteful; we read the live setting at fire
+  // time instead.
+  const bellCount = useBellStore((s) => s.bellCount);
+  useEffect(() => {
+    if (bellCount === 0) return;
+    if (!useBellSettings.getState().audibleBell) return;
+    playBeep();
+  }, [bellCount]);
+
   // Block persistence (Phase 4): hydrate once, then install the terminal-
   // transition hook for the rest of the page's lifetime.
   useEffect(() => {
@@ -239,6 +349,22 @@ function TerminalPageContent() {
     };
   }, []);
 
+  // Workspace snapshots: hydrate the snapshot store at boot so the Settings
+  // UI has the list ready, and bind the auto-capture lifecycle hooks
+  // (visibilitychange / beforeunload). Auto-restore on boot is deliberately
+  // NOT kicked off from here — the first-session-spawn path below races this
+  // and would either leak the default-spawned session or prevent restore. The
+  // user-driven "Restore snapshot" palette command + settings UI remain the
+  // primary restore surfaces; auto-restore is available as an optional
+  // `autoRestoreIfPresent` call for future boot orchestration.
+  useEffect(() => {
+    void useWorkspaceSnapshotStore.getState().hydrate();
+    const binding = bindAutoCapture();
+    return () => {
+      binding.uninstall();
+    };
+  }, []);
+
   // Multi-session data-fan-in: alt-screen state is driven entirely by
   // ModeChanged events via the TUI store, and the terminal canvas
   // (EPIC-D) consumes the GridMirror directly. The callback is retained
@@ -258,12 +384,17 @@ function TerminalPageContent() {
   // directly instead of reusing this effect.
   const spawnNewSession = useCallback(async () => {
     try {
-      await createSession({
+      const result = await createSession({
         bridge: getHostBridge(),
         cols: INITIAL_COLS,
         rows: INITIAL_ROWS,
         onData: handlePtyData,
       });
+      // Seed the pane tree on first spawn. `setRoot` is idempotent (no-op
+      // when a tree already exists), so additional `spawnNewSession` calls
+      // from `Cmd+T` don't disturb the split layout — those create new
+      // tabs, not new panes. Pane splits go through `splitActivePane`.
+      usePaneStore.getState().setRoot(result.sessionId);
     } catch (err) {
       log.error('terminal-page: createSession rejected', err);
       useSessionStore.getState().setSession({ health: 'error', exitCode: null });
@@ -306,7 +437,22 @@ function TerminalPageContent() {
     e.preventDefault();
     setSettingsOpen((p) => !p);
   }, []);
+  // Modern terminals expose Cmd+F as find-in-output. The pre-existing
+  // mod+f binding is preserved for command-history search via Cmd+Shift+F
+  // (surfaced in the keyboard settings panel).
+  const onOutputSearchShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    useOutputSearchStore.getState().toggle();
+  }, []);
   const onEscape = useCallback(() => {
+    // Output-search handles its own Escape at the input level, but if focus
+    // ever leaves the input while the bar is open (rare, but possible) this
+    // still lets Esc close it.
+    const outputSearch = useOutputSearchStore.getState();
+    if (outputSearch.open) {
+      outputSearch.close();
+      return;
+    }
     if (historyOpen) {
       setHistoryOpen(false);
       return;
@@ -338,6 +484,17 @@ function TerminalPageContent() {
   const onCloseTabShortcut = useCallback(
     (e: KeyboardEvent) => {
       e.preventDefault();
+      // Split-pane semantics: if the active session is part of a
+      // multi-pane split, close ONLY the focused pane. When the split
+      // collapses to a single leaf, we leave that leaf in place (it maps
+      // to a tab). If the pane tree is a single leaf, fall through to the
+      // historical "close tab" behaviour.
+      const pane = usePaneStore.getState();
+      const isMultiPane = pane.root !== null && pane.root.kind === 'split';
+      if (isMultiPane) {
+        void closeActivePane();
+        return;
+      }
       const activeId = useSessionsStore.getState().activeId;
       if (activeId === null) return;
       if (typeof window !== 'undefined') {
@@ -353,8 +510,103 @@ function TerminalPageContent() {
     },
     [spawnNewSession],
   );
+  // Split-pane shortcuts. Cmd+D / Ctrl+Shift+D → horizontal split
+  // (new pane sits to the right). Cmd+Shift+D → vertical split (new
+  // pane sits below). Both spawn a fresh session and graft it into the
+  // current pane's slot via `splitActivePane`.
+  const onSplitHorizontalShortcut = useCallback(
+    (e: KeyboardEvent) => {
+      e.preventDefault();
+      void splitActivePane({
+        bridge: getHostBridge(),
+        cols: INITIAL_COLS,
+        rows: INITIAL_ROWS,
+        onData: handlePtyData,
+        dir: 'horizontal',
+      }).catch((err) => log.warn('terminal-page: split horizontal failed', err));
+    },
+    [handlePtyData],
+  );
+  const onSplitVerticalShortcut = useCallback(
+    (e: KeyboardEvent) => {
+      e.preventDefault();
+      void splitActivePane({
+        bridge: getHostBridge(),
+        cols: INITIAL_COLS,
+        rows: INITIAL_ROWS,
+        onData: handlePtyData,
+        dir: 'vertical',
+      }).catch((err) => log.warn('terminal-page: split vertical failed', err));
+    },
+    [handlePtyData],
+  );
+  // Cmd+\ (or Ctrl+\) cycles focus through panes in left-to-right tree order.
+  const onCycleFocusShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    focusPaneSibling(1);
+  }, []);
+  // Cmd+Shift+Enter (Ctrl+Shift+Enter) toggles pane zoom — maximize the
+  // focused pane, hiding siblings without closing them. A repeat press
+  // restores the split layout. The aria-live announce is driven by a
+  // store subscription below, so this handler stays a one-liner and the
+  // palette entry (which also calls `toggleZoomFocusedPane`) gets the
+  // same announcement for free.
+  const onToggleZoomShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    const before = usePaneStore.getState();
+    if (!before.root) return;
+    // Single-pane tree with no zoom state → nothing meaningful to toggle.
+    if (before.root.kind === 'leaf' && before.zoomedPaneId === null) return;
+    before.toggleZoomFocusedPane();
+  }, []);
+
+  // Announce zoom transitions (hotkey AND palette entry). Subscribing to
+  // `zoomedPaneId` via `subscribeWithSelector` means the announce string is
+  // a pure function of the post-transition state, so both entry paths emit
+  // the same utterance. Initial mount is `null → null` which the
+  // `prev !== next` guard elides, keeping the boot a11y tree quiet.
+  useEffect(() => {
+    const unsubscribe = usePaneStore.subscribe(
+      (s) => s.zoomedPaneId,
+      (next, prev) => {
+        if (next === prev) return;
+        setPaneZoomAnnounce(
+          next !== null
+            ? t('paneLayout.zoomedAnnounce')
+            : t('paneLayout.restoredAnnounce'),
+        );
+      },
+    );
+    return unsubscribe;
+  }, []);
   const onBacktickShortcut = useCallback((e: KeyboardEvent) => {
     e.preventDefault();
+  }, []);
+
+  const onNextTabShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    const { order, activeId } = useSessionsStore.getState();
+    if (order.length < 2 || activeId === null) return;
+    const idx = order.indexOf(activeId);
+    const next = order[(idx + 1) % order.length];
+    if (next) switchSession(next);
+  }, []);
+
+  const onPrevTabShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    const { order, activeId } = useSessionsStore.getState();
+    if (order.length < 2 || activeId === null) return;
+    const idx = order.indexOf(activeId);
+    const prev = order[(idx - 1 + order.length) % order.length];
+    if (prev) switchSession(prev);
+  }, []);
+
+  // Cmd+Alt+A cycles screen-reader announcements off → polite → assertive → off.
+  // `allowInEditable` is true because a blind user may have composer focus
+  // while flipping announcement mode — they still need the keybind to work.
+  const onA11yAnnounceCycleShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    useA11yAnnounceSettings.getState().cycleMode();
   }, []);
 
   const onZoomInShortcut = useCallback((e: KeyboardEvent) => {
@@ -369,9 +621,17 @@ function TerminalPageContent() {
     e.preventDefault();
     useZoomStore.getState().reset();
   }, []);
+  // Asciicast recording: Cmd+Shift+R toggles. A manual invocation fans the
+  // stop result back via the subscribeStopResult bus so the modal always
+  // opens from the same signal (hotkey, palette click, overflow abort).
+  const onToggleRecordingShortcut = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    toggleRecording();
+  }, []);
 
   useKeymap('mod+k', onPaletteShortcut);
-  useKeymap('mod+f', onHistoryShortcut, { allowInEditable: true });
+  useKeymap('mod+f', onOutputSearchShortcut, { allowInEditable: true });
+  useKeymap('mod+shift+f', onHistoryShortcut, { allowInEditable: true });
   useKeymap('escape', onEscape, { enabled: true, allowInEditable: true });
   useKeymap('mod+t', onNewTabShortcut);
   useKeymap('mod+w', onCloseTabShortcut);
@@ -380,6 +640,47 @@ function TerminalPageContent() {
   useKeymap('mod+=', onZoomInShortcut, { allowInEditable: true });
   useKeymap('mod+-', onZoomOutShortcut, { allowInEditable: true });
   useKeymap('mod+0', onZoomResetShortcut, { allowInEditable: true });
+  // Split-pane keymap. Cmd+D splits horizontally (new pane to the right),
+  // Cmd+Shift+D splits vertically (new pane below). Cmd+\ cycles pane focus.
+  useKeymap('mod+d', onSplitHorizontalShortcut);
+  useKeymap('mod+shift+d', onSplitVerticalShortcut);
+  useKeymap('mod+\\', onCycleFocusShortcut, { allowInEditable: true });
+  useKeymap(PANE_ZOOM_SHORTCUT, onToggleZoomShortcut, { allowInEditable: true });
+  useKeymap('mod+alt+a', onA11yAnnounceCycleShortcut, { allowInEditable: true });
+  useKeymap('mod+shift+r', onToggleRecordingShortcut, { allowInEditable: true });
+  useKeymap('mod+]', onNextTabShortcut, { allowInEditable: true });
+  useKeymap('mod+[', onPrevTabShortcut, { allowInEditable: true });
+
+  // Cmd/Ctrl+1..9 — jump directly to the Nth tab (Cmd+9 always goes to last).
+  useEffect(() => {
+    const isMac = typeof navigator !== 'undefined' && /mac/iu.test(navigator.platform ?? '');
+    const handler = (e: globalThis.KeyboardEvent) => {
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod || e.shiftKey || e.altKey) return;
+      const n = parseInt(e.key, 10);
+      if (n < 1 || n > 9) return;
+      e.preventDefault();
+      const { order } = useSessionsStore.getState();
+      if (order.length === 0) return;
+      const id = n === 9 ? order[order.length - 1] : order[n - 1];
+      if (id) switchSession(id);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Subscribe to the session-record controller so any stop path (hotkey,
+  // palette, overflow) surfaces the StopRecordingModal from this page mount.
+  useEffect(() => {
+    const unsubscribe = subscribeStopResult((result) => {
+      setStopRecordingResult(result);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const dismissStopRecordingModal = useCallback(() => {
+    setStopRecordingResult(null);
+  }, []);
 
   const retrySpawn = useCallback(() => {
     useSessionStore.getState().reset();
@@ -399,6 +700,23 @@ function TerminalPageContent() {
   const onTabClose = useCallback(
     (id: SessionId) => {
       void closeSession(id).then(() => {
+        // Session removal also tears its pane leaf out of the tree. When the
+        // leaf was the last one (single-pane tab), the tree collapses to
+        // empty; `spawnNewSession` below reseeds it on the next create.
+        const paneState = usePaneStore.getState();
+        if (paneState.root) {
+          // If the currently-focused leaf is the closed session, pop it;
+          // otherwise we hunt for the matching leaf manually.
+          const activeLeaf = paneState.root;
+          if (activeLeaf.kind === 'leaf' && activeLeaf.sessionId === id) {
+            paneState.closeActive();
+          } else {
+            // Focus the target first so closeActive removes the correct leaf.
+            paneState.focusSession(id);
+            const next = usePaneStore.getState();
+            if (next.root) next.closeActive();
+          }
+        }
         const coll = useSessionsStore.getState();
         if (coll.order.length === 0) void spawnNewSession();
       });
@@ -484,9 +802,40 @@ function TerminalPageContent() {
     [onTabCreate, onTabSelect, onTabClose],
   );
 
+  // Is the current pane tree a multi-pane split? Single-leaf trees fall back
+  // to the legacy BlockList rendering so the first-boot flow stays identical.
+  const paneRoot = usePaneStore((s) => s.root);
+  const isMultiPane = paneRoot !== null && paneRoot.kind === 'split';
+
+  const onPaneFocus = useCallback((id: SessionId) => {
+    usePaneStore.getState().focusSession(id);
+    switchSession(id);
+  }, []);
+
+  const renderPane = useCallback(
+    (paneSessionId: SessionId) => {
+      return (
+        <BlockList
+          sessionId={paneSessionId}
+          onRerun={onRerun}
+          onCopy={onCopy}
+          onCompare={onCompare}
+        />
+      );
+    },
+    [onRerun, onCopy, onCompare],
+  );
+
   const mainContent = (() => {
     if (health === 'error' && !sessionId) {
       return <ErrorState message={t('terminal.errorMessage')} onRetry={retrySpawn} />;
+    }
+    if (isMultiPane) {
+      return (
+        <div className={styles.blockListHost}>
+          <PaneGrid renderPane={renderPane} onPaneFocus={onPaneFocus} />
+        </div>
+      );
     }
     return (
       <>
@@ -560,6 +909,15 @@ function TerminalPageContent() {
             inactive, letting the Composer own focus by default. Mounted
             last so it stacks above TuiRenderSurface for pointer capture. */}
         <TuiInputSurface sessionId={activeSessionId} />
+        {/* Output-search bar: finds text in visible block output. Docks
+            itself to the bottom-right of <main> via absolute positioning.
+            Returns null when closed so the DOM is completely quiet. */}
+        <OutputSearch sessionId={activeSessionId} />
+        {/* Visual bell flash overlay — renders a brief 80 ms highlight
+            across the terminal area when the bell store advances. Returns
+            null when visualBell is off or no bell is active, so it stays
+            invisible to pointer events at all times. */}
+        <BellFlash />
       </main>
       <div className={styles.composerHost}>
         <Composer />
@@ -569,7 +927,43 @@ function TerminalPageContent() {
       <HistorySearch open={historyOpen} onClose={closeHistory} hydrating={hydrating} />
       <ComparePanel />
       <SettingsPanel open={settingsOpen} onClose={closeSettings} />
+      <StopRecordingModal
+        result={stopRecordingResult}
+        onDismiss={dismissStopRecordingModal}
+      />
       <ToastHost />
+      {/* Alt-screen announcer: visually-hidden, polite live region. Screen
+          readers pick up enter/exit transitions that the canvas can't surface. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className={styles.altScreenAnnouncer}
+        data-testid="alt-screen-announce"
+      >
+        {altScreenAnnounce}
+      </div>
+      {/* Pane zoom announcer: same visually-hidden pattern. Reuses the
+          alt-screen announcer's CSS so both live regions have identical
+          visually-hidden semantics. Kept as a separate node so an a11y user
+          can distinguish the two transitions. assertive is required because
+          zoom is a mode change (like full-screen) that must interrupt any
+          current screen-reader utterance — polite can be indefinitely
+          deferred in a busy terminal stream. */}
+      <div
+        role="status"
+        aria-live="assertive"
+        aria-atomic="true"
+        className={styles.altScreenAnnouncer}
+        data-testid="pane-zoom-announce"
+      >
+        {paneZoomAnnounce}
+      </div>
+      {/* Output announcer: opt-in aria-live region fed by useOutputAnnouncer.
+          Mounted OUTSIDE any `display:none` parent so screen readers pick it
+          up. The component renders `aria-live="off"` when the feature is
+          disabled, leaving the node inert without unmount churn. */}
+      <LiveRegion />
     </div>
   );
 }

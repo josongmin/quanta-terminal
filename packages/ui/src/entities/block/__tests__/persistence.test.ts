@@ -236,6 +236,7 @@ describe('installBlockPersistence — terminal transition hook', () => {
         pinned: false,
         errorMessage: null,
         rerunOfId: null,
+        tags: [],
       },
     ]);
 
@@ -380,6 +381,7 @@ describe('hydrateFromPersistence', () => {
         pinned: false,
         errorMessage: null,
         rerunOfId: null,
+        tags: [],
       },
     ]);
     expect(useBlockStore.getState().order.length).toBe(0);

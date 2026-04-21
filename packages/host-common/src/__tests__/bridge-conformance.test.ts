@@ -45,6 +45,17 @@ function makeInMemoryBridge(): ProbeBridge {
       // Reference bridge: notify is a silent no-op. The UI falls through to
       // the Web Notification API when present.
     },
+    async readTextFile() {
+      // Reference bridge has no disk. Surface `null` for every call so
+      // callers treat the path as missing. Matches the mock-bridge contract.
+      return null;
+    },
+    async gitStatus() {
+      // Reference bridge has no shell-out capability. `null` is the
+      // "no info" sentinel the UI expects — same contract as the
+      // browser-only mock.
+      return null;
+    },
     async openInEditor() {},
     async installShellIntegration(options) {
       return {

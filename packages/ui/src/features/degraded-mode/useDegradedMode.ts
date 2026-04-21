@@ -124,7 +124,15 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
   // "option was provided" discriminator, a caller that wires a nullable
   // active-id (the common case) would silently fall through to the
   // legacy path and pin the banner on.
-  const hasSessionGate = currentSessionId !== undefined;
+  // Both the getter AND the "is the option provided" flag live in refs so
+  // the subscribe effect's closure always reads the latest value. Without
+  // a ref, a prop transition from `undefined → null` (common: caller wires
+  // `useState<SessionId | null>()` which starts `undefined` and later
+  // becomes `null`) never re-ran the effect (deps omit this), so
+  // `hasSessionGate` stayed captured as `false` forever and the strict
+  // filter never activated.
+  const hasSessionGateRef = useRef<boolean>(currentSessionId !== undefined);
+  hasSessionGateRef.current = currentSessionId !== undefined;
   const currentSessionIdRef = useRef<() => SessionId | null>(() => null);
   currentSessionIdRef.current =
     typeof currentSessionId === 'function'
@@ -204,7 +212,7 @@ export function useDegradedMode(options: UseDegradedModeOptions = {}): DegradedH
       // otherwise wedge the banner on over a perfectly healthy new
       // session (RFC §20: degraded must be a live failure signal).
       if (event.kind === 'pty_exit' && event.signal === 'sidecar_crash_recovered') {
-        if (hasSessionGate) {
+        if (hasSessionGateRef.current) {
           // Strict gate. `event.sessionId` must equal the active id; any
           // mismatch — including `active === null` at cold-start, before
           // the UI has spawned its first session — is stale and MUST

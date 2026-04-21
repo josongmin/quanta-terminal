@@ -37,6 +37,7 @@ function runningBlock(id: string, sessionId: string): Block {
     pinned: false,
     errorMessage: null,
     rerunOfId: null,
+    tags: [],
   };
 }
 

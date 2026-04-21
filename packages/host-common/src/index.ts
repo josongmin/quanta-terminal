@@ -1,5 +1,11 @@
 export type {
   HostBridge,
+  SessionBridge,
+  ExternalActionBridge,
+  ShellIntegrationBridge,
+  FileBridge,
+  NotificationBridge,
+  AiBridge,
   HostEventListener,
   Subscription,
   SpawnSessionOptions,
@@ -16,10 +22,18 @@ export type {
   AiSuggestion,
   AiRiskTier,
   NotifyOptions,
+  OpenExternalUrlOptions,
+  ReadTextFileOptions,
+  GitStatusOptions,
+  GitStatus,
   HostBridgeError,
   HostBridgeErrorCode,
 } from './bridge.js';
-export { NULL_EDITOR_BRIDGE, AI_SUGGEST_DEFAULT_TIMEOUT_MS } from './bridge.js';
+export {
+  NULL_EDITOR_BRIDGE,
+  AI_SUGGEST_DEFAULT_TIMEOUT_MS,
+  READ_TEXT_FILE_DEFAULT_MAX_BYTES,
+} from './bridge.js';
 
 export type { HostCapabilities } from './capabilities.js';
 export { DEFAULT_CAPABILITIES } from './capabilities.js';

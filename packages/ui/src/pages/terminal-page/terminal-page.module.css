@@ -16,16 +16,14 @@
   position: relative;
 }
 
-/* Overlay renders on top of the page while a session is still booting.
-   Pointer events pass through so the user can interact the moment
-   connectSession resolves. */
+/* Loading overlay while session is booting */
 .overlay {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(11, 12, 16, 0.6);
+  background: rgba(13, 14, 20, 0.7);
   pointer-events: none;
   z-index: 1;
 }
@@ -38,36 +36,36 @@
   flex-direction: column;
 }
 
-/* Wrapper around the Composer so we can hide it via CSS while an alt-
- * screen TUI program is active. Keeps the Composer mounted so local state
- * (draft text, suggestion widget, history index) survives the excursion. */
 .composerHost {
   display: contents;
 }
 
-/* EPIC-H §4.2: alt-screen active does not hide the block list anymore. The
- * BlockCard chrome collapse transitions the running card to a thin bar;
- * the AltScreenStatusBar renders at the top of the page with the program
- * name + session hint. This modifier exists for optional layout tweaks
- * (e.g. darkening the canvas backdrop) and is cheap to leave empty. */
+/* Alt-screen active: hide block list, keep composer mounted */
 .main.altActive {
   background: var(--q-bg);
 }
 
-/* Alt-screen active: the TuiRenderSurface (a sibling inside the main
- * region) covers the BlockList, so we hide the block-list host with
- * `display: none` to keep the layout from reserving space behind the
- * surface. State is preserved — the BlockList / Composer components
- * remain mounted; only their visibility is toggled. */
 .main.altActive .blockListHost,
 .page.altActive .composerHost {
   display: none;
 }
 
-/* Degraded mode: disable pointer events on the terminal chrome so the only
- * interactive element is the DegradedBanner's Restart button. RFC §20 /
- * ADR 0010. Keyboard interception is handled at the TerminalPage level. */
+/* Degraded: pointer events off, opacity dimmed */
 .main.degraded .blockListHost {
   pointer-events: none;
-  opacity: 0.7;
+  opacity: 0.6;
+}
+
+/* Visually-hidden live regions */
+.altScreenAnnouncer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

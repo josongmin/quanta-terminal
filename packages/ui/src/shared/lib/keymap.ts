@@ -141,6 +141,38 @@ export function isMac(): boolean {
 }
 
 /**
+ * True when running on Windows. Detection uses `navigator.platform` — a
+ * legacy but still-populated string on every major browser. Falls back to
+ * false outside a browser runtime (tests, SSR).
+ *
+ * Note: `isMac`/`isWindows`/`isLinux` are NOT exclusive in theory (a future
+ * runtime might drop `navigator.platform` entirely). In that case all three
+ * return false and `formatShortcutHint` defaults to the non-mac layout, which
+ * is a safe fallback for WSL / ChromeOS / unknown shells.
+ */
+export function isWindows(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Win/u.test(navigator.platform);
+}
+
+/** True when running on Linux. Includes WSL (reports Linux), ChromeOS, etc. */
+export function isLinux(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Linux|X11/u.test(navigator.platform) && !/Android/u.test(navigator.userAgent ?? '');
+}
+
+/**
+ * Platforms `formatShortcutHint` understands. `'auto'` probes the shared
+ * `getPlatform()` helper; callers can pass a fixed platform to render a
+ * hint for a specific target (tests, docs, cross-device overrides).
+ *
+ * Aliases: `'mac'` ≡ `'macos'` and the 3-letter `'linux'` / `'windows'`
+ * match the `Platform` enum used elsewhere in the UI package, so consumers
+ * can write `formatShortcutHint(spec, getPlatform())` without translating.
+ */
+export type ShortcutPlatform = 'mac' | 'macos' | 'windows' | 'linux' | 'auto';
+
+/**
  * `formatShortcutHint` — renders a shortcut spec (as consumed by
  * `useKeymap`) into the user-visible label we show in menus / tooltips.
  *
@@ -164,9 +196,12 @@ export function isMac(): boolean {
  * remap table. For now we document the limitation; most tools take the
  * same shortcut.
  */
-export function formatShortcutHint(spec: Shortcut): string {
+export function formatShortcutHint(spec: Shortcut, platform: ShortcutPlatform = 'auto'): string {
   const parsed = parseShortcut(spec);
-  const mac = isMac();
+  const mac =
+    platform === 'auto'
+      ? isMac()
+      : platform === 'mac' || platform === 'macos';
   const parts: string[] = [];
   if (parsed.mod || (parsed.ctrl && !mac)) {
     parts.push(mac ? '⌘' : 'Ctrl');

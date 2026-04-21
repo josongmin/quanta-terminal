@@ -4,11 +4,11 @@
   gap: var(--q-space-3);
   height: var(--q-statusbar-height);
   padding: 0 var(--q-space-4);
-  background: var(--q-bg-elev-1);
+  background: var(--q-bg-titlebar);
   border-top: 1px solid var(--q-border-subtle);
   font-family: var(--q-font-sans);
-  font-size: var(--q-font-size-sm);
-  color: var(--q-fg-muted);
+  font-size: 11px;
+  color: var(--q-fg-faint);
 }
 
 .group {
@@ -77,4 +77,62 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
+}
+
+/* Git branch chip: a tiny icon + branch name rendered between the cwd chip
+   and the grow spacer. Deliberately quiet — the cwd chip is still the
+   primary anchor and the branch is supporting metadata. */
+.gitBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--q-font-mono);
+  font-size: 12px;
+  color: var(--q-fg-muted);
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.gitBranch .gitIcon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0.8;
+}
+
+.gitBranch .gitBranchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitBranch.detached .gitBranchName {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* Dirty marker ("*") — warn tone so it reads at a glance as "attention
+   needed" without being as loud as an error. Matches Warp / Oh-My-Zsh. */
+.gitBranchDirty {
+  color: var(--q-warning);
+  margin-left: 1px;
+  font-weight: 600;
+}
+
+/* Ahead/behind divergence ("↑2↓1") — slightly muted so it supplements the
+   branch name rather than competing with it. */
+.gitBranchDivergence {
+  color: var(--q-fg-muted);
+  margin-left: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* When the tree is dirty, tint the whole chip a touch warmer so the "this
+   branch has uncommitted work" state is noticeable even when the `*` itself
+   falls off a narrow viewport. */
+.gitBranch.dirty {
+  color: var(--q-fg);
 }

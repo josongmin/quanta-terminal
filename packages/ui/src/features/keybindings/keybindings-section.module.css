@@ -1,0 +1,112 @@
+/*
+ * Keybindings section — list of action rows with Record / Reset controls.
+ * Mirrors the visual rhythm of other settings sections (profile rows, etc.)
+ * so the Settings panel reads as a single surface.
+ */
+
+.section {
+  padding: var(--q-space-4) 0;
+  border-bottom: 1px solid var(--q-border-subtle);
+}
+.section:last-child {
+  border-bottom: none;
+}
+
+.sectionTitle {
+  font-size: var(--q-font-size-md);
+  font-weight: 600;
+  margin: 0 0 var(--q-space-2);
+}
+
+.sectionDescription {
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-sm);
+  margin: 0 0 var(--q-space-3);
+}
+
+.keybindingList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+}
+
+.keybindingRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--q-space-3);
+  padding: var(--q-space-2) var(--q-space-3);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-md);
+}
+.keybindingRow[data-conflict='true'] {
+  border-color: var(--q-warning, #c68a2e);
+}
+
+.keybindingLabel {
+  color: var(--q-fg);
+  font-size: var(--q-font-size-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keybindingCurrent {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.keybindingActions {
+  display: flex;
+  gap: var(--q-space-2);
+}
+
+.keybindingMiniButton {
+  background: transparent;
+  color: var(--q-fg-muted);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  padding: var(--q-space-1) var(--q-space-2);
+  font-family: inherit;
+  font-size: var(--q-font-size-sm);
+  cursor: pointer;
+}
+.keybindingMiniButton:hover {
+  color: var(--q-fg);
+  border-color: var(--q-border-strong);
+}
+.keybindingMiniButton[aria-pressed='true'] {
+  color: var(--q-fg);
+  border-color: var(--q-accent);
+  background: var(--q-bg-elev-2);
+}
+
+.keybindingOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--q-bg-elev-2) 88%, transparent);
+  border-radius: var(--q-radius-md);
+  font-size: var(--q-font-size-sm);
+  color: var(--q-fg);
+  z-index: 1;
+}
+
+.keybindingOverlayHint {
+  margin: 0;
+  padding: var(--q-space-2) var(--q-space-3);
+  border: 1px dashed var(--q-accent);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-bg-elev-1);
+}
+
+.keybindingFooter {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--q-space-3);
+}

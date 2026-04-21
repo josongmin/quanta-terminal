@@ -1,0 +1,169 @@
+/*
+ * TabHoverPreview — portal-rendered floating preview for an inactive tab.
+ *
+ * Layering
+ * --------
+ * Lifted to `document.body` by the React portal so overflow clips on the
+ * tab strip (`overflow-x: auto`) and any ancestor stacking context don't
+ * swallow the card. Positioned via `--x` / `--y` fixed coordinates.
+ * z-index sits above typical overlays (command palette lives at 200) but
+ * below modal dialogs (≥1000).
+ *
+ * Tokens
+ * ------
+ * All colors, spacing, radii, and shadows resolve to `--q-*` tokens so the
+ * card stays theme-consistent without new tokens.
+ */
+
+.card {
+  position: fixed;
+  left: var(--x, 0);
+  top: var(--y, 0);
+  z-index: 400;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  padding: var(--q-space-3);
+
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  border: 1px solid var(--q-border-strong);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-overlay);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+  line-height: 1.4;
+
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--q-dur-fast) var(--q-ease-out),
+    transform var(--q-dur-fast) var(--q-ease-out);
+}
+
+.card[data-open='true'] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* --- Header row ---------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  min-width: 0;
+}
+
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-md);
+  font-weight: 600;
+  color: var(--q-fg);
+}
+
+.healthChip {
+  flex: 0 0 auto;
+  padding: 1px var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  border: 1px solid var(--q-border-subtle);
+  background: var(--q-bg-elev-1);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.healthReady {
+  color: var(--q-success);
+  border-color: var(--q-success);
+}
+.healthBooting {
+  color: var(--q-fg-muted);
+  border-color: var(--q-border-strong);
+}
+.healthExited {
+  color: var(--q-fg-faint);
+  border-color: var(--q-border-subtle);
+}
+.healthError {
+  color: var(--q-danger);
+  border-color: var(--q-danger);
+}
+
+/* --- Meta rows ----------------------------------------------------- */
+
+.metaRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--q-space-2);
+  min-width: 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-font-size-sm);
+}
+
+.metaLabel {
+  flex: 0 0 auto;
+  color: var(--q-fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+
+.metaValue {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--q-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metaValueSubtle {
+  color: var(--q-fg-muted);
+}
+
+/* --- Preview (mini terminal) --------------------------------------- */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  padding: var(--q-space-2);
+  border-radius: var(--q-radius-md);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  font-family: var(--q-font-mono);
+  font-size: 11px;
+  color: var(--q-fg-muted);
+  line-height: 1.35;
+  max-height: 120px;
+  overflow: hidden;
+}
+
+.previewLine {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.previewEmpty {
+  color: var(--q-fg-faint);
+  font-style: italic;
+}

@@ -1,0 +1,174 @@
+/*
+ * AiExplainPanel — styling for the "Explain this error" affordance that
+ * renders below a failed BlockCard.
+ *
+ * Visual language matches `command-correction-hint.module.css`: a muted
+ * pill that reads as a secondary surface, with the accent color reserved
+ * for the call-to-action button (idle / retry) so the eye finds the one
+ * interactive surface quickly.
+ *
+ * The explanation body (state === 'done') inherits the app font tokens so
+ * inline `<code>` / `<pre>` fences render with the monospace family from
+ * the user's font settings.
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-2);
+  margin-top: calc(-1 * var(--q-space-2));
+  margin-bottom: var(--q-space-2);
+  padding: var(--q-space-2) var(--q-space-3);
+  background: rgba(162, 119, 255, 0.06);
+  border: 1px solid rgba(162, 119, 255, 0.22);
+  border-radius: var(--q-radius-sm);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-font-size-sm);
+}
+
+.panel[data-state='loading'],
+.panel[data-state='error'] {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--q-border-subtle);
+}
+
+.panel[data-state='not-configured'] {
+  background: rgba(255, 183, 77, 0.06);
+  border-color: rgba(255, 183, 77, 0.28);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--q-space-3);
+}
+
+.left {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.explainButton {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--q-accent);
+  color: var(--q-accent);
+  padding: 2px var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.explainButton:hover,
+.explainButton:focus-visible {
+  background: var(--q-accent);
+  color: var(--q-bg);
+  outline: none;
+}
+
+.retryButton {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--q-border-subtle);
+  color: var(--q-fg);
+  padding: 2px var(--q-space-2);
+  border-radius: var(--q-radius-sm);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out);
+}
+
+.retryButton:hover,
+.retryButton:focus-visible {
+  background: var(--q-bg-elev-2);
+  outline: none;
+}
+
+.dismissButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--q-fg-muted);
+  font-size: var(--q-font-size-md);
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--q-radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--q-dur-fast) var(--q-ease-out),
+    color var(--q-dur-fast) var(--q-ease-out);
+}
+
+.dismissButton:hover,
+.dismissButton:focus-visible {
+  background: var(--q-bg-elev-2);
+  color: var(--q-fg);
+  outline: none;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explanation {
+  color: var(--q-fg);
+  font-size: var(--q-font-size-sm);
+  line-height: 1.5;
+}
+
+.explanation p {
+  margin: 0 0 var(--q-space-2) 0;
+}
+
+.explanation p:last-child {
+  margin-bottom: 0;
+}
+
+.explanation code {
+  font-family: var(--q-font-mono);
+  font-size: 0.95em;
+  padding: 0 4px;
+  background: var(--q-bg-elev-2);
+  border-radius: 3px;
+}
+
+.explanation pre {
+  font-family: var(--q-font-mono);
+  margin: 0 0 var(--q-space-2) 0;
+  padding: var(--q-space-2);
+  background: var(--q-bg-elev-1);
+  border: 1px solid var(--q-border-subtle);
+  border-radius: var(--q-radius-sm);
+  overflow-x: auto;
+  font-size: 0.9em;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--q-accent);
+}

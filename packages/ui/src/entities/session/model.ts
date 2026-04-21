@@ -55,6 +55,12 @@ export interface SessionState {
   readonly shellIntegration: ShellIntegrationStatus;
   readonly health: SessionHealth;
   readonly exitCode: number | null;
+  /**
+   * Mirrors `SessionEntity.isWsl`. Defaults to `false` in the pre-boot
+   * singular store (no entity yet → not WSL). See sessions-store.ts for the
+   * full provenance of the flag.
+   */
+  readonly isWsl: boolean;
 }
 
 export interface SessionActions {
@@ -71,6 +77,7 @@ const INITIAL: SessionState = {
   shellIntegration: 'missing',
   health: 'booting',
   exitCode: null,
+  isWsl: false,
 };
 
 function project(entity: SessionEntity | undefined): SessionState {
@@ -83,6 +90,7 @@ function project(entity: SessionEntity | undefined): SessionState {
     shellIntegration: entity.shellIntegration,
     health: entity.health,
     exitCode: entity.exitCode,
+    isWsl: entity.isWsl ?? false,
   };
 }
 

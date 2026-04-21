@@ -12,7 +12,7 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useBlockStore, type Block } from '../../../entities/block/index.js';
 import { BlockHoverCard } from '../BlockHoverCard.js';
 
@@ -119,5 +119,48 @@ describe('<BlockHoverCard />', () => {
     render(<BlockHoverCard block={currentBlock(id)} x={0} y={0} open={false} />);
     const tooltip = screen.getByRole('tooltip');
     expect(tooltip.getAttribute('data-open')).toBe('false');
+  });
+});
+
+describe('<BlockHoverCard /> — per-platform keybind hints', () => {
+  let restoreNavigator: (() => void) | null = null;
+
+  function stubNavigator(platformValue: string): () => void {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, 'platform');
+    Object.defineProperty(navigator, 'platform', {
+      configurable: true,
+      value: platformValue,
+    });
+    return () => {
+      if (originalDescriptor) {
+        Object.defineProperty(navigator, 'platform', originalDescriptor);
+      } else {
+        // @ts-expect-error cleanup on a patched global
+        delete navigator.platform;
+      }
+    };
+  }
+
+  afterEach(() => {
+    restoreNavigator?.();
+    restoreNavigator = null;
+  });
+
+  it('renders ⌘C for copy on macOS', () => {
+    restoreNavigator = stubNavigator('MacIntel');
+    const id = useBlockStore.getState().createBlock('ls', '/');
+    render(<BlockHoverCard block={currentBlock(id)} x={0} y={0} open />);
+    // The footer shows the shortcut inside a <Kbd> chip next to the
+    // "copy output" label. `⌘C` matches the macOS layout (no `+`).
+    expect(screen.getByText('⌘C')).toBeInTheDocument();
+    expect(screen.getByText('⌘R')).toBeInTheDocument();
+  });
+
+  it('renders Ctrl+C for copy on Linux', () => {
+    restoreNavigator = stubNavigator('Linux x86_64');
+    const id = useBlockStore.getState().createBlock('ls', '/');
+    render(<BlockHoverCard block={currentBlock(id)} x={0} y={0} open />);
+    expect(screen.getByText('Ctrl+C')).toBeInTheDocument();
+    expect(screen.getByText('Ctrl+R')).toBeInTheDocument();
   });
 });

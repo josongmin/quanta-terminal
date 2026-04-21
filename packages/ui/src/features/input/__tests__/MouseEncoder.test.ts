@@ -272,3 +272,131 @@ describe('MouseEncoder — SGR 1006', () => {
     expect(toHex(out.bytes)).toBe(sgr(0, 4, 6, 'M'));
   });
 });
+
+describe('MouseEncoder — alt-screen wheel→arrow fallback', () => {
+  it('wheel-up in alt-screen with tracking off emits ESC [ A × wheelLines', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'off',
+      altScreen: true,
+      decckm: false,
+    });
+    const out = encoder.encode(
+      {
+        xCell: 0,
+        yCell: 0,
+        button: 'wheel-up',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 3,
+      },
+      snapshot,
+    );
+    // ESC [ A ×3 = 1b5b41 1b5b41 1b5b41
+    expect(toHex(out.bytes)).toBe('1b5b411b5b411b5b41');
+    expect(out.diagnostics.deprecatedFallback).toBe(true);
+  });
+
+  it('wheel-down in alt-screen with tracking off emits ESC [ B × wheelLines', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'off',
+      altScreen: true,
+      decckm: false,
+    });
+    const out = encoder.encode(
+      {
+        xCell: 0,
+        yCell: 0,
+        button: 'wheel-down',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 2,
+      },
+      snapshot,
+    );
+    // ESC [ B ×2
+    expect(toHex(out.bytes)).toBe('1b5b421b5b42');
+  });
+
+  it('DECCKM on → wheel fallback uses ESC O A / ESC O B (SS3 form)', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'off',
+      altScreen: true,
+      decckm: true,
+    });
+    const up = encoder.encode(
+      {
+        xCell: 0,
+        yCell: 0,
+        button: 'wheel-up',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 1,
+      },
+      snapshot,
+    );
+    expect(toHex(up.bytes)).toBe('1b4f41');
+    const down = encoder.encode(
+      {
+        xCell: 0,
+        yCell: 0,
+        button: 'wheel-down',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 1,
+      },
+      snapshot,
+    );
+    expect(toHex(down.bytes)).toBe('1b4f42');
+  });
+
+  it('wheelLines omitted defaults to 1 arrow keystroke', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'off',
+      altScreen: true,
+    });
+    const out = encoder.encode(
+      { xCell: 0, yCell: 0, button: 'wheel-up', modifiers: NO_MODS, kind: 'wheel' },
+      snapshot,
+    );
+    expect(toHex(out.bytes)).toBe('1b5b41');
+  });
+
+  it('tracking ON (button_event) does NOT trigger the arrow fallback: regular SGR mouse event', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'button_event',
+      altScreen: true,
+    });
+    const out = encoder.encode(
+      {
+        xCell: 3,
+        yCell: 5,
+        button: 'wheel-up',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 3,
+      },
+      snapshot,
+    );
+    // SGR 1006 wheel-up = Cb 64 at (4,6)
+    expect(toHex(out.bytes)).toBe(sgr(64, 4, 6, 'M'));
+  });
+
+  it('alt-screen OFF with tracking off → no bytes (native scroll path)', () => {
+    const { encoder, snapshot } = makeEncoder({
+      mouseTracking: 'off',
+      altScreen: false,
+    });
+    const out = encoder.encode(
+      {
+        xCell: 0,
+        yCell: 0,
+        button: 'wheel-up',
+        modifiers: NO_MODS,
+        kind: 'wheel',
+        wheelLines: 5,
+      },
+      snapshot,
+    );
+    expect(out.bytes.length).toBe(0);
+  });
+});
