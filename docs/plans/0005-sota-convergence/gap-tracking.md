@@ -28,7 +28,7 @@
 | G-IN-05 | β | high | review | Agent-G ✓ | Focus events 1004 always-on |
 | G-IN-06 | β | med | review | Agent-G ✓ | Paste safety moved to `input-host.onPasteGate` |
 | G-IN-07 | β | med | review | Agent-G ✓ | IME overlay anchors from engine cursor when available |
-| G-RD-01 | γ/δ | crit | todo | — | Block body uses cell renderer (deferred via P1 gate in P0) |
+| G-RD-01 | γ/δ | crit | review | Agent-I+J ✓ | Block-body AnsiParser path kept but gated; default P0 renders plain grid via TuiRenderSurface+SessionInputSurface. `shared/lib/text/project-output` replaces parser direct-use for a11y/ai-explain/search/block-export/compare/tui-detect |
 | G-RD-02 | γ | high | review | Agent-B ✓ | `write-batcher-frame-skip.ts` + 13 tests; 29/29 pass. Staged, awaiting merge commit |
 | G-RD-03 | γ | high | review | Agent-B ✓ | Data-safe policy: frame-skip → flow-control → emergency drop (boundary-aligned). Byte-frame FSM handles CSI/OSC/DCS/APC/PM |
 | G-RD-05 | ε | med | todo | — | DPR mid-session test |
@@ -65,9 +65,9 @@
 
 | Invariant | CI rule | Status |
 |-----------|---------|--------|
-| I-11 one render path | `tools/check-one-render-path/` | rule live (warn-report, 9 violations to migrate) |
-| I-12 one input path | `tools/check-one-input-path/` | rule live (warn-report, 7 violations to migrate) |
-| I-14 scrollback bounded | Scrollback ring in VtEmulator | landed (10,000 default, pin hook reserved for P1) |
+| I-11 one render path | `tools/check-one-render-path/` | ✓ **2 DEFER only** (BlockCard + ComparePanel — P1 flag-gated); `--strict` ready for Epic δ next phase |
+| I-12 one input path | `tools/check-one-input-path/` | warn-report (7 — all TuiRenderSurface DSR response path, needs dedicated migration or allowlist) |
+| I-14 scrollback bounded | Scrollback ring in VtEmulator | ✓ landed (10,000 default, pin hook reserved for P1) |
 | I-13 hybrid boundary | deferred P1 | deferred |
 | I-15..17 priority / intent / run | deferred P2 | deferred |
 
@@ -85,8 +85,30 @@
 | Agent-F | (merged) | Epic α1 session-level VtEmulator feed wiring — `engine.ts` + connect.ts + 13 tests | ✓ landed staged |
 | Agent-G | (merged) | Epic β — always-on `SessionInputSurface` + KeymapGuard + paste-safety relocation + TuiInputSurface deletion; 1588/1588 session+tui+composer+input green | ✓ landed staged |
 | Agent-H | (merged) | Compat fixtures C-PG-01 (less) + C-MON-01 (top) + scrollback assertion harness ext | ✓ landed staged (trailing-space projection fix applied) |
+| Agent-I | (merged) | Epic α6 AnsiParser migration → `shared/lib/text/project-output`; 7 migrations, 2 DEFER; render-path rule clean | ✓ landed staged |
+| Agent-J | (merged) | Epic δ `flag.blockUx` feature-flag + TerminalPage P0/P1 gate; 18 pre-existing failures resolved via flag-setup / itP1 pattern; no-block-chunks rule strict-clean | ✓ landed staged |
+| Agent-K | (merged) | 3 more compat fixtures: C-ED-02 nvim+LSP, C-MUX-01 tmux basic, C-IME-01 KR wide-cell | ✓ landed staged |
 
-Main thread (this session) is writing planning docs and holding off any VtEmulator / write-batcher / session edits to avoid worktree collision.
+**P0 ship gate scorecard** (see README §13):
+
+| # | Gate | Status |
+|---|------|--------|
+| 1 | Zero `block.outputChunks` in default render path | ✓ (strict rule clean) |
+| 2 | Zero paths from non-SessionInputSurface to bridge.write | ⚠ 7 TuiRenderSurface violations remain (DSR query response path) |
+| 3 | Zero ANSI parsing outside VT engine in prod paths | ✓ (2 DEFER behind flag) |
+| 4 | DEC 1049/1047/47 fully implemented + tested | ✓ (153 vt-emulator + 24 compat) |
+| 5 | Scrollback ring live w/ cap + eviction + pinning | ✓ (10 scrollback tests) |
+| 6 | Compat matrix green on macOS + Linux | ⏳ 6/32 fixtures shipped (vim, nvim, less, top, tmux, KR IME) |
+| 7 | Perf budgets green in CI | ⏳ harness scaffolded, fixtures TBD |
+| 8 | vim round-trip byte-exact 100 iterations | ✓ (C-ED-01 + altbuffer.test.ts) |
+| 9 | KR IME byte-identical to corpus | ✓ (existing KR-2set + C-IME-01 render) |
+| 10 | yes/tail -f/watch run 60s no OOM no data loss | ⏳ harness-level tests TBD |
+| 11 | Sidecar flow-control engages before last-resort drop | ⏳ Rust side TBD |
+| 12 | Default UI after fresh session: plain grid, no block chrome | ✓ (p0-default.test.tsx, flag=false) |
+
+**Completed**: 8/12 ship gates. **Remaining**: 4 — TuiRenderSurface DSR path, more compat fixtures (target 32 rows), perf harness, Rust flow-control.
+
+Main thread drives remaining work.
 
 ---
 

@@ -111,6 +111,12 @@ import {
   __resetRawObserversForTests,
 } from '../../features/command/route-output.js';
 import { setHostBridge } from '../../shared/api/host-bridge.js';
+// Plan 0005 Epic δ: TerminalPage hides the Composer when `flag.blockUx` is
+// off. This e2e asserts composer presence after alt-screen exit.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../shared/config/feature-flags.js';
 
 const ESC = 0x1b;
 const ENTER_1049 = new Uint8Array([ESC, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x68]);
@@ -259,6 +265,7 @@ let bridge: FakeBridge;
 const keyHarnesses: KeyHarness[] = [];
 
 beforeEach(() => {
+  setFeatureFlag('blockUx', true);
   bridge = makeBridge();
   setHostBridge(bridge);
   (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__ = 'memory';
@@ -299,6 +306,7 @@ afterEach(() => {
     h.container.remove();
   }
   delete (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__;
+  resetFeatureFlags();
 });
 
 function makeKey(

@@ -152,6 +152,14 @@ import {
   __resetRawObserversForTests,
 } from '../../features/command/route-output.js';
 import { setHostBridge } from '../../shared/api/host-bridge.js';
+// Plan 0005 Epic δ: TerminalPage hides the Composer + BlockList when
+// `flag.blockUx === false` (the P0 default). These e2e tests assert
+// Composer + BlockList presence in alt-screen transitions, so they flip
+// the flag on for their lifetime.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../shared/config/feature-flags.js';
 
 // -----------------------------------------------------------------------------
 // Byte sequences. Spelled out numerically so a drift in literal encoding
@@ -306,6 +314,9 @@ function isComposerHidden(): boolean {
 let bridge: FakeBridge;
 
 beforeEach(() => {
+  // Composer / BlockList mount is gated on `flag.blockUx`. This e2e test
+  // asserts Composer visibility end-to-end, so the flag is true here.
+  setFeatureFlag('blockUx', true);
   bridge = makeBridge();
   setHostBridge(bridge);
   // TuiRenderSurface defaults to Canvas2DBackend which crashes under jsdom
@@ -351,6 +362,7 @@ afterEach(() => {
   useBannerStore.getState().resetAll();
   useBlockStore.getState().resetAll();
   delete (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__;
+  resetFeatureFlags();
 });
 
 // -----------------------------------------------------------------------------

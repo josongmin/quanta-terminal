@@ -37,7 +37,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+import { projectChunksToText } from '../../shared/lib/text/index.js';
 import {
   useBlock,
   type Block,
@@ -92,10 +92,11 @@ export interface UseExplainBlockResult {
  * Project the block's `outputChunks` into a single utf-8 decoded string,
  * stripped of ANSI escapes, bounded to the last MAX_OUTPUT_BYTES bytes.
  *
- * Why strip before slicing? We slice the RAW bytes first (tail only so the
- * decode step stays cheap on multi-megabyte outputs), decode with a permissive
- * TextDecoder that emits U+FFFD for broken codepoints, then pass through
- * `stripAnsi` to remove SGR noise. The returned text is plain, provider-ready.
+ * Why slice before decoding? We slice the RAW bytes first (tail only so the
+ * decode step stays cheap on multi-megabyte outputs), then hand the tail
+ * buffer to `projectChunksToText` which does the decode + `stripAnsi` pass in
+ * one place (shared with a11y-announce, output-search, copy, export, compare).
+ * The returned text is plain, provider-ready.
  *
  * Exported so tests can exercise the byte-budget independently of the hook.
  */
@@ -121,8 +122,7 @@ export function projectOutputForExplain(chunks: readonly Uint8Array[]): string {
       budget = 0;
     }
   }
-  const decoder = new TextDecoder('utf-8', { fatal: false });
-  return stripAnsi(decoder.decode(tail));
+  return projectChunksToText(tail);
 }
 
 interface ExplainInputs {

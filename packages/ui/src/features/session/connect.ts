@@ -215,11 +215,12 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   //      block spinner spins forever. The idle window is a heuristic — see
   //      the `IDLE_COMPLETE_MS` rationale in `route-output.ts`.
   const isMockBridge = spawn.shell === '/bin/mock';
-  // Epic δ P0: the command router is a block-UX-only path (it routes pty
-  // bytes into block.outputChunks). Skip install when `flag.blockUx` is
-  // off so the session runs without any block-store coupling — pty_data
-  // flows engine-only, which is the P0 shipping surface. In P1, re-install
-  // happens on flag flip by re-mounting the session (no hot-swap needed).
+  // Epic δ P0: the command router is a block-UX-only path (it appends pty
+  // bytes into the active block's output buffer). Skip install when
+  // `flag.blockUx` is off so the session runs without any block-store
+  // coupling — pty_data flows engine-only, which is the P0 shipping
+  // surface. In P1, re-install happens on flag flip by re-mounting the
+  // session (no hot-swap needed).
   if (getFeatureFlag('blockUx')) {
     routerDispose = installCommandRouter(
       sessionId,

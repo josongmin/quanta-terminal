@@ -56,7 +56,7 @@ describe('<BannerHost />', () => {
     expect(host.querySelector('[role="alert"]')).not.toBeNull();
   });
 
-  it('announces shell_integration politely (role=status)', () => {
+  itP1('announces shell_integration politely (role=status) [P1 blockUx]', () => {
     act(() => {
       raiseSyntheticBanner('shell_integration');
     });
@@ -65,7 +65,7 @@ describe('<BannerHost />', () => {
     expect(host.querySelector('[role="status"]')).not.toBeNull();
   });
 
-  it('suppresses the slide animation under prefers-reduced-motion', () => {
+  itP1('suppresses the slide animation under prefers-reduced-motion [P1 blockUx]', () => {
     // The MQ is expressed in CSS (prefers-reduced-motion: reduce). We can't
     // exercise the actual keyframe run in jsdom, but we CAN assert the host
     // honors the MQ by exposing a class CSS can scope on. The CSS module
@@ -82,7 +82,7 @@ describe('<BannerHost />', () => {
     expect(host.querySelector('[class*="slide"]')).not.toBeNull();
   });
 
-  it('dismiss removes the banner until another condition rises', () => {
+  itP1('dismiss removes the banner until another condition rises [P1 blockUx]', () => {
     act(() => {
       raiseSyntheticBanner('shell_integration');
     });

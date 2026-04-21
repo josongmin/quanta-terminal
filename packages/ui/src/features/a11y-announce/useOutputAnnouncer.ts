@@ -33,9 +33,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useBlockStore, concatChunks, type BlockState } from '../../entities/block/index.js';
+import { useBlockStore, type BlockState } from '../../entities/block/index.js';
 import { useTuiStore } from '../../entities/tui/index.js';
-import { stripAnsi } from '../../shared/lib/ansi-parser/strip.js';
+import { projectChunksToText } from '../../shared/lib/text/index.js';
 import { detectPasswordPrompt, tailLines } from '../secret-detect/index.js';
 import {
   useA11yAnnounceSettings,
@@ -234,8 +234,7 @@ export function useOutputAnnouncer(): UseOutputAnnouncerResult {
     // Password-prompt gate: if the tail of this block's output looks like a
     // password prompt, we must not announce anything for the block until the
     // prompt clears. Conservative: compute against the full output tail.
-    const allBytes = concatChunks(block.outputChunks);
-    const allText = stripAnsi(new TextDecoder().decode(allBytes));
+    const allText = projectChunksToText(block.outputChunks);
     const tail = tailLines(allText, 4);
     if (detectPasswordPrompt(tail) !== null) return;
 
@@ -248,8 +247,7 @@ export function useOutputAnnouncer(): UseOutputAnnouncerResult {
     // Take ONLY the new chunks since last pass.
     if (block.outputChunks.length <= cursor.consumedChunks) return;
     const fresh = block.outputChunks.slice(cursor.consumedChunks);
-    const freshBytes = concatChunks(fresh);
-    const freshText = stripAnsi(new TextDecoder().decode(freshBytes));
+    const freshText = projectChunksToText(fresh);
 
     const { lines, cursor: nextCursor } = extractAnnouncementLines(cursor, freshText);
     nextCursor.consumedChunks = block.outputChunks.length;

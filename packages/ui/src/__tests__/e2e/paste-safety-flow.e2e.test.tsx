@@ -101,6 +101,12 @@ import { useBannerStore } from '../../entities/banner/index.js';
 import { useTuiStore } from '../../entities/tui/index.js';
 import { useBlockStore } from '../../entities/block/index.js';
 import { setHostBridge } from '../../shared/api/host-bridge.js';
+// Plan 0005 Epic δ: the composer textarea is part of the P1 block UX.
+// This paste-safety flow drives the textarea directly, so the flag is on.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../shared/config/feature-flags.js';
 import {
   __resetRawObserversForTests,
 } from '../../features/command/route-output.js';
@@ -220,6 +226,7 @@ function pasteEvent(text: string): { clipboardData: { getData: (t: string) => st
 let bridge: FakeBridge;
 
 beforeEach(() => {
+  setFeatureFlag('blockUx', true);
   bridge = makeBridge();
   setHostBridge(bridge);
   (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__ = 'memory';
@@ -255,6 +262,7 @@ afterEach(() => {
   useBannerStore.getState().resetAll();
   useBlockStore.getState().resetAll();
   delete (window as unknown as { __quantaTuiBackend__?: string }).__quantaTuiBackend__;
+  resetFeatureFlags();
 });
 
 // ---------------------------------------------------------------------------

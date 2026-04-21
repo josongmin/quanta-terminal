@@ -6,8 +6,8 @@
  * the UI show a toast. An override is accepted for tests.
  */
 
-import { concatChunks, useBlockStore } from '../../entities/block/index.js';
-import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+import { useBlockStore } from '../../entities/block/index.js';
+import { projectChunksToText } from '../../shared/lib/text/index.js';
 
 export type CopyScope = 'command' | 'output';
 
@@ -29,8 +29,6 @@ function defaultWriter(): ((text: string) => Promise<void>) | null {
   return (text) => c.writeText(text);
 }
 
-const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
-
 export async function copyBlock(options: CopyOptions): Promise<CopyResult> {
   const block = useBlockStore.getState().entities[options.blockId];
   if (!block) return { ok: false, reason: 'not-found' };
@@ -41,7 +39,7 @@ export async function copyBlock(options: CopyOptions): Promise<CopyResult> {
   const text =
     options.scope === 'command'
       ? block.command
-      : stripAnsi(DECODER.decode(concatChunks(block.outputChunks)));
+      : projectChunksToText(block.outputChunks);
   const writer = options.writeText ?? defaultWriter();
   if (!writer) return { ok: false, reason: 'no-clipboard' };
   try {

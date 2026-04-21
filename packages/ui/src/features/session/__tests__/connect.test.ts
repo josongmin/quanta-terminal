@@ -27,6 +27,13 @@ import { connectSession } from '../connect.js';
 import { useSessionStore } from '../../../entities/session/index.js';
 import { bindBlockStore, type BlockStoreActions } from '../../command/index.js';
 import { __resetRouterForTests } from '../../command/route-output.js';
+// Plan 0005 Epic δ: the command router install inside `connectSession` is
+// gated on `flag.blockUx`. These tests exercise the router end-to-end so
+// they flip the flag on in setup and restore defaults in teardown.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../../shared/config/feature-flags.js';
 
 interface ScriptedBridge extends HostBridge {
   emit: (event: HostEvent) => void;
@@ -379,11 +386,14 @@ describe('connectSession — boundary-detector selection by bridge kind', () => 
   beforeEach(() => {
     __resetRouterForTests();
     useSessionStore.getState().reset();
+    // Router install inside `connectSession` is gated on `flag.blockUx`.
+    setFeatureFlag('blockUx', true);
   });
   afterEach(() => {
     if (unbind) unbind();
     unbind = undefined;
     __resetRouterForTests();
+    resetFeatureFlags();
   });
 
   it('real-shell spawn (shell !== /bin/mock): mock-prompt bytes do NOT close the block', async () => {

@@ -67,9 +67,11 @@ export interface CompareView {
 }
 
 // Strip ANSI escapes so ANSI-colored lines equal their uncolored counterparts
-// for diffing purposes. Delegates to the shared implementation so the diff,
+// for diffing purposes. Delegates to the shared implementation (through
+// `shared/lib/text`, which is the allowlisted wrapper around the parser's
+// strip path — see the `check-one-render-path` CI rule) so the diff,
 // render-peek, copy and export paths don't drift.
-import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+import { stripAnsi } from '../../shared/lib/text/index.js';
 export { stripAnsi };
 
 const TEXT_DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });

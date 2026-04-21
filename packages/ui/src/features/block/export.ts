@@ -19,15 +19,16 @@
  */
 
 import { concatChunks, useBlockStore, type Block, type BlockStatus } from '../../entities/block/index.js';
-import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+import { stripAnsi } from '../../shared/lib/text/index.js';
 
 export type ExportFormat = 'markdown' | 'json' | 'text';
 
 const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
 
-// `stripAnsi` lives in `shared/lib/ansi-parser/strip` so the renderer, copy,
-// diff, history-search and export paths share one implementation. Re-exported
-// here for backwards compatibility with existing callers / tests.
+// `stripAnsi` is owned by `shared/lib/ansi-parser/strip` but re-exported
+// through `shared/lib/text` so downstream consumers do not reach into the
+// parser module directly (see the `check-one-render-path` CI rule). Kept
+// re-exported here for backwards compatibility with existing callers / tests.
 export { stripAnsi };
 
 /**

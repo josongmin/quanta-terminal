@@ -7,13 +7,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { AnsiModeEvent } from '../../../shared/lib/ansi-parser/index.js';
-import { createAltScreenDetector } from '../detect.js';
+import { createAltScreenDetector, type AltScreenModeEvent } from '../detect.js';
 
 const enc = new TextEncoder();
 
-function run(input: string): AnsiModeEvent[] {
-  const events: AnsiModeEvent[] = [];
+function run(input: string): AltScreenModeEvent[] {
+  const events: AltScreenModeEvent[] = [];
   const d = createAltScreenDetector((ev) => events.push(ev));
   d.feed(enc.encode(input));
   return events;
@@ -52,7 +51,7 @@ describe('createAltScreenDetector', () => {
   });
 
   it('handles a sequence that straddles feed boundaries', () => {
-    const events: AnsiModeEvent[] = [];
+    const events: AltScreenModeEvent[] = [];
     const d = createAltScreenDetector((ev) => events.push(ev));
     d.feed(enc.encode('\x1b[?10'));
     d.feed(enc.encode('49h'));
@@ -80,7 +79,7 @@ describe('createAltScreenDetector', () => {
   });
 
   it('reset drops FSM state mid-sequence', () => {
-    const events: AnsiModeEvent[] = [];
+    const events: AltScreenModeEvent[] = [];
     const d = createAltScreenDetector((ev) => events.push(ev));
     d.feed(enc.encode('\x1b[?10'));
     d.reset();

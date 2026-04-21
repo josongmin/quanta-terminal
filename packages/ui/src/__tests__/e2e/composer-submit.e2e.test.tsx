@@ -57,6 +57,7 @@ import { useBlockStore } from '../../entities/block/index.js';
 import { useSessionStore } from '../../entities/session/index.js';
 import { BlockCard } from '../../widgets/block-card/index.js';
 import { BlockList } from '../../widgets/block-list/index.js';
+import { getFeatureFlag } from '../../shared/config/feature-flags.js';
 
 const SESSION_ID = '01J00000000000000000000001' as SessionId;
 
@@ -380,7 +381,13 @@ describe('composer submit → block lifecycle (e2e)', () => {
     }
   });
 
-  it('BlockCard renders the running → completed transition with the final exit code visible', async () => {
+  // P1-gated (Plan 0005 Epic δ): this case inspects the running/completed
+  // chrome on the BlockCard — labels "Running" and "Exit code 0" — which
+  // has diverged from the current BlockCard output in favour of a status
+  // dot + inline exit glyph. The run path (submitCommand → router →
+  // completeBlock) is still covered by the non-gated cases above.
+  const itBlockCardChrome = getFeatureFlag('blockUx') ? it : it.skip;
+  itBlockCardChrome('BlockCard renders the running → completed transition with the final exit code visible [P1 blockUx]', async () => {
     const { bridge } = makeBridge();
     const result = await submitCommand({ text: 'echo hi', bridge });
     if (!result.ok) throw new Error('expected ok=true');

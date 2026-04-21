@@ -42,12 +42,23 @@ test('classify: widgets/block-card is hard-allowed', () => {
   assert.equal(classify('packages/ui/src/widgets/block-card/BlockCard.tsx'), 'allowed');
 });
 
-test('classify: features/command is transitional', () => {
-  assert.equal(classify('packages/ui/src/features/command/route-output.ts'), 'transitional');
+test('classify: features/command is allowed (Epic δ: P1 block-UX slice)', () => {
+  // Before Epic δ this was "transitional"; the block-UX migration promoted
+  // features/command/ (route-output, boundary detector, etc.) to the hard
+  // allowlist because the whole slice is P1-only.
+  assert.equal(classify('packages/ui/src/features/command/route-output.ts'), 'allowed');
 });
 
-test('classify: features/output-search is transitional', () => {
-  assert.equal(classify('packages/ui/src/features/output-search/index.ts'), 'transitional');
+test('classify: features/output-search is allowed (Epic δ: P1 block-UX slice)', () => {
+  assert.equal(classify('packages/ui/src/features/output-search/index.ts'), 'allowed');
+});
+
+test('classify: features/ai-suggest is allowed (Epic δ: P1 block-UX slice)', () => {
+  assert.equal(classify('packages/ui/src/features/ai-suggest/index.ts'), 'allowed');
+});
+
+test('classify: features/history is allowed (Epic δ: P1 block-UX slice)', () => {
+  assert.equal(classify('packages/ui/src/features/history/search.ts'), 'allowed');
 });
 
 test('classify: widgets/terminal-canvas is forbidden', () => {
@@ -70,7 +81,7 @@ test('audit: forbidden consumer is surfaced', async () => {
   assert.equal(result.transitional.length, 0);
 });
 
-test('audit: transitional consumer is bucketed separately', async () => {
+test('audit: previously-transitional block-UX slice is now hard-allowed (Epic δ)', async () => {
   const result = await withTree(
     {
       'packages/ui/src/features/command/route-output.ts':
@@ -79,7 +90,7 @@ test('audit: transitional consumer is bucketed separately', async () => {
     (root) => audit(root, { relBase: root }),
   );
   assert.equal(result.forbidden.length, 0);
-  assert.equal(result.transitional.length, 1);
+  assert.equal(result.transitional.length, 0);
 });
 
 test('audit: entity owner is clean', async () => {

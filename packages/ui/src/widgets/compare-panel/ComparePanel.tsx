@@ -40,6 +40,11 @@ import { useCompareStore } from '../../entities/compare/index.js';
 import { useBlockStore, type Block } from '../../entities/block/index.js';
 import { compareBlocks, type CompareView } from '../../features/compare/index.js';
 import { computeHunks, type DiffLine, type DiffHunk } from '../../shared/lib/diff/index.js';
+// FIXME(p1-block-ux): AnsiParser usage deferred until flag.blockUx lands in Epic δ.
+// ComparePanel renders block-diff hunks with per-line ANSI styling; this is
+// the last widget that still drives a parser directly. Carved out of
+// `check-one-render-path` via the P1_BLOCK_UX_DEFERRED allowlist group
+// (warning, not error) until the block UX flag migration.
 import { AnsiParser } from '../../shared/lib/ansi-parser/index.js';
 import { AnsiOutput, type AnsiSpan } from '../../shared/ui/ansi-output/index.js';
 import { Kbd } from '../../shared/ui/kbd/index.js';

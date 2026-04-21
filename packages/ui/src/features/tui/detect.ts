@@ -29,7 +29,19 @@
  *     our FSM state.
  */
 
-import type { AnsiModeEvent } from '../../shared/lib/ansi-parser/index.js';
+/**
+ * Alt-screen subset of the parser's `AnsiModeEvent` union. The detector
+ * only emits these two kinds — we intentionally define the narrow shape
+ * HERE rather than importing from `shared/lib/ansi-parser/` so this slice
+ * does not become another non-render-path consumer of the parser module
+ * (see the `check-one-render-path` CI rule). Shape and field names are
+ * kept byte-identical to the parser's declaration so install.ts can
+ * forward events 1:1 without translating. See
+ * `shared/lib/ansi-parser/types.ts::AnsiModeEvent` for the wide union.
+ */
+export type AltScreenModeEvent =
+  | { readonly kind: 'alt_screen_enter' }
+  | { readonly kind: 'alt_screen_exit' };
 
 const ESC = 0x1b;
 const BEL = 0x07;
@@ -52,7 +64,7 @@ export interface AltScreenDetector {
 }
 
 export function createAltScreenDetector(
-  onMode: (ev: AnsiModeEvent) => void,
+  onMode: (ev: AltScreenModeEvent) => void,
 ): AltScreenDetector {
   let state: DetectorState = 'Ground';
   /** CSI parameter + intermediate accumulator — ASCII only. */

@@ -14,8 +14,8 @@
  * sub-millisecond.
  */
 
-import { concatChunks, type Block } from '../../entities/block/index.js';
-import { stripAnsi } from '../../shared/lib/ansi-parser/index.js';
+import { type Block } from '../../entities/block/index.js';
+import { projectChunksToText } from '../../shared/lib/text/index.js';
 import { findMatches } from './highlight.js';
 import type { OutputMatch } from './search-store.js';
 
@@ -28,8 +28,33 @@ import type { OutputMatch } from './search-store.js';
  */
 export const MAX_BYTES_PER_BLOCK = 2 * 1024 * 1024;
 
-// Shared decoder — allocating one per block in a hot loop is wasteful.
-const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
+/**
+ * Clip `chunks` to a bounded window of total byte length ≤ `MAX_BYTES_PER_BLOCK`.
+ * The prefix is preserved so offsets reported by `findMatches` still index
+ * into the user-visible projection. When the cap is not reached, the input
+ * array is returned as-is (no copy).
+ */
+function bound(chunks: readonly Uint8Array[]): readonly Uint8Array[] {
+  let total = 0;
+  for (const c of chunks) {
+    total += c.byteLength;
+    if (total > MAX_BYTES_PER_BLOCK) break;
+  }
+  if (total <= MAX_BYTES_PER_BLOCK) return chunks;
+  const out: Uint8Array[] = [];
+  let remaining = MAX_BYTES_PER_BLOCK;
+  for (const c of chunks) {
+    if (remaining <= 0) break;
+    if (c.byteLength <= remaining) {
+      out.push(c);
+      remaining -= c.byteLength;
+    } else {
+      out.push(c.subarray(0, remaining));
+      remaining = 0;
+    }
+  }
+  return out;
+}
 
 /**
  * Derive the rendered plain-text projection for a block. Mirrors the
@@ -39,15 +64,14 @@ const DECODER = /* @__PURE__ */ new TextDecoder('utf-8', { fatal: false });
  *   3. `stripAnsi`;
  *   4. cheap CR rewrite (`\r` truncates back to line start) so progress bars
  *      don't match the same substring 50 times.
+ *
+ * Steps 1-3 go through the shared `projectChunksToText` helper so every
+ * non-render consumer (a11y, ai-explain, copy, export, compare, search) shares
+ * one decode + strip implementation.
  */
 export function blockOutputText(chunks: readonly Uint8Array[]): string {
   if (chunks.length === 0) return '';
-  const concat = concatChunks(chunks);
-  const bounded =
-    concat.byteLength > MAX_BYTES_PER_BLOCK
-      ? concat.subarray(0, MAX_BYTES_PER_BLOCK)
-      : concat;
-  const raw = stripAnsi(DECODER.decode(bounded));
+  const raw = projectChunksToText(bound(chunks));
   if (raw.length === 0) return '';
   let out = '';
   let lineStart = 0;

@@ -33,6 +33,13 @@ import { useSessionStore } from '../../../entities/session/index.js';
 import { __resetRouterForTests } from '../route-output.js';
 import { bindBlockStore, type BlockStoreActions } from '../block-store-port.js';
 import type { BlockId } from '../../../shared/types/generated/index.js';
+// Plan 0005 Epic δ: `connectSession` installs the command router only when
+// `flag.blockUx` is on. The integration assertions here observe the router
+// end-to-end so we flip the flag in setup.
+import {
+  resetFeatureFlags,
+  setFeatureFlag,
+} from '../../../shared/config/feature-flags.js';
 
 interface ScriptedBridge extends HostBridge {
   emit: (event: HostEvent) => void;
@@ -151,12 +158,14 @@ let unbind: (() => void) | undefined;
 beforeEach(() => {
   useSessionStore.getState().reset();
   __resetRouterForTests();
+  setFeatureFlag('blockUx', true);
 });
 
 afterEach(() => {
   if (unbind) unbind();
   unbind = undefined;
   vi.restoreAllMocks();
+  resetFeatureFlags();
 });
 
 describe('session.connect → command.router wiring', () => {
