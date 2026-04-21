@@ -25,7 +25,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   escapeRegex as escapeRegexForGrid,
+  IncrementalSearchCache,
   searchGrid,
+  searchGridResult,
   searchGridWithQuery,
   type GridSearchEmulator,
 } from '../scrollback-search.js';
@@ -276,6 +278,92 @@ describe('searchGrid', () => {
     // bypass the compile helper can reuse the same escaping.
     expect(escapeRegexForGrid('a.b*c')).toBe('a\\.b\\*c');
     expect(escapeRegexForGrid('')).toBe('');
+  });
+
+  it('incremental cache: refinement on 10k rows runs in < 5 ms (Plan 0005 P1-F wave 1)', () => {
+    // Build a 10k-row scrollback. The cold-path walk is what the existing
+    // 50 ms perf budget below asserts — here we prove the **incremental**
+    // path (second keystroke refinement) clears a much tighter budget
+    // because the cache filters the prior hit list instead of re-walking.
+    const lines: string[] = [];
+    for (let i = 0; i < 10_000; i += 1) {
+      if (i % 333 === 0) lines.push('lorem ipsum target dolor sit amet');
+      else lines.push('lorem ipsum dolor sit amet');
+    }
+    const em = makeEmulator({ scrollbackLines: lines, cols: 80 });
+    const cache = new IncrementalSearchCache();
+    // First keystroke — cold.
+    cache.resolve(em, {
+      text: 'tar',
+      regex: false,
+      caseSensitive: false,
+      wholeWord: false,
+    });
+    // Second keystroke — refinement. Timed in isolation.
+    const start =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const refined = cache.resolve(em, {
+      text: 'targ',
+      regex: false,
+      caseSensitive: false,
+      wholeWord: false,
+    });
+    const elapsed =
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+      start;
+    expect(refined.matches.length).toBeGreaterThan(25);
+    expect(refined.matches.length).toBeLessThan(40);
+    // Cache-hit budget — much tighter than the 50 ms cold-path budget.
+    expect(elapsed).toBeLessThan(5);
+  });
+
+  it('incremental cache: mode-toggle invalidates the fast-path', () => {
+    const em = makeEmulator({
+      viewportLines: ['Foo foo FOO'],
+      cols: 20,
+    });
+    const cache = new IncrementalSearchCache();
+    const insensitive = cache.resolve(em, {
+      text: 'foo',
+      regex: false,
+      caseSensitive: false,
+      wholeWord: false,
+    });
+    expect(insensitive.matches).toHaveLength(3);
+    // Mode toggle (caseSensitive flip) must NOT serve the prior hit list —
+    // a fast-path cache hit would still return 3 matches (the prior set),
+    // but the correct answer is 1.
+    const sensitive = cache.resolve(em, {
+      text: 'foo',
+      regex: false,
+      caseSensitive: true,
+      wholeWord: false,
+    });
+    expect(sensitive.matches).toHaveLength(1);
+    expect(sensitive.matches[0]!.text).toBe('foo');
+  });
+
+  it('ReDoS guard: ^(a+)+$ against a 30-char input completes under 100 ms', () => {
+    // Build an emulator whose only row is a long run of `a` characters
+    // terminated by a non-match. This is the canonical catastrophic-
+    // backtracking setup: the regex spends exponential time trying to
+    // decompose the run, and without a time budget a single search call
+    // can lock the thread for seconds. The guard should surface a
+    // `timedOut === true` result well under 100 ms.
+    const pathological = 'a'.repeat(30) + '!';
+    const em = makeEmulator({ viewportLines: [pathological], cols: 40 });
+    const start =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const result = searchGridResult(em, /^(a+)+$/, { timeBudgetMs: 50 });
+    const elapsed =
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+      start;
+    expect(elapsed).toBeLessThan(100);
+    // Either the walker finished quickly with no matches (the pattern
+    // doesn't match — trailing `!` falsifies `$`) OR the budget fired and
+    // `timedOut` is true. Both are acceptable outcomes; the assertion we
+    // care about is the wall-clock ceiling above.
+    expect(result.matches.length === 0 || result.timedOut).toBe(true);
   });
 
   it('perf budget: 10k scrollback rows × 30 matches under 50ms', () => {

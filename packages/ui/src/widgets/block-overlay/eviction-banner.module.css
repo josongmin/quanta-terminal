@@ -1,0 +1,88 @@
+/**
+ * Plan 0005 P1-C polish — EvictionBanner chrome.
+ *
+ * A small horizontal pill that sits at the top-centre of the overlay. The
+ * overlay root has `pointer-events: none`; the pill re-enables pointer
+ * events so the dismiss button is clickable.
+ */
+
+.banner {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--quanta-accent-warn, #e8a33d) 18%,
+    var(--quanta-surface, #1a1a1a) 82%
+  );
+  border: 1px solid var(--quanta-accent-warn, #e8a33d);
+  color: var(--quanta-text, #e5e7eb);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  font-family: var(--quanta-font-family-mono, ui-monospace, monospace);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 11;
+  /* Fade in; when `data-phase="cooling"` we cross-fade out so the
+   * dismissal is smooth rather than a pop. */
+  animation: q-eviction-fade-in 160ms ease-out both;
+  transition: opacity 200ms ease-out;
+}
+
+.banner[data-phase='cooling'] {
+  opacity: 0.75;
+}
+
+.banner[data-phase='armed'] {
+  opacity: 1;
+}
+
+@keyframes q-eviction-fade-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner {
+    animation: none;
+  }
+}
+
+.label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48ch;
+}
+
+.dismiss {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  opacity: 0.7;
+  transition: opacity 80ms ease-out;
+}
+
+.dismiss:hover,
+.dismiss:focus-visible {
+  opacity: 1;
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}

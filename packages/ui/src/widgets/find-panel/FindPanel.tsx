@@ -35,7 +35,7 @@ import {
 
 import { cx } from '../../shared/lib/cx.js';
 import {
-  searchGridWithQuery,
+  IncrementalSearchCache,
   type GridSearchEmulator,
   type GridSearchMatch,
 } from '../../features/output-search/scrollback-search.js';
@@ -93,6 +93,22 @@ function FindPanelImpl(props: FindPanelProps) {
   const setT = scheduler?.setTimeout ?? ((cb: () => void, ms: number) => window.setTimeout(cb, ms));
   const clearT = scheduler?.clearTimeout ?? ((id: number) => window.clearTimeout(id));
 
+  // Incremental cache — lives with the widget. Rebuilt on unmount (implicit
+  // via the ref's garbage collection). A typing sequence "tes" → "test" is
+  // resolved by filtering the prior hits rather than re-walking the grid,
+  // keeping the refinement keystroke well under 5 ms on a 10k-row buffer.
+  // The cache invalidates automatically on toggle change / emulator-shape
+  // change via its own bookkeeping; we additionally reset it when the
+  // widget closes so re-opening on a new session starts from a clean slate.
+  const cacheRef = useRef<IncrementalSearchCache | null>(null);
+  if (cacheRef.current === null) {
+    cacheRef.current = new IncrementalSearchCache();
+  }
+  useEffect(() => {
+    if (open) return;
+    cacheRef.current?.invalidate();
+  }, [open]);
+
   // Debounced recompute. Spec: 150 ms. Clearing the query zeroes matches
   // immediately (store shortcut). Mode toggles flow through the same debounce
   // when non-empty so `\b` / case toggles don't thrash on rapid clicks.
@@ -109,12 +125,29 @@ function FindPanelImpl(props: FindPanelProps) {
         return;
       }
       try {
-        const hits = searchGridWithQuery(
+        const cache = cacheRef.current!;
+        // 50 ms budget — the FindPanel widget is interactive; we'd rather
+        // surface "pattern too complex" than hang the rAF loop for a
+        // single exec call. The `looksCatastrophic` static guard in the
+        // walker is the primary ReDoS defence; this wall-clock limit is
+        // a secondary belt-and-suspenders cap for non-regex edge cases.
+        const resolveOptions: { maxResults?: number; timeBudgetMs: number } = {
+          timeBudgetMs: 50,
+        };
+        if (maxResults !== undefined) resolveOptions.maxResults = maxResults;
+        const result = cache.resolve(
           emulator,
           { text: query, regex, caseSensitive, wholeWord },
-          maxResults !== undefined ? { maxResults } : undefined,
+          resolveOptions,
         );
-        setMatches(hits, null);
+        if (result.timedOut) {
+          // ReDoS guard tripped — surface a graceful hint instead of the
+          // partial match set (which could be misleading). Users can toggle
+          // the regex flag off or simplify the pattern.
+          setMatches([], 'pattern too complex — try literal search');
+        } else {
+          setMatches(result.matches, null);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setMatches([], message);
@@ -189,7 +222,14 @@ function FindPanelImpl(props: FindPanelProps) {
 
   const countLabel = useMemo(() => {
     if (query.length === 0) return '';
-    if (error !== null) return 'invalid regex';
+    // "pattern too complex" messages from the ReDoS guard come through
+    // `error` verbatim — regex-parse errors also land here. We surface the
+    // timeout message whole (it's user-actionable: "try literal search")
+    // and reduce all other non-null errors to the short "invalid regex"
+    // string the widget has always shown.
+    if (error !== null) {
+      return error.startsWith('pattern too complex') ? error : 'invalid regex';
+    }
     if (matches.length === 0) return 'no matches';
     return `${currentIndex + 1} of ${matches.length}`;
   }, [query, matches.length, currentIndex, error]);

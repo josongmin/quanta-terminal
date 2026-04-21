@@ -59,6 +59,18 @@ export interface AutoInstallDeps {
   readonly now?: () => number;
   readonly toast?: typeof showToast;
   readonly openWizard?: OpenWizardHook;
+  /**
+   * Bypass the 3-strike / 24h back-off gate when `true`. The default is
+   * `false` which preserves the auto-install policy (fire-and-forget from
+   * `connectSession`). An explicit user-driven re-install — the wizard's
+   * "Install now" button, a `/reinstall-shell` command palette action, or a
+   * debug flag flip — passes `force: true` to skip the back-off read and
+   * attempt the install unconditionally. Back-off bookkeeping on the
+   * outcome (increment on failure, clear on success) still runs — `force`
+   * only suppresses the pre-call gate, so a user who hits "install now"
+   * three times in a row still ends up in back-off after the third failure.
+   */
+  readonly force?: boolean;
 }
 
 /**
@@ -169,8 +181,12 @@ export async function maybeAutoInstallShellIntegration(
 
   const storage = deps.storage === undefined ? defaultStorage() : deps.storage;
   const now = (deps.now ?? Date.now)();
+  const force = deps.force === true;
 
-  if (storage) {
+  // Back-off gate — skipped entirely when `force === true`. The bookkeeping
+  // below still runs on the outcome so a forced retry that fails can
+  // eventually re-enter back-off if the user keeps hammering the button.
+  if (storage && !force) {
     const existing = readBackoff(storage, shell);
     if (isInBackoff(existing, now)) {
       log.debug('skipped: back-off active', shell, existing);

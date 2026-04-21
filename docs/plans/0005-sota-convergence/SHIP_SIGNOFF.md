@@ -1,9 +1,10 @@
 # Plan 0005 P0 — Ship Sign-off
 
 - **Date**: 2026-04-22
-- **Commit**: `f74c0476e06a8c98e0d4d4382cf8145a7e0cbd5d` (wave 4 tip)
+- **P0 commit**: `fab7198` (P0 wave 5 close, ship-to-staging; succeeds `f74c047` wave 4 tip)
+- **P1 wave 1 commit**: `868e482` (see amendment at end of file)
 - **Auditor**: Agent AA (retry of wave-4 Agent Z, limit-hit)
-- **Status**: **SHIP TO STAGING** (11/12 GREEN, 1 YELLOW/deferred, 0 RED)
+- **Status**: **SHIP TO STAGING** (11/12 GREEN, 1 YELLOW/deferred, 0 RED); P1 wave 1 landed on top without P0 regression.
 
 ## Executive summary
 
@@ -310,3 +311,75 @@ xterm-replaceable within the documented perf envelope and ships.
 - Epic ε (compat + perf): 33 fixtures across 9 categories,
   `perf-budget.ts` + 4 perf tests, CI workflows for compat / perf /
   grep-rules.
+
+---
+
+## Amendment — P1 wave 1 landed (2026-04-22, commit `868e482`)
+
+P0 sign-off above recorded ship-to-staging at commit `fab7198` with 11 / 12 GREEN, 1 YELLOW (gate 7 perf-live-in-CI). P1 wave 1 landed on top without regressing any P0 gate — the deferred gate-7 work is now absorbed by P1-H.
+
+**Wave 1 scope**: 9 P1 epics shipped in parallel. 98 files changed, +14818 / −53 lines. UI suite: **4956 / 4972 green** (0 failing, 16 skipped; delta +257 tests vs P0 close). Rust suite stable at 90 pass + 13 new (`shell_install.rs`) + 11 new (`session_record.rs`) = **114 pass**.
+
+### Per-epic landing
+
+| Epic | Scope | Tests | Landing notes |
+|------|-------|-------|---------------|
+| P1-A | Hybrid boundary detector (`hybrid-detector.ts` 745 LOC); OSC 133 conf 1.0 + prompt-regex 0.6–0.8 + cursor-home 0.5 + idle 0.1; arbitration + telemetry wired to `route-output.ts`. | 65 | Spine complete. Polish: ADR 0021, C-BD-01/02 compat. |
+| P1-B | Shell integration auto-install (`shell_install.rs` 500+ LOC, IPC, 3-strike / 24 h back-off, `flag.shellIntegrationAutoInstall` default `true`). | 13 Rust + 20 TS | Spine complete. Integration: `uninstall_shell_integration` IPC, Undo banner, ADR 0022. |
+| P1-C | Block overlay chrome (`widgets/block-overlay/`); `Block` entity reworked to `rowRange`; public scrollback pin API; boundary listener creates / finalizes blocks. | 29 + boundary-listener + entity | Spine complete. Integration: C10 `outputChunks` field delete, rule strict-flip, ADR 0028. |
+| P1-D | Mode-stack polish (`features/mode-stack/`, 5 drivers — alt-screen / mux / pager / repl / nested-shell); depth-4 nested scenario. | 40 | Spine complete. Polish: ADR 0026, C-MUX-03 click-reach extension. |
+| P1-E | Session restore (`session_record.rs` writer 512 B header + FR frame fmt, 50 MB × 4 rotation; TS replay with storm-threshold; `flag.sessionRestore` default `false`). | 11 Rust + 15 TS | Spine complete. Integration: privacy redaction, Safari private fallback, ADR 0027, default-on flip. |
+| P1-F | Output search (`scrollback-search.ts` grid-wide; `widgets/find-panel/` with Cmd+F + debounced + nav; perf 10k × 30 matches < 50 ms). | 31 | Spine complete. Polish: F8 persistent-history fallback, C-SEARCH-01. |
+| P1-G | Ghost hints (`widgets/ghost-hint/` with 9 registry entries; aria-live + tab-focusable). | 19 | Spine complete. Polish: per-hint opt-out, localisation catalog. |
+| P1-H | Perf live in CI (`ci-linux` budget 3× wider; `perf-regression-check.mjs` last-7-main + 20 % delta; nightly prune; `check-perf-ready.mjs`). | 19 | Spine complete. Integration: per-OS baselines, PR comment bot, closes P0 gate 7 residual. |
+| P1-I | Sign-off automation (`tools/ship-signoff-gen/` 12 gate runners + `format.mjs` + `compare.mjs` drift tier 2/3; `ship-signoff-weekly.yml` Mon 14:00 UTC). | 34 | Spine complete. Integration: live-cron first-run observation, per-epic rule additions. |
+
+### Wave 1 deltas vs p1-roadmap spec
+
+The following items from the p1-roadmap.md spec landed deferred to P1 wave 2:
+
+- **P1-A**: ADR 0021; `osc-subscribe.ts` extraction (A7 folded inline); `C-BD-01` / `C-BD-02` compat fixtures.
+- **P1-B**: `uninstall_shell_integration` IPC (B8); banner Undo action; ADR 0022.
+- **P1-C**: `block.outputChunks` field-delete (C10); `no-block-chunks-in-render --strict` with zero allowlist (currently 2 DEFER); `BlockCard` DEFER in `one-render-path` (C9); ADR 0028; legacy `block-list/` + `block-card/` consolidation.
+- **P1-D**: ADR 0026; dedicated `widgets/mode-hints/ModeHints.tsx` widget vs wave-1 overlap with `widgets/ghost-hint/`.
+- **P1-E**: ADR 0027; journal-secret-redaction test (E-E-05); IndexedDB Safari private fallback (R-E-2); default-on flag flip gated on durability + v2 forward-compat audit.
+- **P1-F**: F8 persistent-history fallback (needs P1-E flag-on); `C-SEARCH-01` compat; web-worker-backed index.
+- **P1-G**: per-hint opt-out; catalog sync test with integration scripts; localisation.
+- **P1-H**: per-OS baselines (`tools/perf-baseline.json` + `tools/perf-baseline-macos.json`); PR comment bot (H6); full baseline commit on main after gate 7 green-at-budget.
+- **P1-I**: drift-job live PR-open first observation; per-epic rule extensions.
+
+### P1 done-definition scorecard (entry state for wave 2)
+
+Mirrors README.md §12.1 (12 P1 ship gates). Wave 1 state:
+
+| # | Gate | State | Wave-2 action |
+|---|------|-------|---------------|
+| 1 | Block overlay default-mounted | ~ | Flag flip pending C10 + consolidation. |
+| 2 | OSC 133 boundary hit rate ≥ 99 % dogfood | [ ] | Capture telemetry + C-BD-01 (7-day window). |
+| 3 | Heuristic boundary accuracy ≥ 90 % | [ ] | C-BD-02 compat. |
+| 4 | Auto-install success rate ≥ 95 % | ~ | Dogfood telemetry + `uninstall` IPC. |
+| 5 | Block overlay paint P99 ≤ 17 ms | ✓ | Baseline captured; perf-regression-check guards. |
+| 6 | Mode stack depth ≥ 3 end-to-end | ✓ | C-MUX-03 depth-3 covered; wave-2 adds click-reach assertion. |
+| 7 | Session restore byte-identical 30-min roundtrip | ~ | 30-min fixture wave 2. |
+| 8 | Scrollback search P99 ≤ 10 ms for 4-char × 10k | ✓ | Baseline captured. |
+| 9 | Zero `block.outputChunks` readers | ~ | C10 field-delete wave 2. |
+| 10 | All P1 ADRs landed | [ ] | 5 ADRs slotted into wave 2. |
+| 11 | P1 epics green in SHIP_SIGNOFF.md (P1-I) | ~ | Rule-set additions per-epic wave 2. |
+| 12 | Perf regression gate on PRs | ~ | Per-OS + PR comment bot wave 2. |
+
+**Wave-1 tally: 3 ✓ / 6 ~ / 3 [ ]**. Wave-2 closes the ~ and [ ] entries.
+
+### Invariant check (no P0 regression)
+
+| Invariant | Status at `fab7198` (P0 close) | Status at `868e482` (P1 wave 1) |
+|-----------|-------------------------------|---------------------------------|
+| I-11 one render path | GREEN + 2 DEFER | GREEN + 2 DEFER (block-overlay uses grid-read, not chunks) |
+| I-12 one input path | GREEN + 2 DEFER | GREEN + 2 DEFER (P1-C integration closes the last DEFER in wave 2) |
+| I-13 hybrid boundary | N/A (P1) | GREEN (landed P1-A) |
+| I-14 scrollback bounded | GREEN | GREEN (P1-C adds public `pinRows` API without mutating the ring) |
+| I-15–17 priority / intent / run | N/A (P2) | N/A (scheduled in [p2-roadmap.md](./p2-roadmap.md)) |
+| no-block-chunks-in-render | GREEN (strict) | GREEN (strict; P1-C C10 keeps it clean after wave-2 field-delete) |
+
+P0 ship decision remains **SHIP TO STAGING**. P1 wave 1 **does not regress the P0 decision**; wave 2 drives the P1 done-definition gates to GREEN.
+
+Next P1 sign-off amendment will be appended on wave-2 close; see [p1-roadmap.md](./p1-roadmap.md) §"Done definition" for the gate list. The [p2-roadmap.md](./p2-roadmap.md) covers everything downstream.

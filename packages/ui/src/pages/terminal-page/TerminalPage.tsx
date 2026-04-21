@@ -81,6 +81,13 @@ import {
   useDegradedMode,
 } from '../../features/degraded-mode/index.js';
 import { OutputSearch } from '../../widgets/output-search/index.js';
+// Plan 0005 P1-F wave 1 — the grid-wide FindPanel is the canonical search
+// surface. Cmd+F opens it; the panel pulls the active session's VT emulator
+// via `getSessionConnection(activeSessionId).engine.emulator` and feeds
+// matches into the TerminalCanvas overlay via `useFindPanelStore`. The
+// legacy OutputSearch (block-local) stays mounted on the page for now but
+// is no longer bound to Cmd+F; users reach it through the command palette.
+import { FindPanel, useFindPanelStore } from '../../widgets/find-panel/index.js';
 // Plan 0005 P1-C — block overlay chrome. The overlay mounts only when
 // `flag.blockUx === true`; it paints absolute-positioned card chrome over
 // the grid canvas without touching byte-path state.
@@ -527,17 +534,24 @@ function TerminalPageContent() {
     e.preventDefault();
     setSettingsOpen((p) => !p);
   }, []);
-  // Modern terminals expose Cmd+F as find-in-output. The pre-existing
-  // mod+f binding is preserved for command-history search via Cmd+Shift+F
-  // (surfaced in the keyboard settings panel).
-  const onOutputSearchShortcut = useCallback((e: KeyboardEvent) => {
+  // Plan 0005 P1-F — Cmd+F opens the grid-wide FindPanel (scrollback +
+  // viewport search). The legacy OutputSearch widget is still reachable
+  // via the command palette, but no longer owns the shortcut — grid-wide
+  // search is the modern-terminal convention (iTerm2 / kitty / Warp all
+  // bind Cmd+F this way).
+  const onFindShortcut = useCallback((e: KeyboardEvent) => {
     e.preventDefault();
-    useOutputSearchStore.getState().toggle();
+    useFindPanelStore.getState().toggle();
   }, []);
   const onEscape = useCallback(() => {
-    // Output-search handles its own Escape at the input level, but if focus
-    // ever leaves the input while the bar is open (rare, but possible) this
-    // still lets Esc close it.
+    // P1-F grid-wide find handles its own Escape at the input level, but
+    // if focus ever leaves the input (rare) this still lets Esc close it.
+    const findPanel = useFindPanelStore.getState();
+    if (findPanel.open) {
+      findPanel.close();
+      return;
+    }
+    // Legacy block-local output search: same idea.
     const outputSearch = useOutputSearchStore.getState();
     if (outputSearch.open) {
       outputSearch.close();
@@ -720,7 +734,7 @@ function TerminalPageContent() {
   }, []);
 
   useKeymap('mod+k', onPaletteShortcut);
-  useKeymap('mod+f', onOutputSearchShortcut, { allowInEditable: true });
+  useKeymap('mod+f', onFindShortcut, { allowInEditable: true });
   useKeymap('mod+shift+f', onHistoryShortcut, { allowInEditable: true });
   useKeymap('escape', onEscape, { enabled: true, allowInEditable: true });
   useKeymap('mod+t', onNewTabShortcut);
@@ -1055,6 +1069,18 @@ function TerminalPageContent() {
             itself to the bottom-right of <main> via absolute positioning.
             Returns null when closed so the DOM is completely quiet. */}
         <OutputSearch sessionId={activeSessionId} />
+        {/* Plan 0005 P1-F — grid-wide FindPanel. Bound to Cmd+F above;
+            returns null when the store is closed. `getEmulator` reads
+            the active session's VT emulator lazily on each debounce tick
+            so switching tabs while the panel is open re-points the next
+            keystroke at the freshly-active grid. */}
+        <FindPanel
+          getEmulator={() => {
+            if (activeSessionId === null) return null;
+            const conn = getSessionConnection(activeSessionId);
+            return conn?.engine.emulator ?? null;
+          }}
+        />
         {/* Visual bell flash overlay — renders a brief 80 ms highlight
             across the terminal area when the bell store advances. Returns
             null when visualBell is off or no bell is active, so it stays

@@ -132,6 +132,17 @@ export interface VtEmulatorOptions {
    */
   readonly onBell?: () => void;
   /**
+   * Plan 0005 P1-C polish — optional observer fired when an eviction attempt
+   * PAUSES because the head row is pinned (i.e. `pinBlockedEvictions` just
+   * incremented). Test affordance for the eviction-banner widget: by firing
+   * on the increment we give consumers a deterministic, synchronous signal
+   * without them having to poll the scrollback snapshot.
+   *
+   * `pinBlockedEvictions` stays the authoritative counter — the callback is
+   * a thin observer. When unset, behaviour is unchanged.
+   */
+  readonly onPinBlockedEviction?: (count: number) => void;
+  /**
    * Maximum rows retained in the main-buffer scrollback ring. When a row
    * falls off the top of the main scroll region (LF / IND / NEL / autowrap
    * at bottom), it is cloned into the ring before being cleared.
@@ -200,6 +211,7 @@ export class VtEmulator {
     | ((flags: number) => void)
     | undefined;
   private readonly onBell: (() => void) | undefined;
+  private readonly onPinBlockedEviction: ((count: number) => void) | undefined;
   private readonly classifier = new DefaultClassifier('narrow');
 
   /**
@@ -340,6 +352,7 @@ export class VtEmulator {
     this.secondaryDaVersion = opts.secondaryDaVersion ?? 0;
     this.onKittyKeyboardFlagsChanged = opts.onKittyKeyboardFlagsChanged;
     this.onBell = opts.onBell;
+    this.onPinBlockedEviction = opts.onPinBlockedEviction;
     this.rows_ = Math.max(1, opts.rows ?? DEFAULT_ROWS);
     this.cols_ = Math.max(1, opts.cols ?? DEFAULT_COLS);
     // Clamp negative / non-integer scrollback settings to a sane floor;
@@ -1640,6 +1653,16 @@ export class VtEmulator {
       if (head === undefined) break;
       if (head.pinned === true) {
         ring.pinBlockedEvictions += 1;
+        // Fire the observer AFTER bumping the counter so the payload
+        // matches the post-increment value. Swallow throws — the engine's
+        // eviction path must never be broken by a consumer bug.
+        if (this.onPinBlockedEviction !== undefined) {
+          try {
+            this.onPinBlockedEviction(ring.pinBlockedEvictions);
+          } catch {
+            /* ignore */
+          }
+        }
         break;
       }
       ring.rows.shift();

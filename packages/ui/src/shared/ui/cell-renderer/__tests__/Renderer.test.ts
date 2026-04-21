@@ -225,6 +225,69 @@ describe('Renderer — markOverlayDirty', () => {
     const flushes = backend.calls().filter((c) => c.kind === 'flush').length;
     expect(flushes).toBeGreaterThanOrEqual(1);
   });
+
+  it('forwards search highlights to the backend when overlay is dirty (Plan 0005 P1-F)', async () => {
+    // Pushes a highlight into the CellBuffer, marks the overlay dirty,
+    // and expects the backend to receive an `applySearchHighlights` call
+    // with the exact hit rect. Proves the TerminalCanvas → CellBuffer →
+    // Renderer → backend path exists end-to-end under rAF coalescing.
+    const { buffer, backend, renderer, flush } = setup(4, 4);
+    renderer.start();
+    await flush();
+    backend.resetCalls();
+    buffer.setScrollbackTop(0);
+    buffer.setSearchHighlights([
+      { rowId: 1, startCol: 0, endColExclusive: 3, current: true },
+    ]);
+    renderer.markOverlayDirty();
+    await flush();
+    const highlightCalls = backend
+      .calls()
+      .filter((c) => c.kind === 'search_highlights');
+    expect(highlightCalls.length).toBeGreaterThanOrEqual(1);
+    const last = highlightCalls[highlightCalls.length - 1];
+    const payload = last?.payload as {
+      count: number;
+      scrollbackTop: number;
+      rects: Array<{
+        rowId: number;
+        viewportRow: number;
+        startCol: number;
+        endColExclusive: number;
+        current: boolean;
+      }>;
+    };
+    expect(payload.count).toBe(1);
+    expect(payload.rects[0]).toEqual({
+      rowId: 1,
+      viewportRow: 1,
+      startCol: 0,
+      endColExclusive: 3,
+      current: true,
+    });
+  });
+
+  it('clears search highlights when the list is emptied', async () => {
+    const { buffer, backend, renderer, flush } = setup(4, 4);
+    renderer.start();
+    await flush();
+    buffer.setSearchHighlights([
+      { rowId: 0, startCol: 0, endColExclusive: 2 },
+    ]);
+    renderer.markOverlayDirty();
+    await flush();
+    backend.resetCalls();
+    buffer.setSearchHighlights([]);
+    renderer.markOverlayDirty();
+    await flush();
+    const highlightCalls = backend
+      .calls()
+      .filter((c) => c.kind === 'search_highlights');
+    expect(highlightCalls.length).toBeGreaterThanOrEqual(1);
+    const last = highlightCalls[highlightCalls.length - 1];
+    const payload = last?.payload as { count: number };
+    expect(payload.count).toBe(0);
+  });
 });
 
 describe('Renderer — vi-mocked rAF smoke', () => {

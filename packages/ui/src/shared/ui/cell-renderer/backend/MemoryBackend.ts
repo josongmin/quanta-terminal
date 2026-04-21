@@ -29,6 +29,7 @@ import type {
   Rect,
   ScreenHit,
 } from '../types.js';
+import type { SearchHighlight } from '../CellBuffer.js';
 import type {
   BackendContract,
   MountContext,
@@ -48,7 +49,8 @@ export interface MemoryBackendCall {
     | 'flush'
     | 'overlay_mount'
     | 'overlay_update'
-    | 'overlay_unmount';
+    | 'overlay_unmount'
+    | 'search_highlights';
   readonly payload?: unknown;
 }
 
@@ -122,6 +124,29 @@ export class MemoryBackend implements BackendContract {
 
   requestDamageFlush(): void {
     this._calls.push({ kind: 'flush' });
+  }
+
+  applySearchHighlights(
+    highlights: readonly SearchHighlight[],
+    scrollbackTop: number,
+  ): void {
+    this._calls.push({
+      kind: 'search_highlights',
+      payload: {
+        count: highlights.length,
+        scrollbackTop,
+        // Preserve viewport-local row math so tests can assert the
+        // backend received the correct translation without pulling the
+        // full highlight structure through the payload shape.
+        rects: highlights.map((h) => ({
+          rowId: h.rowId,
+          viewportRow: h.rowId - scrollbackTop,
+          startCol: h.startCol,
+          endColExclusive: h.endColExclusive,
+          current: h.current ?? false,
+        })),
+      },
+    });
   }
 
   measureText(text: string, attrsVariant: number): TextMeasurement {

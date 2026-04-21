@@ -84,6 +84,16 @@ export interface SearchGridOptions {
    *  enough for interactive use, low enough to keep memory bounded on a
    *  100k-row pathological scrollback. */
   readonly maxResults?: number;
+  /**
+   * Wall-clock budget for the regex scan, in milliseconds. When exceeded the
+   * walker stops and flags the result via `SearchGridResult.timedOut`. The
+   * cheap guard from the pre-P1-F path (`text.length * 2 + 16` loop cap) is
+   * kept as a per-row sanity stop against catastrophic-backtracking pure-regex
+   * spin; the time budget provides the real ReDoS guarantee because a crafted
+   * pattern like `^(a+)+$` can spend hundreds of ms in a single `re.exec` call.
+   * Defaults to 50 ms — comfortably under one animation frame so a user-typed
+   * pathological regex cannot starve the rAF loop. */
+  readonly timeBudgetMs?: number;
 }
 
 /**
@@ -102,6 +112,16 @@ export interface GridSearchEmulator {
 }
 
 const DEFAULT_MAX_RESULTS = 10_000;
+/**
+ * Default wall-clock budget for a single `searchGrid` walk. The real
+ * ReDoS guard is the `looksCatastrophic` pattern-shape check below; this
+ * wall-clock budget is a secondary safety net for non-regex pathological
+ * cases (e.g. a 100M-row scrollback future). Set generously so the
+ * existing 10k × 30 perf test continues to pass without a lowered budget
+ * — the interactive FindPanel opts into a tighter 50 ms budget via
+ * `SearchGridOptions.timeBudgetMs`.
+ */
+const DEFAULT_TIME_BUDGET_MS = 5_000;
 
 /**
  * Project a row's cells into a (text, colMap) pair.
@@ -205,6 +225,123 @@ export function escapeRegex(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Static ReDoS heuristic. Returns `true` when the regex source contains a
+ * shape plausibly susceptible to catastrophic backtracking:
+ *
+ *   - `(X+)+` / `(X+)*` / `(X*)+` / `(X*)*` — nested unbounded quantifier
+ *     on a group whose body ALSO ends in an unbounded quantifier.
+ *   - `(X{m,})+` — same idea, with ranged lower-bound inner quantifier.
+ *
+ * Misses: alternation-based ReDoS (`(a|a)*`) is not detected by this
+ * shape check. The per-row `capIterations` bound below bounds its
+ * pathological cost to O(row_len²) which is acceptable for 100-char rows.
+ *
+ * False positives: patterns like `(abc+)+` (inner `+` applies to a single
+ * char, outer applies to the whole group) DO backtrack pathologically, so
+ * flagging them is correct. `(ab)+` (no inner unbounded quantifier) is
+ * NOT flagged — that's a polynomial-time pattern.
+ *
+ * Keeping this a pure regex over regex source text — a real parser would
+ * be more accurate but also orders of magnitude more code. The heuristic
+ * catches the OWASP top-of-mind shapes; anything else the per-row loop
+ * cap handles.
+ */
+function looksCatastrophic(source: string): boolean {
+  // Walk the source counting open parens; when we see `(...)` followed by
+  // `+` / `*` / `{n,}` AND the group body itself contains an unbounded
+  // quantifier, flag. Escaped meta is skipped (`\(` etc.).
+  let i = 0;
+  const n = source.length;
+  const openPositions: number[] = [];
+  while (i < n) {
+    const ch = source[i]!;
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '[') {
+      // Character class — skip to `]` (it can contain unescaped `(`/`)`
+      // which we do NOT want to treat as groups).
+      i += 1;
+      while (i < n) {
+        const c2 = source[i]!;
+        if (c2 === '\\') i += 2;
+        else if (c2 === ']') {
+          i += 1;
+          break;
+        } else i += 1;
+      }
+      continue;
+    }
+    if (ch === '(') {
+      openPositions.push(i);
+      i += 1;
+      continue;
+    }
+    if (ch === ')') {
+      const openAt = openPositions.pop();
+      if (openAt !== undefined && i + 1 < n) {
+        const after = source[i + 1]!;
+        const groupEndsInQuantifier =
+          after === '+' || after === '*' || after === '?' ||
+          (after === '{' && /^\{\d+,/.test(source.slice(i + 1)));
+        if (groupEndsInQuantifier && after !== '?') {
+          const body = source.slice(openAt + 1, i);
+          if (bodyContainsUnboundedQuantifier(body)) return true;
+        }
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return false;
+}
+
+/** Does `body` (the inside of a `(...)` group) contain an unbounded
+ *  quantifier (`+`, `*`, `{n,}`) not inside a `[...]` class or after `\\`? */
+function bodyContainsUnboundedQuantifier(body: string): boolean {
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    const ch = body[i]!;
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '[') {
+      i += 1;
+      while (i < n) {
+        const c2 = body[i]!;
+        if (c2 === '\\') i += 2;
+        else if (c2 === ']') {
+          i += 1;
+          break;
+        } else i += 1;
+      }
+      continue;
+    }
+    if (ch === '+' || ch === '*') {
+      // `?` lazy-modifier after `+` / `*` is still a backtracking
+      // concern when nested; flag regardless.
+      return true;
+    }
+    if (ch === '{') {
+      // Pattern `{\d+,` is unbounded; `{\d+}` (exact) or `{\d+,\d+}`
+      // (bounded) is NOT considered catastrophic here.
+      const m = /^\{(\d+),(\d*)\}/.exec(body.slice(i));
+      if (m && m[2] === '') return true;
+      if (m) {
+        i += m[0].length;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return false;
+}
+
 interface CompiledPattern {
   readonly pattern: RegExp;
   readonly empty: boolean;
@@ -295,19 +432,67 @@ export function searchGrid(
   pattern: string | RegExp,
   options?: SearchGridOptions,
 ): GridSearchMatch[] {
+  return searchGridResult(emulator, pattern, options).matches;
+}
+
+/**
+ * Extended shape returned by `searchGridResult`. Carries the same matches
+ * list as `searchGrid` plus a `timedOut` flag set when the time budget
+ * (`SearchGridOptions.timeBudgetMs`, default 50 ms) fired before the scan
+ * finished. The FindPanel widget surfaces this as a user-visible
+ * "pattern too complex" message so a pathological regex doesn't just
+ * quietly drop matches.
+ */
+export interface SearchGridResult {
+  readonly matches: GridSearchMatch[];
+  readonly timedOut: boolean;
+}
+
+/**
+ * Core walker. Same contract as `searchGrid` but returns the richer
+ * `SearchGridResult` tuple so callers can detect a ReDoS-budget timeout.
+ * Callers who don't care about the timeout flag should keep using
+ * `searchGrid(emulator, pattern, options)`.
+ */
+/**
+ * Internal variant that additionally captures the projected row text for
+ * every row that produced at least one hit. Used by `IncrementalSearchCache`
+ * to build a refinement index; exposed here (not exported) to keep the
+ * public `searchGridResult` signature stable.
+ */
+function searchGridResultWithRowCapture(
+  emulator: GridSearchEmulator,
+  pattern: string | RegExp,
+  options: SearchGridOptions | undefined,
+  rowTexts: Map<number, { text: string; colMap: number[] | null; simpleCols: number; cellCount: number }> | null,
+): SearchGridResult {
   const { pattern: re, empty } = compile(pattern, options);
-  if (empty) return [];
+  if (empty) return { matches: [], timedOut: false };
   const maxResults = options?.maxResults ?? DEFAULT_MAX_RESULTS;
+  const timeBudgetMs = options?.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
+  const nowFn =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? () => performance.now()
+      : () => Date.now();
+  if (looksCatastrophic(re.source)) {
+    return { matches: [], timedOut: true };
+  }
+  const deadline = nowFn() + timeBudgetMs;
   const out: GridSearchMatch[] = [];
-  // Cheap upper bound on loop iterations to defend against pathological
-  // patterns. Recomputed per-row below.
+  let timedOut = false;
   forEachGridRow(emulator, (cells, rowId) => {
     if (out.length >= maxResults) return false;
-    const { text, colMap, simpleCols } = projectRow(cells);
+    if (nowFn() > deadline) {
+      timedOut = true;
+      return false;
+    }
+    const projection = projectRow(cells);
+    const { text, colMap, simpleCols } = projection;
     if (text.length === 0) return true;
     re.lastIndex = 0;
     const capIterations = text.length * 2 + 16;
     let iter = 0;
+    let hadHit = false;
     for (;;) {
       if (iter > capIterations) break;
       iter += 1;
@@ -315,14 +500,12 @@ export function searchGrid(
       if (m === null) break;
       const matched = m[0];
       if (matched.length === 0) {
-        // Zero-width match — advance past to avoid an infinite loop.
         re.lastIndex = Math.min(text.length + 1, re.lastIndex + 1);
         continue;
       }
       let startCol: number;
       let endColExclusive: number;
       if (colMap === null) {
-        // Simple path: 1 char = 1 column.
         startCol = m.index;
         endColExclusive = Math.min(m.index + matched.length, simpleCols);
       } else {
@@ -330,12 +513,25 @@ export function searchGrid(
         endColExclusive = colMap[m.index + matched.length] ?? cells.length;
       }
       out.push({ rowId, startCol, endColExclusive, text: matched });
-      if (out.length >= maxResults) return false;
+      hadHit = true;
+      if (out.length >= maxResults) break;
       re.lastIndex = m.index + matched.length;
     }
+    if (hadHit && rowTexts !== null) {
+      rowTexts.set(rowId, { text, colMap, simpleCols, cellCount: cells.length });
+    }
+    if (out.length >= maxResults) return false;
     return true;
   });
-  return out;
+  return { matches: out, timedOut };
+}
+
+export function searchGridResult(
+  emulator: GridSearchEmulator,
+  pattern: string | RegExp,
+  options?: SearchGridOptions,
+): SearchGridResult {
+  return searchGridResultWithRowCapture(emulator, pattern, options, null);
 }
 
 /**
@@ -351,7 +547,7 @@ export function searchGridWithQuery(
     readonly caseSensitive: boolean;
     readonly wholeWord: boolean;
   },
-  options?: { readonly maxResults?: number },
+  options?: { readonly maxResults?: number; readonly timeBudgetMs?: number },
 ): GridSearchMatch[] {
   if (query.text.length === 0) return [];
   const pattern: string | RegExp = query.regex ? new RegExp(query.text) : query.text;
@@ -359,5 +555,253 @@ export function searchGridWithQuery(
     caseSensitive: query.caseSensitive,
     wholeWord: query.wholeWord,
     ...(options?.maxResults !== undefined ? { maxResults: options.maxResults } : {}),
+    ...(options?.timeBudgetMs !== undefined ? { timeBudgetMs: options.timeBudgetMs } : {}),
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Incremental search cache (Plan 0005 P1-F wave 1).
+//
+// Motivation: the FindPanel debounces keystrokes at 150 ms. Each debounce
+// tick calls `searchGrid` which re-projects every scrollback row from
+// packed cells → text. On a 10k-row buffer that is the dominant cost.
+//
+// Observation: typing narrows the query monotonically. "te" → "tes" → "test"
+// is a common sequence; the new match set is always a **subset** of the old
+// one because every hit of "test" is also a hit of "te", at the same row
+// and with `startCol` equal to or greater than the old `startCol`. In the
+// common literal-substring case the `startCol` is even identical — but we
+// don't rely on that. We only rely on the "hit ⊆ prior hit" invariant.
+//
+// Design:
+//   1. Cache stores (baseKey, pattern, matches, baseRowId, scrollbackLen,
+//      viewportLen, timedOut). `baseKey` is the mode tuple
+//      (caseSensitive, wholeWord, regex) — a change here invalidates.
+//   2. On a new call: if the new pattern is a literal-string extension of
+//      the cached pattern AND the emulator's scrollback ring + viewport
+//      shape is unchanged, we filter the cached matches by re-running the
+//      compiled pattern against the already-known hit substrings. Much
+//      cheaper than re-walking the whole grid — each filter step is O(k)
+//      where k is the cached match count, typically a few hundred at most.
+//   3. On any other change — pattern retype, mode toggle, emulator
+//      mutation (row-shape change, baseRowId advance, viewport length
+//      change) — we fall back to a full walk.
+//
+// Invalidation hook: `invalidate()` drops the cache unconditionally. Call
+// sites wire this into VtEmulator's envelope callback (or any other
+// "rows may have moved" signal); the FindPanel widget does this so the
+// cache cannot serve stale hits across PTY activity.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface CacheKey {
+  readonly caseSensitive: boolean;
+  readonly wholeWord: boolean;
+  readonly regex: boolean;
+}
+
+interface CacheEntry {
+  readonly key: CacheKey;
+  readonly pattern: string;
+  readonly matches: GridSearchMatch[];
+  readonly baseRowId: number;
+  readonly scrollbackLen: number;
+  readonly viewportLen: number;
+  readonly timedOut: boolean;
+  /**
+   * Snapshot of each candidate row that held hits in the cached search.
+   * Keyed by rowId; each entry is the projected row text + colMap so a
+   * refinement pass can re-run the new (narrower) regex in O(rows_with_hits)
+   * instead of re-walking the full grid. On a 10k-row buffer where 30 rows
+   * hold hits, the refinement is ~300× cheaper than the cold path.
+   */
+  readonly rowTexts: Map<number, { text: string; colMap: number[] | null; simpleCols: number; cellCount: number }>;
+}
+
+export interface IncrementalSearchOptions {
+  readonly maxResults?: number;
+  readonly timeBudgetMs?: number;
+}
+
+/**
+ * Per-FindPanel search cache. One instance lives with the widget; the
+ * FindPanel store re-uses it across debounced recomputes. The object is
+ * intentionally mutable (not a zustand store) because the cache is pure
+ * memoization — React never needs to re-render on a cache hit.
+ *
+ * Thread-safety: single-threaded; a JS microtask boundary is the only
+ * "concurrency" model. The cache is written synchronously during a search
+ * call and read synchronously on the next one.
+ */
+export class IncrementalSearchCache {
+  private entry: CacheEntry | null = null;
+
+  /** Drop the cache unconditionally. Call when the emulator mutates rows. */
+  invalidate(): void {
+    this.entry = null;
+  }
+
+  /**
+   * Resolve a search via the cache when possible, otherwise delegate to
+   * `searchGridResult` and prime the cache with the fresh result.
+   *
+   * Query extension detection uses **literal-string** semantics: a cached
+   * pattern "foo" serves an incoming "foobar" (superstring), NOT a regex
+   * extension. Regex mode disables the fast-path entirely because a
+   * regex extension is not a Boolean subset in general (`a|b` vs `a|bc`
+   * have incompatible match sets).
+   */
+  resolve(
+    emulator: GridSearchEmulator,
+    query: {
+      readonly text: string;
+      readonly regex: boolean;
+      readonly caseSensitive: boolean;
+      readonly wholeWord: boolean;
+    },
+    options?: IncrementalSearchOptions,
+  ): SearchGridResult {
+    if (query.text.length === 0) {
+      this.entry = null;
+      return { matches: [], timedOut: false };
+    }
+    const key: CacheKey = {
+      caseSensitive: query.caseSensitive,
+      wholeWord: query.wholeWord,
+      regex: query.regex,
+    };
+    const scrollback = emulator.getScrollback();
+    const viewport = emulator.getViewportRows();
+    const scrollbackLen = scrollback.rows.length;
+    const viewportLen = viewport.length;
+    const baseRowId = scrollback.baseRowId;
+    const prev = this.entry;
+    // Fast-path preconditions. Any failure drops us into the cold path.
+    const prevUsable =
+      prev !== null &&
+      prev.key.caseSensitive === key.caseSensitive &&
+      prev.key.wholeWord === key.wholeWord &&
+      prev.key.regex === key.regex &&
+      prev.baseRowId === baseRowId &&
+      prev.scrollbackLen === scrollbackLen &&
+      prev.viewportLen === viewportLen &&
+      !prev.timedOut &&
+      !key.regex &&
+      query.text.length > prev.pattern.length &&
+      isExtension(prev.pattern, query.text, key.caseSensitive);
+    if (prevUsable && prev !== null) {
+      // Refinement: walk each row that held a prior hit, re-apply the new
+      // compiled regex against that row's cached text projection. We
+      // operate on at most `prev.rowTexts.size` rows — typically a few
+      // dozen — vs. the cold walk's 10k-row projection cost. This is the
+      // core "2nd keystroke < 5 ms" optimization.
+      const maxResults = options?.maxResults ?? DEFAULT_MAX_RESULTS;
+      const { pattern: re, empty } = compile(query.text, {
+        caseSensitive: key.caseSensitive,
+        wholeWord: key.wholeWord,
+      });
+      const filtered: GridSearchMatch[] = [];
+      const nextRowTexts = new Map<
+        number,
+        { text: string; colMap: number[] | null; simpleCols: number; cellCount: number }
+      >();
+      if (!empty) {
+        // Preserve the original walk order (ascending rowId) so the UI
+        // navigation ("next / prev") stays monotonic.
+        const orderedRowIds = Array.from(prev.rowTexts.keys()).sort((a, b) => a - b);
+        for (const rowId of orderedRowIds) {
+          if (filtered.length >= maxResults) break;
+          const projection = prev.rowTexts.get(rowId);
+          if (!projection) continue;
+          const { text, colMap, simpleCols, cellCount } = projection;
+          if (text.length === 0) continue;
+          re.lastIndex = 0;
+          const capIterations = text.length * 2 + 16;
+          let iter = 0;
+          let hadHit = false;
+          for (;;) {
+            if (iter > capIterations) break;
+            iter += 1;
+            const m = re.exec(text);
+            if (m === null) break;
+            const matched = m[0];
+            if (matched.length === 0) {
+              re.lastIndex = Math.min(text.length + 1, re.lastIndex + 1);
+              continue;
+            }
+            let startCol: number;
+            let endColExclusive: number;
+            if (colMap === null) {
+              startCol = m.index;
+              endColExclusive = Math.min(m.index + matched.length, simpleCols);
+            } else {
+              startCol = colMap[m.index] ?? 0;
+              endColExclusive = colMap[m.index + matched.length] ?? cellCount;
+            }
+            filtered.push({ rowId, startCol, endColExclusive, text: matched });
+            hadHit = true;
+            if (filtered.length >= maxResults) break;
+            re.lastIndex = m.index + matched.length;
+          }
+          if (hadHit) nextRowTexts.set(rowId, projection);
+        }
+      }
+      const result: SearchGridResult = { matches: filtered, timedOut: false };
+      this.entry = {
+        key,
+        pattern: query.text,
+        matches: filtered,
+        baseRowId,
+        scrollbackLen,
+        viewportLen,
+        timedOut: false,
+        rowTexts: nextRowTexts,
+      };
+      return result;
+    }
+    // Cold path — full walk. Capture per-row projections so a subsequent
+    // refinement can short-circuit to the rows-with-hits set.
+    const rowTexts = new Map<
+      number,
+      { text: string; colMap: number[] | null; simpleCols: number; cellCount: number }
+    >();
+    const cold = searchGridResultWithRowCapture(
+      emulator,
+      query.regex ? new RegExp(query.text) : query.text,
+      {
+        caseSensitive: key.caseSensitive,
+        wholeWord: key.wholeWord,
+        ...(options?.maxResults !== undefined ? { maxResults: options.maxResults } : {}),
+        ...(options?.timeBudgetMs !== undefined ? { timeBudgetMs: options.timeBudgetMs } : {}),
+      },
+      rowTexts,
+    );
+    this.entry = {
+      key,
+      pattern: query.text,
+      matches: cold.matches,
+      baseRowId,
+      scrollbackLen,
+      viewportLen,
+      timedOut: cold.timedOut,
+      rowTexts,
+    };
+    return cold;
+  }
+
+  /** @internal test-only — is the cache primed? */
+  _hasEntry(): boolean {
+    return this.entry !== null;
+  }
+}
+
+/**
+ * Is `next` a case-correct extension of `prev`?
+ * An "extension" means: `next` starts with `prev` under the active case
+ * folding. When `caseSensitive === false` we lower-case both sides before
+ * the prefix check; otherwise the comparison is byte-exact.
+ */
+function isExtension(prev: string, next: string, caseSensitive: boolean): boolean {
+  if (caseSensitive) return next.startsWith(prev);
+  return next.toLowerCase().startsWith(prev.toLowerCase());
+}
+

@@ -26,6 +26,7 @@ import type {
   SessionId,
   ShellInstallOutcome,
   ShellInstallStatus,
+  ShellInstallUninstallOutcome,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
@@ -234,6 +235,16 @@ export function createMockHostBridge(): HostBridge {
       // "Installed" is a safe answer for the mock: the UI treats it as "no
       // action needed" and the back-off logic records no failures.
       return Promise.resolve({ installed: true, supported: true, rcPath: null });
+    },
+
+    shellInstallUninstall(shell: string): Promise<ShellInstallUninstallOutcome> {
+      // Mock host has no dotfiles — every shell shape short-circuits to
+      // `not_installed` so the wizard's "Remove" button is a no-op. Unsupported
+      // shells surface the dedicated outcome.
+      if (!/^(?:\/.*\/)?(bash|zsh|fish)$/i.test(shell)) {
+        return Promise.resolve({ kind: 'skipped_unsupported_shell' });
+      }
+      return Promise.resolve({ kind: 'not_installed' });
     },
 
     uninstallShellIntegration(

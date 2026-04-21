@@ -1,10 +1,23 @@
 # Plan 0005 P1 Roadmap
 
-- **Status**: draft (2026-04-21)
-- **Entry commit**: `f74c047` (wave 4)
-- **P0 status**: 11/12 ship gates landed (see SHIP_SIGNOFF.md when available; the remaining gate is perf-live-in-CI wiring, tracked below as P1-H).
+- **Status**: **wave 1 landed (2026-04-22)** — all 9 epics spine-delivered at `868e482`; wave 2 is polish + integration close-out.
+- **Entry commit**: `fab7198` (P0 ship-to-staging, supersedes `f74c047`).
+- **Wave 1 commit**: `868e482` — 98 files, +14818 / −53 lines; UI suite 4956 / 4972 green.
+- **P0 status**: 11 / 12 ship gates GREEN at `fab7198`; gate 7 (perf green-at-budget) carried into P1-H polish.
 - **Authors**: Engine team
-- **Reads-from**: [README.md §6](./README.md#6-p1--block-ux--integration-authority-after-p0-green), [gap-tracking.md](./gap-tracking.md), [test-strategy.md](./test-strategy.md)
+- **Reads-from**: [README.md §6](./README.md#6-p1--block-ux--integration-authority-after-p0-green), [gap-tracking.md](./gap-tracking.md), [test-strategy.md](./test-strategy.md), [p2-roadmap.md](./p2-roadmap.md)
+
+---
+
+## Wave 1 landing snapshot
+
+Every epic below carries a per-epic "wave 1 status" marker taken at commit `868e482`:
+
+- `landed (wave 1)` — spine is shipped; the epic is functional in the tree under its feature flag.
+- `polish pending (wave 2)` — spine landed; specific work items (ADRs, tests, UX refinements) remain for wave 2.
+- `integration pending (wave 2)` — spine landed but has explicit gating (e.g. field still lives on the type, flag default off, CI rule not yet strict).
+
+See `gap-tracking.md` "P1 wave 1 landed" section for the consolidated file / test / delta breakdown.
 
 ---
 
@@ -21,6 +34,10 @@ Rollout is sequenced: A and B ship parallel (both dependency-free on the P0 payl
 ---
 
 ## Epic P1-A — Hybrid boundary detector
+
+**Wave 1 status**: `landed (wave 1)` + `polish pending (wave 2)`.
+- Spine: `features/command/hybrid-detector.ts` (745 LOC) fuses OSC 133 (conf 1.0) + prompt-regex heuristic (0.6–0.8) + cursor-home pattern (0.5) + idle timeout (0.1) with arbitration window + telemetry, wired into `route-output.ts`. 65 tests across 4 files.
+- Wave-2 polish: ADR 0021 authoring (below §"Files"); compat fixtures `C-BD-01` / `C-BD-02` (E-A-02 / E-A-03 exit gates); `osc-subscribe.ts` (A7) was folded inline, to be extracted as a first-class emitter surface when P1-E journal replay consumes OSC events.
 
 ### Goal
 Replace the P0 null-detector with a confidence-stamped detector that fuses OSC 133 primary, prompt-regex / cursor-home heuristic secondary, and an idle-timer tertiary backstop, exposing per-boundary confidence so downstream chrome can render "authoritative" vs "best-effort" differently.
@@ -92,6 +109,10 @@ A10. Byte-accounting: hybrid detector never owns bytes — it only observes. PRE
 
 ## Epic P1-B — Shell integration auto-install
 
+**Wave 1 status**: `landed (wave 1)` + `integration pending (wave 2)`.
+- Spine: `packages/host-tauri/src-tauri/src/shell_install.rs` (500+ LOC) + TS orchestrator `features/session/shell-install.ts` behind `flag.shellIntegrationAutoInstall` default `true`; Tauri IPC `quanta_shell_install_auto` / `quanta_shell_install_status`; 3-strike / 24 h back-off keyed by shell family. 13 Rust + 20 TS tests.
+- Wave-2 integration: `uninstall_shell_integration` IPC (B8); banner "Quanta modified `~/.zshrc`" with "Undo" action surfacing via `ShellIntegrationBanner.tsx`; ADR 0022 authoring; telemetry names finalised with the sign-off generator (B9 names match `tools/ship-signoff-gen/gates.mjs` expectations).
+
 ### Goal
 Ship shell-integration scripts opt-OUT by default: detect the user's login shell on first session, append the appropriate snippet to the rc file, surface a banner on any install failure (permission denied, unknown shell, rc file missing), and honor an explicit opt-out key.
 
@@ -155,6 +176,10 @@ B10. Dogfood log surface: on failure, print a single line to the terminal sessio
 ---
 
 ## Epic P1-C — Block overlay chrome
+
+**Wave 1 status**: `landed (wave 1)` + `integration pending (wave 2)`.
+- Spine: `widgets/block-overlay/BlockOverlay.tsx` + `BlockOverlayHost.tsx` (absolute-positioned cards reading row ranges from engine). `Block` entity reworked to `rowRange` schema. Public `pinRows` / `unpinRows` API on `VtEmulator`. Boundary listener (`features/command/block-boundary-listener.ts`) creates / finalizes blocks on `prompt_start` / `command_end`. 29 BlockOverlay tests + boundary-listener + rowRange entity tests.
+- Wave-2 integration: C10 — `block.outputChunks` field deletion from `entities/block/model.ts` (remaining readers in `features/ai-explain/` / `features/ai-suggest/` / `features/block/export.ts` not yet fully migrated to grid-read); CI rule `no-block-chunks-in-render` flip to `--strict` with zero allowlist (currently strict + 2 DEFER); C9 — drop `BlockCard` DEFER from `one-render-path`; ADR 0028; legacy `block-list/` / `block-card/` widgets still parked alongside new `block-overlay/` — wave 2 either deletes or unifies.
 
 ### Goal
 Render `BlockCard` as an absolutely-positioned DOM overlay pinned to a contiguous scrollback row-range, with zero byte-path involvement and zero measurable FPS hit on the grid below. Card mounts on boundary; unmounts on scroll-past-capture OR user dismiss.
@@ -225,6 +250,10 @@ C10. Delete `block.outputChunks` field entirely from `entities/block/model.ts` �
 
 ## Epic P1-D — Mode-stack polish
 
+**Wave 1 status**: `landed (wave 1)` + `polish pending (wave 2)`.
+- Spine: `features/mode-stack/` with 5 drivers (alt-screen, multiplexer, pager, REPL, nested-shell). Policy — input walks top→bottom for non-passthrough; mouse innermost-wins; render topmost chrome wins. 40 tests including depth-4 nested scenario (tmux / ssh / tmux+tui).
+- Wave-2 polish: ADR 0026 authoring; dedicated `widgets/mode-hints/ModeHints.tsx` widget (wave 1 overlapped with P1-G `ghost-hint/` — wave 2 either consolidates or splits mode-pill vs ghost-text responsibilities); C-MUX-03 click-reach assertion extension to prove mouse arbitration at depth 3 reaches innermost tmux (E-D-02 strengthening).
+
 ### Goal
 Produce a stack-aware terminal-mode model that tracks nested alt-screen entries (pager inside editor inside tmux), exposes per-level DEC mouse-mode arbitration, and renders REPL continuation-prompt affordances. Eliminates the P0-era "we collapse to one bool" behavior.
 
@@ -289,6 +318,10 @@ D8. Instrumentation: `quanta.modestack.depth_p99` gauge, `quanta.modestack.push_
 ---
 
 ## Epic P1-E — Session restore (replay events journal)
+
+**Wave 1 status**: `landed (wave 1)` + `integration pending (wave 2)`.
+- Spine: Rust `session_record.rs` writer (11 tests) with 512 B header + FR (Frame Record) format, 50 MB rotation × 4 files. TS replay engine (`features/session-restore/replay.ts`, 15 tests) with storm-threshold snapshot fallback. `flag.sessionRestore` default `false`. UI wire-in via `TerminalPage` effect.
+- Wave-2 integration: ADR 0027 authoring; privacy-redaction pass (`__tests__/journal-secret-redaction.test.ts`, E-E-05) — wave-1 journal writes plaintext bytes, secret-detect integration deferred; Safari private-mode fallback banner (R-E-2 mitigation); flag-flip criteria — default-on gated on durability audit + journal-schema-v2 forward-compat review for P2-A Run entity persistence.
 
 ### Goal
 Persist a per-session event journal (input bytes + PTY bytes + mode deltas + boundary events + cwd snapshots) and replay it on reload to reconstruct the `GridSnapshot` + `ModeStack` + block list without re-running the shell.
@@ -357,6 +390,10 @@ E9. Host-side: journal file path negotiated through `packages/host-tauri/src-tau
 
 ## Epic P1-F — Output search across scrollback
 
+**Wave 1 status**: `landed (wave 1)` + `polish pending (wave 2)`.
+- Spine: `features/output-search/scrollback-search.ts` grid-wide indexer searching both scrollback ring + viewport. `widgets/find-panel/` with `Cmd+F` + debounced input + match count + `Enter` / `Shift+Enter` navigation. `CellBuffer.searchHighlights` API. 31 tests including perf (10k rows × 30 matches < 50 ms). `sgrDigest` + widths preserved.
+- Wave-2 polish: F8 persistent-history fallback (depends on P1-E flag-on); `C-SEARCH-01` compat fixture (10k rows big-corpus); regex timeout enforcement (R-F-2 mitigation); web-worker-backed index for 100k-row custom caps (R-F-1).
+
 ### Goal
 Full-text search across the entire scrollback ring (not just the current viewport, not just per-block), with per-match navigation, highlight overlay, and case / regex / whole-word toggles. Reuses the existing per-block search machinery as a projection.
 
@@ -422,6 +459,10 @@ F10. Instrumentation: `quanta.search.query_total`, `quanta.search.match_count_p9
 
 ## Epic P1-G — Pager / REPL ghost hints
 
+**Wave 1 status**: `landed (wave 1)` + `polish pending (wave 2)`.
+- Spine: `widgets/ghost-hint/` (GhostHint + `hint-registry.ts` + `useModeStack.ts`) — passive bottom-right pill with 9 registry entries (less / man / python / node / psql / tmux / vim / htop / nested-shell). A11y via `aria-live` + tab-focusable. 19 tests.
+- Wave-2 polish: per-hint opt-out + settings-panel surface (wave-1 scope only had global toggle; per-hint preferences were flagged as P2 but wave 2 picks up the settings-panel chrome); catalog sync test against shell-integration scripts (R-G-2 mitigation); localisation catalog (`resources/mode-hints/<lang>.json`) beyond `en.json`.
+
 ### Goal
 Render contextual ghost-text affordances — "press q to quit" under a pager, "SHIFT+ENTER for newline" in a REPL, "ESC to cancel" in an active search-in-buffer — using mode-stack signals (P1-D). Ghost text is a single-line hint pinned to the input area; never modal.
 
@@ -476,6 +517,10 @@ G7. Opt-out: settings key `tui.ghostHints: boolean` default `true`; opt-out per-
 
 ## Epic P1-H — Perf live in CI
 
+**Wave 1 status**: `landed (wave 1)` + `integration pending (wave 2)`.
+- Spine: `ci-linux` budget profile 3× wider vs local M4 Max, `tools/perf-regression-check.mjs` (last-7-main median comparator with 20 % delta threshold), nightly artifact prune job, `tools/check-perf-ready.mjs` smoke, updated `tools/run-perf-budget.mjs`. 19 tool tests.
+- Wave-2 integration: per-OS baseline files (`tools/perf-baseline.json` committed + `tools/perf-baseline-macos.json`); GitHub PR comment bot for perf diff (H6); absorb P0 gate 7 (perf green-at-budget) close-out via CI nightly run capture; flake policy alignment with test-strategy.md §5.3 (median-of-3).
+
 ### Goal
 Close the only remaining P0 gate — "perf budgets green in CI on every PR" — by wiring Agent-M's perf harness scaffold into GitHub Actions with budget enforcement. This is infrastructure that P0 scaffolded but did not connect; landing it here prevents regressions as P1 adds chrome.
 
@@ -525,6 +570,10 @@ H6. Surface: GitHub PR comment bot posts perf diff as a collapsible table; regre
 ---
 
 ## Epic P1-I — Sign-off automation
+
+**Wave 1 status**: `landed (wave 1)` + `integration pending (wave 2)`.
+- Spine: `tools/ship-signoff-gen/` with 12 gate runners (`gates.mjs` 448 LOC) + `format.mjs` renderer + `compare.mjs` drift classifier (tier 2 / 3 alerting). `ship-signoff-weekly.yml` Monday 14:00 UTC cron with GH issue creation / update via `actions/github-script`. 34 tests.
+- Wave-2 integration: drift-job PR auto-open path (wave-1 validated only in unit harness; first live cron observation pending wave 2); per-epic rule additions as wave-2 polish items land (P1-A ADR 0021 rule, P1-C C10 chunks-delete rule, etc.); extension to P2 gate set once p2-roadmap.md epics enter ship-tracking.
 
 ### Goal
 Automate the `SHIP_SIGNOFF.md` generation so the 12-gate (P0) / 12-gate (P1) scorecards never drift from ground truth. Runs weekly in CI; opens a PR with the updated scorecard if drift is detected.
@@ -668,7 +717,7 @@ Until all twelve hold, P1 does not ship.
 
 ## Non-goals
 
-Explicitly **parked for P2** — do NOT add scope creep:
+Explicitly **scheduled for P2** — see [p2-roadmap.md](./p2-roadmap.md) for the full spec. Do NOT add scope creep in P1 wave 2:
 
 - **Run entity** (P2-A) — Block stays a projection of boundary events in P1. No `Run` first-class lifecycle.
 - **Intent layer** (P2-B) — User keystrokes and agent actions remain untyped bytes through `input-host`. No intent classification.

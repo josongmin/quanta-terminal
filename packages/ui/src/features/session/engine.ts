@@ -57,6 +57,17 @@ export type EngineEnvelopeListener = (
   envelope: GridEventEnvelope<GridPayload>,
 ) => void;
 
+/**
+ * Raw-byte observer. Fires synchronously in `feed(chunk)` BEFORE the chunk
+ * enters the frame-skip batcher, so downstream byte FSMs (ModeStack drivers,
+ * session recorder, etc.) see every chunk in the exact order the PTY
+ * delivered it — without racing against rAF coalescing.
+ *
+ * Must not throw; exceptions are swallowed per-listener so a buggy observer
+ * cannot starve the rest of the bus or corrupt the engine pipeline.
+ */
+export type EngineRawByteListener = (chunk: Uint8Array) => void;
+
 export interface VtEngineHandle {
   /**
    * Read-only engine reference for consumers that need cell-level access
@@ -70,6 +81,16 @@ export interface VtEngineHandle {
    * thrown by one listener do not prevent the rest from seeing the event.
    */
   subscribe(listener: EngineEnvelopeListener): () => void;
+  /**
+   * Subscribe to the raw PTY-byte stream. The listener is called synchronously
+   * from `feed(chunk)` BEFORE the chunk is enqueued on the frame-skip batcher.
+   * Used by ModeStack drivers and other byte-level FSMs that must see every
+   * chunk in order, independent of rAF-driven coalescing.
+   *
+   * Returns an unsubscribe function. Listener exceptions are swallowed so
+   * one buggy observer cannot starve the rest of the bus.
+   */
+  onRawByte(listener: EngineRawByteListener): () => void;
   /** Push bytes through the batcher → engine pipeline. */
   feed(chunk: Uint8Array): void;
   /**
@@ -140,6 +161,7 @@ export function createSessionEngine(
   opts: CreateSessionEngineOptions,
 ): VtEngineHandle {
   const listeners = new Set<EngineEnvelopeListener>();
+  const rawByteListeners = new Set<EngineRawByteListener>();
 
   const emulator = new VtEmulator({
     sessionId: opts.sessionId,
@@ -186,9 +208,27 @@ export function createSessionEngine(
         listeners.delete(listener);
       };
     },
+    onRawByte(listener) {
+      rawByteListeners.add(listener);
+      return () => {
+        rawByteListeners.delete(listener);
+      };
+    },
     feed(chunk) {
       if (disposed) return;
       if (chunk.byteLength === 0) return;
+      // Fan out to raw-byte listeners BEFORE enqueuing on the batcher so
+      // byte FSMs (ModeStack drivers) see the chunk synchronously, in the
+      // exact order the PTY delivered it — the batcher may coalesce bursts
+      // on the rAF boundary, which would break chunk-ordered detection.
+      for (const listener of rawByteListeners) {
+        try {
+          listener(chunk);
+        } catch {
+          // Swallow — one buggy observer must not break the bus or the
+          // downstream engine feed.
+        }
+      }
       batcher.enqueue(chunk);
     },
     resize(cols, rows) {
@@ -215,6 +255,7 @@ export function createSessionEngine(
       }
       batcher.dispose();
       listeners.clear();
+      rawByteListeners.clear();
     },
   };
 }

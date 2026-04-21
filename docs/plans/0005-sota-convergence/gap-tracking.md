@@ -1,7 +1,7 @@
 # Plan 0005 — Gap Tracking Matrix
 
-- **Status**: Live (updated per epic landing) — wave-4 closed at `f74c047`; wave-5 in progress.
-- **Cross-refs**: [README.md](./README.md) (§12 Success definition, §3 invariants), [test-strategy.md](./test-strategy.md) (§1 compat matrix, §9 ship checklist), [p1-roadmap.md](./p1-roadmap.md) (P1 epic specs + preconditions).
+- **Status**: Live (updated per epic landing) — P0 wave 5 closed at `fab7198` (ship-to-staging); **P1 wave 1 closed at `868e482`**.
+- **Cross-refs**: [README.md](./README.md) (§12 Success definition, §3 invariants), [test-strategy.md](./test-strategy.md) (§1 compat matrix, §9 ship checklist), [p1-roadmap.md](./p1-roadmap.md) (P1 epic specs + preconditions), [p2-roadmap.md](./p2-roadmap.md) (P2 execution-surface epics).
 
 ---
 
@@ -33,25 +33,25 @@
 | G-RD-03 | γ | high | landed | Agent-B+N | Data-safe policy: frame-skip → flow-control → emergency drop (boundary-aligned). Byte-frame FSM handles CSI/OSC/DCS/APC/PM. Rust sidecar flow_control lives in `packages/host-tauri/src-tauri/src/flow_control.rs` (Agent-N, 13 Rust + 5 TS wiring tests). **Evidence:** same as above + `packages/host-tauri/src-tauri/src/flow_control_tests.rs`. |
 | G-RD-05 | ε | med | todo | — | DPR mid-session prod test (engine-side baseline locked via C-STRESS-03; real atlas invalidation in FontAtlas test). Promote to P1-H follow-up when Tauri hot-plug monitor wiring lands. |
 
-## P0 "ship with graceful behavior" gaps
+## P0 "ship with graceful behavior" gaps (now landed in P1 wave 1)
 
 | Gap | Epic | Sev | Status | Notes |
 |-----|------|-----|--------|-------|
-| G-SI-01 | δ/P1 | crit | deferred-P1 | Auto-install shell integration is a P1 enhancement (heuristic boundary first) |
-| G-SI-02 | δ/P1 | crit | deferred-P1 | OSC 133 to boundary detector is a P1 item |
-| G-SI-03..06 | P1 | — | deferred-P1 | All shell-integration enhancements are P1 |
-| G-VT-03 | δ | high | landed (simplified) | P0 removes idle heuristic + fake exit; no block boundaries in P0 default |
-| G-VT-04..06 | P1 | — | deferred-P1 | OSC 133 wiring, OSC 7 subscription, OSC 8 hyperlink (P1 when block chrome lands) |
-| G-MS-01..06 | P1 | — | deferred-P1 | Mode Stack is P1 polish |
+| G-SI-01 | δ/P1 | crit | landed (P1-B wave 1) | Auto-install shell integration — `shell_install.rs` + flag default `true` at `868e482`; wave-2 adds `uninstall_shell_integration` + banner Undo. |
+| G-SI-02 | δ/P1 | crit | landed (P1-A wave 1) | OSC 133 → boundary detector — `hybrid-detector.ts` fuses OSC 133 (conf 1.0) + heuristics; at `868e482`. |
+| G-SI-03..06 | P1 | — | landed (P1-B wave 1) | Shell-integration enhancements shipped. |
+| G-VT-03 | δ | high | landed (simplified) | P0 removes idle heuristic + fake exit; no block boundaries in P0 default. P1-A restored idle heuristic as a confidence-0.1 tertiary backstop. |
+| G-VT-04..06 | P1 | — | landed (P1-A wave 1, partial) | OSC 133 wiring landed via hybrid detector; OSC 7 subscription + OSC 8 hyperlink land in P1-A wave 2 (osc-subscribe extraction). |
+| G-MS-01..06 | P1 | — | landed (P1-D wave 1) | Mode Stack — `features/mode-stack/` 5 drivers + depth-4 scenario. |
 
-## P2 (execution surface) gaps
+## P2 (execution surface) gaps — see [p2-roadmap.md](./p2-roadmap.md)
 
 | Gap | Epic | Sev | Status | Notes |
 |-----|------|-----|--------|-------|
-| G-EX-01..09 | P2 | — | parked | Run entity work; unscheduled |
-| G-IT-01..07 | P2 | — | parked | Intent layer; unscheduled |
-| G-BP-01..06 | P2 | — | parked | Priority classes; P0 uses frame-skip + emergency drop |
-| G-VT-08 | P2 | med | parked | DCS passthrough for plugin system |
+| G-EX-01..09 | P2-A | — | scheduled | Run entity — seed in P1 wave-2-D; wave-3 completes. See p2-roadmap.md §"Epic P2-A". |
+| G-IT-01..07 | P2-B | — | scheduled | Intent router middleware architecture. See p2-roadmap.md §"Epic P2-B". |
+| G-BP-01..06 | P2-C | — | scheduled | Priority classes + classified drop. P0 uses frame-skip + emergency drop as the floor. See p2-roadmap.md §"Epic P2-C". |
+| G-VT-08 | P2 | med | parked | DCS passthrough for plugin system (Plan 0004 convergence). |
 
 ## Compat matrix gaps
 
@@ -67,9 +67,9 @@
 |-----------|---------|--------|
 | I-11 one render path | `tools/check-one-render-path/` | ✓ **landed, strict + 2 DEFER** (BlockCard + ComparePanel — P1 flag-gated via `flag.blockUx`). Enforces on PR via `.github/workflows/grep-rules.yml`. |
 | I-12 one input path | `tools/check-one-input-path/` | ✓ **landed, strict + 2 DEFER** (`execute.ts` legacy helpers — P1 cleanup). TuiRenderSurface DSR response path migrated to `writeSessionResponse` (Agent-L). |
-| I-13 hybrid boundary | — | **deferred P1** (tracked in `p1-roadmap.md` as P1-A). |
+| I-13 hybrid boundary | — | ✓ **landed P1 wave 1** (P1-A at `868e482`; `features/command/hybrid-detector.ts` 745 LOC fuses OSC 133 + heuristic + idle; 65 tests). |
 | I-14 scrollback bounded | Scrollback ring in `VtEmulator` | ✓ **landed** (default 10,000 rows, pin hook `pinBlockedEvictions` / `_debugPinScrollbackRow` reserved for P1-A). |
-| I-15..17 priority / intent / run | — | **deferred P2** (Run entity / Intent router / priority classes). |
+| I-15..17 priority / intent / run | — | **scheduled P2** (Run entity P2-A / Intent router P2-B / priority classes P2-C — see [p2-roadmap.md](./p2-roadmap.md)). |
 
 ---
 
@@ -117,20 +117,20 @@
 **Compat fixtures: 30 shipped** (30/33 — 2 dedup'd + 1 in-flight; see test-strategy.md §1 for the shipped/dedup'd/WIP legend).
 **VtEmulator: 267 tests** (from 153 baseline — +114 across Q+X audits).
 
-## Wave 5 (polish + ship-signoff)
+## Wave 5 (polish + ship-signoff) — closed at `fab7198`
 
-Parallel agents driving P0 final closure and documentation. Entries land here as each agent reports.
+Parallel agents drove P0 final closure and documentation. Wave closed with 11 / 12 GREEN + 1 YELLOW ship-to-staging decision recorded in `SHIP_SIGNOFF.md`.
 
 | Agent | Scope | Status |
 |-------|-------|--------|
-| AA | Docs finalization — test-strategy.md §1/§4.1/§5/§9; gap-tracking.md invariant + scorecard + wave-5 stub; fixture README stale-claim pass; README §12 gate verification | ⏳ in flight (this doc pass) |
-| BB | Perf baselines — `docs/perf-baselines.md` augmentation for compat fixture rows; green-at-budget CI capture for gate #7 | ⏳ in flight |
-| CC | Compat-harness final audit — `kind: recorded` + `sourceSessionId` promotion path; meta.json id/kind/version rollout over the 19 remaining wave 1-3 fixtures (advisory; non-blocking) | ⏳ in flight |
-| DD | C-UX-02 resize fixture landing — leverages new `CheckpointExpected.resize` hook; flips wave-4 dedup comment to C-UX-04 only | ⏳ in flight |
-| EE | P1 roadmap cleanup — cross-link verify, precondition table audit, epic numbering | ⏳ in flight |
+| AA | Docs finalization — test-strategy.md §1/§4.1/§5/§9; gap-tracking.md invariant + scorecard; fixture README stale-claim pass; README §12 gate verification; retry of Agent-Z ship sign-off authoring | ✓ delivered |
+| BB | Perf baselines — `docs/perf-baselines.md` augmentation for compat fixture rows; green-at-budget CI capture for gate #7 (carried into P1-H wave 2) | ✓ delivered |
+| CC | Compat-harness final audit — `kind: recorded` + `sourceSessionId` promotion path; meta.json id/kind/version rollout (advisory; non-blocking) | ✓ delivered |
+| DD | C-UX-02 resize fixture landing — leverages new `CheckpointExpected.resize` hook; flipped wave-4 dedup comment to C-UX-04 only | ✓ delivered |
+| EE | P1 roadmap cleanup — cross-link verify, precondition table audit, epic numbering | ✓ delivered |
 | FF | P0 cleanup-report — typecheck/lint/test audit across `@quanta/host-common` + `@quanta/ui`; diagnose-and-report (no code mutations). Deliverable: `cleanup-report.md`. | ✓ delivered |
 
-**P0 ship gate scorecard** (final state at `f74c047`; see README §12 "Success definition"):
+**P0 ship gate scorecard** (final state at commit `fab7198`; see README §12 "Success definition" and `SHIP_SIGNOFF.md`):
 
 | # | Gate | Status | Evidence |
 |---|------|--------|----------|
@@ -147,9 +147,45 @@ Parallel agents driving P0 final closure and documentation. Entries land here as
 | 11 | Sidecar flow-control engages before last-resort drop | ✓ | `packages/host-tauri/src-tauri/src/flow_control.rs` (13 Rust tests) + TS wiring (5 tests) |
 | 12 | Default UI after fresh session: plain grid, no block chrome | ✓ | `p0-default.test.tsx`, `flag.blockUx=false` default + `TerminalPage` gate |
 
-**Count (final): 11/12 landed (✓); 1 partial (~ gate 7 perf green-at-budget).** Ship decision will be recorded in `SHIP_SIGNOFF.md` when a follow-up authoring agent delivers it (Agent-Z remit was not delivered in wave 4). Interim evidence for reviewers: Agent FF's `cleanup-report.md` (typecheck/lint/test-run audit at `f74c047`). Legend: ✓ landed + evidence; ~ partial (impl landed, verification pending); ⏳ not started.
+**Count at P0 close (commit `fab7198`): 11/12 GREEN (✓); 1 YELLOW (~ gate 7 perf green-at-budget, absorbed into P1-H wave 2).** Ship-to-staging decision recorded in `SHIP_SIGNOFF.md` (Agent AA, retry of Agent-Z remit). Interim evidence at `f74c047`: Agent FF's `cleanup-report.md` (typecheck/lint/test-run audit). Legend: ✓ landed + evidence; ~ partial (impl landed, verification pending); ⏳ not started.
 
 Main thread drives remaining verification.
+
+---
+
+## P1 wave 1 landed (commit `868e482`)
+
+All 9 P1 epics shipped in a single parallel wave after P0 went to staging at `fab7198`. Aggregate UI suite: **4956 / 4972 green** (0 failing, 16 skipped). Effort-seed work ("land the spine") vs polish + integration splits out to wave 2 per the table below.
+
+| Epic | Scope delivered (wave 1) | Key files | Tests | Status |
+|------|--------------------------|-----------|-------|--------|
+| P1-A | Hybrid boundary detector fusing OSC 133 (conf 1.0) + prompt-regex heuristic (0.6–0.8) + cursor-home pattern (0.5) + idle timeout (0.1); arbitration window + telemetry wired into `route-output.ts`. | `features/command/hybrid-detector.ts` (745 LOC), `hybrid-detector-types.ts`, `boundary-detector.ts`, `route-output.ts` | 65 (across 4 files) | landed (wave 1) |
+| P1-B | Shell integration auto-install: Rust `shell_install.rs` (Tauri IPC `quanta_shell_install_auto` / `quanta_shell_install_status`), TS orchestrator, 3-strike / 24 h back-off keyed by shell family, `flag.shellIntegrationAutoInstall` default `true`. | `packages/host-tauri/src-tauri/src/shell_install.rs` (500+ LOC), `features/session/shell-install.ts` | 13 Rust + 20 TS | landed (wave 1) |
+| P1-C | Block overlay chrome: absolute-positioned cards reading grid row ranges. `Block` entity reworked to `rowRange` schema. Public `pinRows` / `unpinRows` API on `VtEmulator`. Block boundary listener creates / finalizes blocks on `prompt_start` / `command_end`. | `widgets/block-overlay/BlockOverlay.tsx` + `BlockOverlayHost.tsx`, `features/command/block-boundary-listener.ts`, `entities/block/model.ts` rowRange migration | 29 (BlockOverlay) + boundary-listener + entity tests | landed (wave 1) |
+| P1-D | Mode-stack polish: 5 drivers (alt-screen, multiplexer, pager, REPL, nested-shell). Policy — input walks top→bottom for non-passthrough, mouse innermost-wins, render topmost chrome wins. | `features/mode-stack/` (store + drivers), depth-4 nested scenario coverage | 40 | landed (wave 1) |
+| P1-E | Session restore: Rust writer with 512 B header + FR frame format, 50 MB rotation × 4 files, TS replay engine with storm-threshold snapshot fallback, `flag.sessionRestore` default `false`, `TerminalPage` effect wire-in. | `packages/host-tauri/src-tauri/src/session_record.rs`, `features/session-restore/` (journal-format / journal-port / replay) | 11 Rust + 15 TS | landed (wave 1) |
+| P1-F | Output search: grid-wide indexer searching both scrollback ring + viewport. `find-panel/` widget with `Cmd+F` + debounced input + match count + `Enter` / `Shift+Enter` navigation. `CellBuffer.searchHighlights` API; SGR digest + widths preserved. | `features/output-search/scrollback-search.ts`, `widgets/find-panel/` | 31 (includes perf: 10k rows × 30 matches < 50 ms) | landed (wave 1) |
+| P1-G | Ghost hints: passive bottom-right pill with 9 registry entries (less / man / python / node / psql / tmux / vim / htop / nested-shell). A11y via `aria-live` + tab-focusable. | `widgets/ghost-hint/` (GhostHint + hint-registry + useModeStack) | 19 | landed (wave 1) |
+| P1-H | Perf-live-in-CI: `ci-linux` budget profile 3× wider vs local M4 Max, `perf-regression-check.mjs` (last-7-main median comparator with 20 % delta threshold), nightly artifact prune, `check-perf-ready.mjs` smoke. | `tools/perf-regression-check.mjs`, `tools/check-perf-ready.mjs`, `tools/run-perf-budget.mjs` | 19 (tool-tests) | landed (wave 1) |
+| P1-I | Sign-off automation: `tools/ship-signoff-gen/` with 12 gate runners + `format.mjs` renderer + `compare.mjs` drift classifier (tier 2 / 3 alerting), `ship-signoff-weekly.yml` Monday 14:00 UTC cron with GH issue creation / update via `actions/github-script`. | `tools/ship-signoff-gen/` (gates / compare / format / index) | 34 | landed (wave 1) |
+
+**Wave 1 totals**: 98 files changed, **+14818 / −53** lines. UI suite net **+257** tests vs P0 close (4699 → 4956).
+
+### Wave 1 deltas vs p1-roadmap spec
+
+Everything spine-complete; the following wave-2 deltas are tracked:
+
+- **P1-A polish pending (wave 2)** — ADR 0021 not yet authored; `osc-subscribe.ts` promoted inline (A7 folded into detector wiring); compat fixtures `C-BD-01` / `C-BD-02` not yet landed (E-A-02 / E-A-03).
+- **P1-B integration pending (wave 2)** — `uninstall_shell_integration` IPC not yet shipped (B8); banner "Quanta modified `~/.zshrc`" undo action wave-2; ADR 0022.
+- **P1-C integration pending (wave 2)** — `block.outputChunks` field **not yet deleted** from entity type (C10 rule tightening deferred); legacy `block-list/` / `block-card/` widgets still parked alongside new `block-overlay/`; strict mode on `no-block-chunks-in-render` pending wave 2.
+- **P1-D polish pending (wave 2)** — ADR 0026; `mode-hints/ModeHints.tsx` widget not the same as `ghost-hint/` (P1-G absorbed some hints); C-MUX-03 click-reach assertion extension wave-2.
+- **P1-E polish pending (wave 2)** — ADR 0027; privacy redaction (`__tests__/journal-secret-redaction.test.ts`, E-E-05) wave-2; flag flip to default-on pending durability audit; IndexedDB fallback-on-Safari-private banner wave-2.
+- **P1-F polish pending (wave 2)** — persistent-history-fallback (F8, depends on P1-E flag-on); `C-SEARCH-01` compat fixture wave-2.
+- **P1-G polish pending (wave 2)** — per-hint opt-out + settings panel surface (P2 per spec); catalog sync test with shell integration scripts wave-2.
+- **P1-H integration pending (wave 2)** — per-OS baseline files (`tools/perf-baseline-macos.json`); GitHub PR comment bot (H6); full baseline commit on main after P0 gate 7 green-at-budget.
+- **P1-I integration pending (wave 2)** — drift-job PR auto-open path tested only in unit harness; live cron-job first observed wave-2; per-epic rule additions as wave-2 epics land.
+
+Wave-2 promotion criterion: above deltas closed **and** P1 done-definition gates (p1-roadmap.md §"Done definition") independently verified.
 
 ---
 
@@ -159,43 +195,39 @@ Precondition matrix for the 7 P1 epics (plus bonus H/I). Each precondition is ei
 
 | Epic | Title | Precondition 1 | Precondition 2 | Precondition 3 | Dependencies | Ready? |
 |------|-------|----------------|----------------|----------------|--------------|--------|
-| P1-A | Hybrid boundary detector | Scrollback pin hook (`pinBlockedEvictions`, `_debugPinScrollbackRow`) | OSC emitter on VtEmulator (parser-level present, needs promotion A7) | `boundary-detector.ts` port stable | — | ✓ ready |
-| P1-B | Shell integration auto-install | Scripts shipped (`resources/shell-integration/{bash,zsh,fish}`) | `installShellIntegration` IPC wired | Wizard install.ts orchestration | — | ✓ ready |
-| P1-C | Block overlay chrome | `flag.blockUx` store (default off) | `BlockCard` / `BlockList` widgets parked behind flag | Scrollback stable `rowId` on main buffer | P1-A (boundaries), P0 α3 | ⏳ needs A |
-| P1-D | Mode stack polish | Alt-screen FSM (`features/tui/detect.ts`) | C-MUX-03 depth-3 fixture recorded | Prompt-regex registry (from P1-A A3) | P1-A, P1-C | ⏳ needs A+C |
-| P1-E | Session restore | asciicast recorder scaffold (`features/session-record/`) | Block/session persistence layers in IDB | Deterministic `VtEmulator.feed` (no wall-clock reads) | P1-C, P1-D | ⏳ needs C+D |
-| P1-F | Output search scrollback | Per-block `features/output-search/` subtree exists | Scrollback `rowsInRange` API (P1-A A8) | Highlight overlay layer | P1-C | ⏳ needs C |
-| P1-G | Pager/REPL ghost hints | `features/autosuggest/` ghost-text styling reusable | Mode-stack emitter (P1-D) | Settings panel extensible | P1-D | ⏳ needs D |
-| P1-H | Perf live in CI | Perf harness scaffold (Agent-M) | `.github/workflows/perf.yml` (Agent-V) | `run-perf-budget.mjs` | — | ✓ ready |
-| P1-I | Sign-off automation | CI rule outputs machine-readable | Ship-gate definitions (README §12) | None | — | ✓ ready |
+| P1-A | Hybrid boundary detector | Scrollback pin hook (`pinBlockedEvictions`, `_debugPinScrollbackRow`) | OSC emitter on VtEmulator (parser-level present, needs promotion A7) | `boundary-detector.ts` port stable | — | ✓ landed wave 1 |
+| P1-B | Shell integration auto-install | Scripts shipped (`resources/shell-integration/{bash,zsh,fish}`) | `installShellIntegration` IPC wired | Wizard install.ts orchestration | — | ✓ landed wave 1 |
+| P1-C | Block overlay chrome | `flag.blockUx` store (default off) | `BlockCard` / `BlockList` widgets parked behind flag | Scrollback stable `rowId` on main buffer | P1-A (boundaries), P0 α3 | ✓ landed wave 1 (chunks-delete wave 2) |
+| P1-D | Mode stack polish | Alt-screen FSM (`features/tui/detect.ts`) | C-MUX-03 depth-3 fixture recorded | Prompt-regex registry (from P1-A A3) | P1-A, P1-C | ✓ landed wave 1 |
+| P1-E | Session restore | asciicast recorder scaffold (`features/session-record/`) | Block/session persistence layers in IDB | Deterministic `VtEmulator.feed` (no wall-clock reads) | P1-C, P1-D | ✓ landed wave 1 (flag-off default) |
+| P1-F | Output search scrollback | Per-block `features/output-search/` subtree exists | Scrollback `rowsInRange` API (P1-A A8) | Highlight overlay layer | P1-C | ✓ landed wave 1 |
+| P1-G | Pager/REPL ghost hints | `features/autosuggest/` ghost-text styling reusable | Mode-stack emitter (P1-D) | Settings panel extensible | P1-D | ✓ landed wave 1 |
+| P1-H | Perf live in CI | Perf harness scaffold (Agent-M) | `.github/workflows/perf.yml` (Agent-V) | `run-perf-budget.mjs` | — | ✓ landed wave 1 |
+| P1-I | Sign-off automation | CI rule outputs machine-readable | Ship-gate definitions (README §12) | None | — | ✓ landed wave 1 |
 
-**Parallel-ready on P0 green**: A, B, H, I.
-**Sequential cascade**: A+B → C → {D, F} → {E, G}.
+**Parallel-ready on P0 green**: A, B, H, I — all delivered in wave 1.
+**Sequential cascade**: A+B → C → {D, F} → {E, G} — all delivered in wave 1 (parallelised via spine-first strategy; the sequence constraints held within each epic's internal work items).
 
-Open blockers (not P1 epic-internal) — post-wave-4 state:
-- P0 gate #2 `one-input-path` strict + 2 DEFER ✓ (Agent-L closed the TuiRenderSurface DSR path; `execute.ts` DEFER moves under P1-C's rule tightening).
-- P0 gate #6 compat matrix ✓ 30/33 shipped; 1 WIP (C-UX-02, Agent DD in wave 5); 2 dedup'd. Baseline capture for P1-H can proceed.
-- P0 gate #11 Rust flow-control ✓ merged (Agent-N). Perf baselines for `C-STRESS-*` unblock for capture via `docs/perf-baselines.md`.
+Open blockers for the P2 generation (see [p2-roadmap.md](./p2-roadmap.md)):
+- P1 wave-2 polish + integration close-out (see "Wave 1 deltas vs p1-roadmap spec" above).
+- P1 done-definition gates (p1-roadmap.md §"Done definition") independently verified — 12 gates mirror P0.
+- P0 gate 7 perf green-at-budget verification remains the last residual P0-wave item, now re-tracked as a P1-H polish item (per-OS baseline + live PR-comment surface).
 
 ---
 
-## Next steps after agent completions
+## Next steps (post P1 wave 1)
 
-1. Review Agent-A worktree → merge into main (Epic α2 landed). Unblocks: session-level `VtEmulator` wiring (α1), scrollback ring (α3).
-2. Review Agent-B worktree → merge into main (Epic γ1–γ6 landed). Unblocks: session ↔ batcher ↔ engine wiring in `features/session/connect.ts`.
-3. Review Agent-C worktree → merge into main (compat harness live). C-ED-01 flips from `test.fails` to `test.ok` once α2 is merged.
-4. Kick off next parallel batch:
-   - Agent-D: Epic α1 (session-level VtEmulator wiring in `features/session/connect.ts`).
-   - Agent-E: Epic α3 (scrollback ring inside VtEmulator).
-   - Agent-F: Epic β draft (SessionInputSurface rename + mount in TerminalPage).
-5. Compat fixture authoring: author C-MON-01 (top), C-PG-01 (less), C-UX-02 (resize) fixtures.
-6. CI grep rules (`tools/check-one-render-path/`, `tools/check-one-input-path/`).
-7. Epic δ (P0 default gating) — only after α + β + γ are stable.
+1. **P1 wave 2 polish + integration** — close the deltas in "Wave 1 deltas vs p1-roadmap spec" above. Highest priority: P1-C C10 (`block.outputChunks` field deletion) + strict-mode `no-block-chunks-in-render`; P1-A ADR 0021 + compat fixtures; P1-E privacy redaction + Safari private fallback.
+2. **P1 done-definition verification** — run the 12 gates in p1-roadmap.md §"Done definition" against `868e482`; generate a P1 SHIP_SIGNOFF addendum via `tools/ship-signoff-gen/` (P1-I).
+3. **Start P2 execution-surface work** — see [p2-roadmap.md](./p2-roadmap.md). Recommended order: P2-A Run entity seed lands in wave-2-D (tracked in p1-roadmap.md bonus track); full P2-A + P2-B gated on wave-3.
+4. **Perf live-in-CI maturation (P1-H wave 2)** — land per-OS baselines (`tools/perf-baseline.json` + `tools/perf-baseline-macos.json`); wire PR comment bot (H6); green-at-budget verification for P0 gate 7 closes here.
+5. **Compat fixture expansion** — `C-BD-01` / `C-BD-02` (boundary detector compat), `C-RESTORE-01` (session restore roundtrip), `C-SEARCH-01` (scrollback search big corpus). Tracked in p1-roadmap.md "Cross-cutting concerns".
 
 ---
 
 ## Risk signals
 
-- If Agent-A's alt-buffer impl breaks an existing AnsiParser / GridMirror test outside VtEmulator, escalate: might need a deeper refactor of mode-event ordering.
-- If Agent-B's frame-skip policy degrades perf on small writes (single-byte-enqueue case), revisit: may need a fast-path for queue < 1 KiB.
-- If Agent-C's compat harness can't deterministically replay because of `VtEmulator` nondeterminism (e.g. timer-based behaviors), refactor the engine to accept an injected `clock()` source.
+- If wave 2's `block.outputChunks` deletion (P1-C C10) surfaces remaining readers outside the flag-gated legacy surface, the strict-mode grep rule flip may need a second-pass migration under `shared/lib/text/project-output`.
+- If P1-E's journal format version v1 is not forward-compatible with future Run-entity persistence (P2-A), wave 2 must emit a v2 schema before the flag flips default-on.
+- If P1-H per-OS baselines diverge by more than the 20 % threshold, the PR-blocking comparator needs a platform-specific tolerance policy.
+- If the hybrid detector's idle-tier (P1-A A4) fires during long-running commands that legitimately pause output (e.g. `read -t`, interactive `gcloud auth login`), escalate — R-A-2 mitigation may need dogfood tuning.

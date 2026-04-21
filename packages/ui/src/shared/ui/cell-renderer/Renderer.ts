@@ -209,7 +209,15 @@ export class Renderer {
     if (totalCursorDirty) {
       this.backend.applyCursor(this.latestCursor);
     }
-    // 3. Overlay flush.
+    // 3. Overlay flush (includes search highlights — the CellBuffer's
+    //    highlight list is the authoritative source, pushed in from the
+    //    FindPanel widget via `TerminalCanvas` wiring).
+    if (totalOverlayDirty) {
+      this.backend.applySearchHighlights(
+        this.cellBuffer.getSearchHighlights(),
+        this.cellBuffer.getScrollbackTop(),
+      );
+    }
     this.backend.requestDamageFlush();
     const duration = this.now() - start;
     this.samples.push({ startedAt: start, durationMs: duration, rowsPainted });

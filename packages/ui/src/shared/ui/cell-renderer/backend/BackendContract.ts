@@ -27,6 +27,7 @@ import type {
   Rect,
   ScreenHit,
 } from '../types.js';
+import type { SearchHighlight } from '../CellBuffer.js';
 
 /**
  * Context passed once at mount time. The backend may cache this for the
@@ -88,6 +89,27 @@ export interface BackendContract {
   /** Signal an rAF boundary. Backend may flush pending damage. No-op if
    *  nothing is dirty. */
   requestDamageFlush(): void;
+
+  /**
+   * Apply the current grid-space search highlight set. Called by the
+   * Renderer whenever the overlay layer is dirty AND the cell buffer's
+   * highlight list has content (or was previously non-empty and now is
+   * empty — the transition still needs a repaint to clear the overlay).
+   *
+   * Backends MUST repaint the full highlight underlay on each call — there
+   * is no delta; `highlights` is the authoritative current set. Empty
+   * array means "clear all search highlights". The scrollbackTop parameter
+   * is the absolute `rowId` of the first viewport row (derived from
+   * `scrollback.baseRowId + scrollback.rows.length`); backends translate
+   * each highlight's `rowId` to a viewport-local `row` by subtracting.
+   * Highlights whose translated row is negative (scrolled above) or >=
+   * viewport rows (off-screen below) MUST be ignored rather than skipped
+   * silently — they are off-screen, not errors.
+   */
+  applySearchHighlights(
+    highlights: readonly SearchHighlight[],
+    scrollbackTop: number,
+  ): void;
 
   /**
    * Measure text at current metrics. Width must match the width SSOT. The

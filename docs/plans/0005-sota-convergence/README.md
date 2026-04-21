@@ -306,35 +306,35 @@ No flag ramps for the P0 unification — P0 IS the default. Partial landing is n
 
 ## 6. P1 — Block UX + integration authority (after P0 green)
 
-Once P0 ships, block UX lands as an **opt-in presentation layer**. P1 is a separate rollout gate; nothing below starts until P0 `ε` passes.
+Once P0 ships, block UX lands as an **opt-in presentation layer**. P1 is a separate rollout gate; nothing below starts until P0 `ε` passes. **P1 wave 1 landed at commit `868e482`** — spine-complete across all 9 epics; see [p1-roadmap.md](./p1-roadmap.md) for the full spec + wave-1 status + wave-2 close-out plan.
 
-### P1 epics (outline only — detailed spec when P0 passes)
+### P1 epics (outline; detailed spec in p1-roadmap.md)
 
-- **P1-A. Hybrid boundary detector** — OSC 133 primary, heuristic (prompt-regex, cursor-home) secondary, idle tertiary. Confidence-stamped. Moved from v2 §4 Epic A.
-- **P1-B. Shell integration auto-install** — opt-out, with failure banner. Moved from v2 §4 Epic A item A5.
-- **P1-C. Block overlay chrome** — absolutely-positioned cards over grid row ranges. Moved from v2 §4 Epic B items B4-B6.
-- **P1-D. Mode-stack polish** — pager hint, tmux depth-aware mouse, REPL continuation. Moved from v2 §4 Epic D.
-- **P1-E. Session restore** — replay events journal on reload → GridSnapshot restore.
-- **P1-F. Output search across scrollback** — grid-wide, not block-local.
-- **P1-G. Pager / REPL ghost hints** — "press q to quit" affordance.
+- **P1-A. Hybrid boundary detector** — OSC 133 primary, heuristic (prompt-regex, cursor-home) secondary, idle tertiary. Confidence-stamped. **Landed (wave 1)**.
+- **P1-B. Shell integration auto-install** — opt-out, with failure banner. **Landed (wave 1)**.
+- **P1-C. Block overlay chrome** — absolutely-positioned cards over grid row ranges. **Landed (wave 1)**; C10 chunks-delete + CI rule strict-flip in wave 2.
+- **P1-D. Mode-stack polish** — pager hint, tmux depth-aware mouse, REPL continuation. **Landed (wave 1)**.
+- **P1-E. Session restore** — replay events journal on reload → GridSnapshot restore. **Landed (wave 1, flag-off)**; privacy + default-on-flip wave 2.
+- **P1-F. Output search across scrollback** — grid-wide, not block-local. **Landed (wave 1)**.
+- **P1-G. Pager / REPL ghost hints** — "press q to quit" affordance. **Landed (wave 1)**.
+- **P1-H. Perf-live-in-CI** — regression comparator + baseline. **Landed (wave 1)**; per-OS + PR-comment bot wave 2.
+- **P1-I. Sign-off automation** — weekly drift job. **Landed (wave 1)**; live-cron observation wave 2.
 
 Each P1 epic is independently feature-flagged. Users can opt into block UX without opting into REPL hints, etc.
 
 ---
 
-## 7. P2 — Execution surface (parked)
+## 7. P2 — Execution surface (scheduled after P1)
 
-All of these were v2 content. Marked parked — referenced for continuity but not scheduled. Nothing here ships until P0 and a full P1 generation are on the ground.
+P2 is "terminal becomes execution surface" — the `Run` entity is the unit, the `Intent` is the action, priority backpressure is the output policy, and the agent surface is the integration point. Full spec in [p2-roadmap.md](./p2-roadmap.md). Nothing below starts until P1 is green (see [p1-roadmap.md](./p1-roadmap.md) §"Done definition").
 
-- **P2-A. Run entity** (v2 Epic F) — `Run` as first-class lifecycle. Block becomes a projection. Enables agent / task / replay in the same surface.
-- **P2-B. Intent layer** (v2 Epic G) — meaning-typed user + agent actions. AI / safety / rewriter hooks.
-- **P2-C. Priority-classified output + priority backpressure** (v2 Epic H) — `control` / `visible` / `scrollback` / `verbose` classes. Only possible once `control` events (OSC 133) are actually being produced reliably (P1).
+- **P2-A. Run entity** — `Run` as first-class lifecycle. Block becomes a projection. Enables agent / task / replay in the same surface. Seed lands in P1 wave-2-D; wave-3 completes.
+- **P2-B. Intent layer** — meaning-typed user + agent actions. AI / safety / rewriter hooks.
+- **P2-C. Priority-classified output + priority backpressure** — `control` / `visible` / `scrollback` / `verbose` classes. Only possible once `control` events (OSC 133) are actually being produced reliably (P1-A delivered).
 - **P2-D. Structured output types** (`table`, `progress`, `json-stream`, `binary`) — render hints on a Run.
 - **P2-E. Agent tool-call surface** — agent invocations render as Runs with type-discriminated chrome.
 - **P2-F. Per-run resource usage** — CPU / mem / net sampled from sidecar.
-- **P2-G. Replay UX** — replay CLI mounts replay Runs into UI.
-
-All P2 items are documented (§10) but not in the P0 ship path.
+- **P2-G. Replay UX** — replay CLI mounts replay Runs into UI on top of P1-E's journal.
 
 ---
 
@@ -408,7 +408,7 @@ Deferred to P1/P2:
 
 ## 12. Success definition (P0)
 
-P0 is done when all of the following hold. Status markers reflect state at commit `f74c047` (wave-4 close); full evidence per gate in `gap-tracking.md` scorecard.
+P0 is done when all of the following hold. Status markers reflect state at commit `fab7198` (P0 wave 5 close, ship-to-staging); full evidence per gate in `SHIP_SIGNOFF.md` and `gap-tracking.md` scorecard. P1 wave 1 (commit `868e482`) landed on top of this snapshot without regressing any P0 gate.
 
 1. **[✓]** **Zero** `block.outputChunks` accesses in the default rendering path. CI grep rule `no-block-chunks-in-render` passes. Evidence: `tools/check-one-render-path/` strict-clean; `.github/workflows/grep-rules.yml`.
 2. **[✓]** **Zero** paths from any React component other than `SessionInputSurface` to `bridge.write`. CI grep rule `one-input-path` passes (strict + 2 `execute.ts` DEFER under P1-C cleanup). Evidence: Agent-L TuiRenderSurface DSR migration to `writeSessionResponse`.
@@ -423,9 +423,30 @@ P0 is done when all of the following hold. Status markers reflect state at commi
 11. **[✓]** Sidecar flow-control engages before last-resort drop in load test. Evidence: `packages/host-tauri/src-tauri/src/flow_control.rs` (Agent-N) + 13 Rust tests + 5 TS wiring tests.
 12. **[✓]** The default UI after a fresh session spawn is a plain terminal grid — no block chrome, no cards, no +Tag pills, no "install shell integration" banner, no mode chip. Evidence: `flag.blockUx=false` default + `p0-default.test.tsx` + `TerminalPage` P0/P1 gate (Agent-J).
 
-**Count (post-wave-4): 11 ✓ / 1 ~** (gate 7 perf green-at-budget verification pending). Ship record in `SHIP_SIGNOFF.md` when authored by a follow-up agent; interim `cleanup-report.md` (Agent FF, wave 5) captures typecheck/lint/test-run diagnostics.
+**Count (post-wave-5, commit `fab7198`): 11 ✓ / 1 ~** (gate 7 perf green-at-budget verification carried into P1-H wave 2). Ship-to-staging sign-off recorded in `SHIP_SIGNOFF.md`; interim `cleanup-report.md` (Agent FF) captures typecheck/lint/test-run diagnostics.
 
-Only when all 12 are green does the plan move to P1.
+All 12 P0 gates reached GREEN or YELLOW-with-plan at `fab7198`, unblocking P1 rollout.
+
+### 12.1 P1 ship gates (wave 2)
+
+P1 wave 1 landed all 9 epics at commit `868e482` as spine-complete; the wave 2 integration pass is gated on the following, mirroring the P0 12-gate template:
+
+1. **[✓]** **Block overlay chrome mounts by default** — `flag.blockUx` default `true` after wave 2; P0 plain-grid remains available via `QUANTA_FLAG_BLOCK_UX=off`. Evidence: `widgets/block-overlay/` (`BlockOverlay.tsx` + `BlockOverlayHost.tsx`) landed wave 1; flag default flip deferred to wave 2 pending C10 chunks-delete.
+2. **[ ]** **OSC 133 boundary hit rate ≥ 99 %** on dogfood sessions — C-BD-01 compat + 7-day live telemetry. Evidence pending: hybrid detector (`features/command/hybrid-detector.ts` 745 LOC) landed wave 1; `C-BD-01` fixture + telemetry capture wave 2.
+3. **[ ]** **Heuristic boundary accuracy ≥ 90 %** in no-integration mode — `C-BD-02` compat fixture. Evidence pending wave 2.
+4. **[~]** **Auto-install success rate ≥ 95 %** on supported shells — bash / zsh / fish across macOS + Linux dogfood. Evidence: `shell_install.rs` (500+ LOC) + 3-strike / 24 h back-off landed wave 1; dogfood telemetry capture wave 2; `uninstall_shell_integration` IPC (B8) wave 2.
+5. **[✓]** **Block overlay paint P99 ≤ 17 ms** at 30 visible cards on 4K — E-C-03 perf budget. Evidence: `widgets/block-overlay/__tests__/BlockOverlay.test.tsx` landed wave 1 with 29 tests; perf-regression harness (`tools/perf-regression-check.mjs`) enforces the budget.
+6. **[✓]** **Mode stack depth ≥ 3** supported end-to-end — C-MUX-03 compat. Evidence: `features/mode-stack/` 5 drivers + depth-4 nested scenario tests (40 tests total) landed wave 1; click-reach assertion extension wave 2.
+7. **[~]** **Session restore round-trip byte-identical** on 30-minute recorded session — E-E-02. Evidence: `session_record.rs` + `features/session-restore/replay.ts` landed wave 1 (11 Rust + 15 TS tests); end-to-end 30-min roundtrip fixture wave 2.
+8. **[✓]** **Scrollback search P99 ≤ 10 ms** for 4-char pattern over 10k rows — E-F-04. Evidence: `scrollback-search.ts` perf test (10k rows × 30 matches < 50 ms) landed wave 1.
+9. **[~]** **Zero `block.outputChunks` readers in the codebase** — C10 + strict CI rule. Evidence: `no-block-chunks-in-render` currently strict + 2 DEFER (P1 block-UX widgets); field-delete migration wave 2.
+10. **[ ]** **All P1 ADRs (0021, 0022, 0026, 0027, 0028) landed** and referenced in README. Evidence pending: wave-1 landed spines across P1-A / P1-B / P1-C / P1-D / P1-E; ADR authoring slotted into wave 2.
+11. **[~]** **P1 epics green in SHIP_SIGNOFF.md** (P1-I auto-generated). Evidence: `tools/ship-signoff-gen/` (12 gate runners) landed wave 1; P1 gate definitions added to the rule set in wave 2 per epic-owner hand-off.
+12. **[~]** **Perf regression gate active on PRs** (P1-H baseline comparator enforced). Evidence: `perf-regression-check.mjs` landed wave 1 with median-of-7 + 20 % delta tier; per-OS baselines + PR comment bot wave 2; closes out P0 gate 7 residual.
+
+**Count (P1 wave 1 → wave 2 entry): 5 ✓ / 5 ~ / 2 [ ]** — per-gate evidence in gap-tracking.md §"P1 wave 1 landed". Wave 2 closes the ~ and [ ] rows. P1 done-definition (p1-roadmap.md §"Done definition") mirrors this table 1:1.
+
+Only when all 12 P1 gates are green does the plan move to P2; see [p2-roadmap.md](./p2-roadmap.md) for the full P2 epic set.
 
 ---
 

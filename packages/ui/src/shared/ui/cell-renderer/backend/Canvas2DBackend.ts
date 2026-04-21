@@ -42,6 +42,7 @@ import type {
   Rect,
   ScreenHit,
 } from '../types.js';
+import type { SearchHighlight } from '../CellBuffer.js';
 import type {
   BackendContract,
   MountContext,
@@ -62,9 +63,11 @@ interface PaintEvent {
     | 'overlay_unmount'
     | 'flush'
     | 'fonts_ready'
-    | 'visibility_refresh';
+    | 'visibility_refresh'
+    | 'search_highlights';
   readonly rows?: number;
   readonly cursorVisible?: boolean;
+  readonly highlightCount?: number;
 }
 
 /**
@@ -385,6 +388,56 @@ export class Canvas2DBackend implements BackendContract {
 
   requestDamageFlush(): void {
     this.paintLog.push({ kind: 'flush' });
+  }
+
+  applySearchHighlights(
+    highlights: readonly SearchHighlight[],
+    scrollbackTop: number,
+  ): void {
+    // Paint into the overlay layer (DOM-based) rather than a dedicated
+    // canvas. The overlay layer is already positioned absolute over the
+    // grid; we reuse the existing `quanta-search-hit` span pattern so
+    // there is no third canvas to manage. For the Canvas2D prototype an
+    // absolute-positioned div per match is fine — hit counts are bounded
+    // by `DEFAULT_MAX_RESULTS` and interactive search typically yields a
+    // few hundred rectangles at most.
+    //
+    // Clear any previous highlight nodes first (we tag them with a
+    // data-attr so the selector is narrow — IME overlays use a different
+    // class and stay put).
+    if (this.overlayLayer) {
+      const existing = this.overlayLayer.querySelectorAll<HTMLElement>(
+        '[data-search-highlight="true"]',
+      );
+      for (let i = 0; i < existing.length; i += 1) {
+        const el = existing.item(i);
+        el?.parentElement?.removeChild(el);
+      }
+      const { cellWidthCssPx: cw, cellHeightCssPx: ch } = this.metrics;
+      for (const hit of highlights) {
+        const viewportRow = hit.rowId - scrollbackTop;
+        if (viewportRow < 0 || viewportRow >= this.gridRows) continue;
+        const span = document.createElement('span');
+        span.setAttribute('data-search-highlight', 'true');
+        if (hit.current) span.setAttribute('data-current', 'true');
+        const widthCells = Math.max(1, hit.endColExclusive - hit.startCol);
+        Object.assign(span.style, {
+          position: 'absolute',
+          left: `${hit.startCol * cw}px`,
+          top: `${viewportRow * ch}px`,
+          width: `${widthCells * cw}px`,
+          height: `${ch}px`,
+          pointerEvents: 'none',
+          background: hit.current
+            ? 'rgba(255, 176, 0, 0.55)'
+            : 'rgba(255, 236, 120, 0.35)',
+          boxShadow: hit.current ? '0 0 0 1px rgba(255, 176, 0, 0.9)' : 'none',
+          borderRadius: '1px',
+        } as CSSStyleDeclaration);
+        this.overlayLayer.appendChild(span);
+      }
+    }
+    this.paintLog.push({ kind: 'search_highlights', highlightCount: highlights.length });
   }
 
   measureText(text: string, attrsVariant: number): TextMeasurement {

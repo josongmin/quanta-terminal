@@ -273,14 +273,29 @@ export function createHybridBoundaryDetector(
       ? CONF_REGEX_INSTALLED
       : CONF_REGEX_DEFAULT;
 
+  // Plan 0005 P1 wave 1 — Audit §R-4 mitigation: the idle tier is a fallback-
+  // only signal for sessions that have no authoritative close trigger. When
+  // shell-integration is `'installed'` or `'detected'`, OSC 133 D is the
+  // authoritative close and emitting a 0.1-confidence idle command_end in
+  // addition races the authoritative event (the arbitration window may have
+  // already closed by the time idle fires, or the two may land in opposite
+  // order across feeds), producing double-close events downstream. We
+  // therefore disable the idle source at construction on integrated sessions
+  // so it never enters the arbitration map at all. Consumers that explicitly
+  // want the idle backstop on an integrated session can call
+  // `setSignals({ idle: true })` after construction.
+  const integrationActive =
+    integration === 'installed' || integration === 'detected';
+
   // Signal enable flags. OSC 133 is watched unconditionally because shells
   // may emit it on a `missing`-status session (user-supplied rc); the
-  // router uses `setSignals` to turn off tiers if desired.
+  // router uses `setSignals` to turn off tiers if desired. Idle defaults to
+  // OFF on integrated sessions (see `integrationActive` comment above).
   const enabled: Record<BoundarySource, boolean> = {
     osc133: true,
     heuristic_regex: true,
     cursor_home: true,
-    idle: true,
+    idle: !integrationActive,
   };
 
   // Parser / tracker state — one unified escape-sequence FSM (see EscState).

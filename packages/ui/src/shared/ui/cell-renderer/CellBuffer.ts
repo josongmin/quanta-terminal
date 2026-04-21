@@ -239,6 +239,15 @@ export class CellBuffer {
    * identity equality to short-circuit redundant repaints.
    */
   private searchHighlights_: readonly SearchHighlight[] = [];
+  /**
+   * Absolute rowId of the first row in the live viewport. The Renderer reads
+   * this when forwarding highlights to the backend so the backend can
+   * translate `highlight.rowId` → viewport-local row in O(1). Defaults to
+   * 0; the FindPanel wiring writes `scrollback.baseRowId + scrollback.rows.length`
+   * whenever it pushes fresh highlights, and the VtEmulator's scroll
+   * events drive updates while a search is active.
+   */
+  private scrollbackTop_ = 0;
 
   /** Grapheme interning — maps string → id (0..253). id 254 reserved. id 255 = EXT escape. */
   private readonly graphemeIndex = new Map<string, number>();
@@ -479,6 +488,22 @@ export class CellBuffer {
     return this.searchHighlights_;
   }
 
+  /**
+   * Set the absolute `rowId` of the first live-viewport row. Paired with
+   * `setSearchHighlights`; backends translate each highlight's absolute
+   * rowId to a viewport-local row using this anchor. Does not mark the
+   * overlay dirty on its own — we treat scrollback growth as a signal
+   * carried by the next highlight push.
+   */
+  setScrollbackTop(rowId: number): void {
+    this.scrollbackTop_ = rowId;
+  }
+
+  /** Current scrollback-top anchor (see `setScrollbackTop`). */
+  getScrollbackTop(): number {
+    return this.scrollbackTop_;
+  }
+
   /** Drain damage — called by the Renderer on each rAF tick. */
   drainDamage(): DamageSet {
     const drained = new DamageSet();
@@ -509,6 +534,7 @@ export class CellBuffer {
     this.graphemeIndex.clear();
     this.graphemeTable.length = 1; // keep blank
     this.searchHighlights_ = [];
+    this.scrollbackTop_ = 0;
   }
 
   /** @internal Test-only: how many unique graphemes are interned? */

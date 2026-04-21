@@ -30,6 +30,7 @@ import type {
   SessionId,
   ShellInstallOutcome,
   ShellInstallStatus,
+  ShellInstallUninstallOutcome,
   SpawnSessionOptions,
   SpawnSessionResult,
   Subscription,
@@ -122,6 +123,8 @@ interface QuantaUninstallShellIntegrationReply {
 interface QuantaShellInstallAutoArgs {
   shell: string;
   home_override: string | null;
+  /** Bypass the per-launch-shell gate (audit P1-B fix 3). See Rust side. */
+  override_shells: boolean;
 }
 
 interface QuantaShellInstallStatusArgs {
@@ -140,6 +143,19 @@ interface QuantaShellInstallStatusReply {
   supported: boolean;
   rc_path: string | null;
 }
+
+/* P1-B auto-install uninstall — mirrors `shell_install::UninstallOutcome`. */
+interface QuantaShellInstallUninstallArgs {
+  shell: string;
+  home_override: string | null;
+}
+
+type QuantaShellInstallUninstallOutcomeWire =
+  | { kind: 'removed'; rc_path: string }
+  | { kind: 'not_installed' }
+  | { kind: 'file_missing' }
+  | { kind: 'skipped_unsupported_shell' }
+  | { kind: 'failed'; reason: string };
 
 /* AI suggestion command — mirrors `quanta_ai::SuggestionResponse` +
    `ClassifiedCommand` flattened for transport. Snake_case follows the Rust
@@ -392,6 +408,12 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
       const args: QuantaShellInstallAutoArgs = {
         shell,
         home_override: null,
+        // Per-launch-shell gate lives on the Rust side (audit P1-B fix 3).
+        // The session orchestrator never wants to write into every shell's
+        // rc file — only the one the user launched. The wizard's "advanced:
+        // install into every supported shell" button can call this command
+        // directly with override_shells=true when we expose it.
+        override_shells: false,
       };
       try {
         const reply = await invokeStructured<QuantaShellInstallOutcomeWire>(
@@ -440,6 +462,31 @@ export async function createTauriHostBridge(): Promise<HostBridge> {
         // Worst-case fallback: treat the host as "cannot answer" — the UI's
         // back-off logic already handles the unknown case as "no install".
         return { installed: false, supported: false, rcPath: null };
+      }
+    },
+
+    async shellInstallUninstall(shell: string): Promise<ShellInstallUninstallOutcome> {
+      // Inverse of `shellInstallAuto`. Rejections surface as a structured
+      // `failed` outcome so the wizard/UI never has to branch on try/catch.
+      const args: QuantaShellInstallUninstallArgs = {
+        shell,
+        home_override: null,
+      };
+      try {
+        const reply = await invokeStructured<QuantaShellInstallUninstallOutcomeWire>(
+          'quanta_shell_install_uninstall',
+          { args },
+        );
+        if (reply.kind === 'removed') {
+          return { kind: 'removed', rcPath: reply.rc_path };
+        }
+        if (reply.kind === 'failed') {
+          return { kind: 'failed', reason: reply.reason };
+        }
+        return { kind: reply.kind };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return { kind: 'failed', reason };
       }
     },
 

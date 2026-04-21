@@ -160,6 +160,29 @@ interface RouterHandle {
    * sessions that opted out via `installCommandRouter({ hybrid: null })`).
    */
   hybrid: HybridBoundaryDetector | null;
+  /**
+   * Plan 0005 P1 wave 1 — sink for post-arbitration boundary events produced
+   * by `hybrid.feed`. Captured at install time so the event loop in
+   * `appendToActiveBlock` does not have to re-read the options blob. `null`
+   * when no caller supplied a sink; in that case `feed` still runs (for
+   * telemetry via `onHybridSuppressed`) but no public event is forwarded.
+   *
+   * Previously the installer wired this through the detector's built-in
+   * `onEvent` sink AND discarded the return value from `feed`. That split
+   * made the production path inert: `onEvent` was overwritten by the
+   * `HybridRouterOptions` plumbing but the router never stored a reference
+   * so the block listener never saw events in a real session. Capturing the
+   * sink here on the handle closes that gap and makes return-value + sink
+   * a single code path.
+   */
+  onHybridBoundary: ((event: BoundaryEvent) => void) | null;
+  /**
+   * Companion sink for events the detector's arbitration layer suppressed
+   * (lower-confidence candidates that lost to a higher-tier event in the
+   * same window). Exposed for telemetry — no downstream block-state write
+   * runs against a suppressed event.
+   */
+  onHybridSuppressed: ((event: BoundaryEvent) => void) | null;
 }
 
 const routers = new Map<SessionId, RouterHandle>();
@@ -351,8 +374,19 @@ export function installCommandRouter(
   // load. When `installed` / `detected`, OSC 133 is authoritative and
   // the regex tier is boosted to 0.8 confidence automatically.
   let hybrid: HybridBoundaryDetector | null = null;
+  let onHybridBoundary: ((event: BoundaryEvent) => void) | null = null;
+  let onHybridSuppressed: ((event: BoundaryEvent) => void) | null = null;
   if (options.hybrid) {
     const h = options.hybrid;
+    // Plan 0005 P1 wave 1 — capture the caller's sinks on the handle
+    // instead of threading them through the detector's `onEvent`. The
+    // `appendToActiveBlock` hot path forwards events from `feed`'s return
+    // value, so routing via `onEvent` as well would double-fire every
+    // emission. The detector-side `onEvent` is therefore LEFT UNWIRED on
+    // the production path; `onSuppressed` is still a useful side-channel
+    // for telemetry-only consumers and is forwarded through.
+    onHybridBoundary = h.onHybridBoundary ?? null;
+    onHybridSuppressed = h.onHybridSuppressed ?? null;
     const detectorOptions: HybridBoundaryDetectorOptions = {
       shellIntegration: h.shellIntegration,
       ...(h.idleTimeoutMs !== undefined
@@ -364,11 +398,8 @@ export function installCommandRouter(
       ...(h.promptPatterns !== undefined
         ? { promptPatterns: h.promptPatterns }
         : {}),
-      ...(h.onHybridBoundary !== undefined
-        ? { onEvent: h.onHybridBoundary }
-        : {}),
-      ...(h.onHybridSuppressed !== undefined
-        ? { onSuppressed: h.onHybridSuppressed }
+      ...(onHybridSuppressed !== null
+        ? { onSuppressed: onHybridSuppressed }
         : {}),
     };
     hybrid = createHybridBoundaryDetector(detectorOptions);
@@ -387,6 +418,8 @@ export function installCommandRouter(
     idleTimer: null,
     idleTimeoutMs,
     hybrid,
+    onHybridBoundary,
+    onHybridSuppressed,
   };
   routers.set(sessionId, handle);
   return {
@@ -449,6 +482,35 @@ export function isCommandRouterInstalled(sessionId: SessionId): boolean {
   return routers.has(sessionId);
 }
 
+/**
+ * Plan 0005 P1 wave 1 — re-sync the hybrid detector's idle tier when the
+ * session's shell-integration status changes mid-life.
+ *
+ * The detector's confidence tiers are fixed at construction (regex-installed
+ * vs regex-missing differ by one number), but the idle tier's enable flag
+ * must track the live status so a session whose auto-install resolves AFTER
+ * the router installed correctly gates out the idle double-close path. This
+ * is the only dynamic knob we expose; everything else is either an install-
+ * time decision or a `setSignals` call on the caller's own detector
+ * reference.
+ *
+ * No-op when no router is installed, when the router has no hybrid detector
+ * attached (mock bridge), or when the session has no active lookup.
+ */
+export function syncRouterHybridShellIntegration(
+  sessionId: SessionId,
+  status: HybridBoundaryDetectorOptions['shellIntegration'],
+): void {
+  const handle = routers.get(sessionId);
+  if (!handle || handle.hybrid === null) return;
+  // Idle is off on integrated sessions (§R-4). We treat the flip as
+  // authoritative — once installed/detected is observed, further flips back
+  // to 'missing' (should not happen in practice) still toggle the gate so
+  // the detector and the session entity never desync.
+  const integrationActive = status === 'installed' || status === 'detected';
+  handle.hybrid.setSignals({ idle: !integrationActive });
+}
+
 // ----- Public entry points used by features/session/connect.ts -----
 
 /**
@@ -472,6 +534,41 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
   }
   const chunk = base64ToBytes(bytesB64);
 
+  // Plan 0005 P1 wave 1 — feed the hybrid detector BEFORE the active-block
+  // guard. The detector is a pure observer that owns no byte path and, in
+  // particular, owns the `prompt_start` event that CREATES the next block
+  // via the boundary listener. Gating it behind `active !== null` would
+  // make the very first block's prompt_start unreachable on a real session
+  // (the session opens with no block active, the shell draws its PS1,
+  // OSC 133 A arrives — and under the old ordering we would drop the chunk
+  // before the detector saw it, leaving the block store dormant forever).
+  //
+  // `feed()` returns the events in order; we forward them to the installer-
+  // supplied `onHybridBoundary` callback captured on the handle. Errors on
+  // either side are isolated: a thrown detector must never break the byte
+  // path, and a thrown sink must never skip events for later consumers.
+  if (handle.hybrid !== null) {
+    try {
+      const events = handle.hybrid.feed(chunk);
+      const sink = handle.onHybridBoundary;
+      if (sink !== null && events.length > 0) {
+        for (const event of events) {
+          try {
+            sink(event);
+          } catch (err) {
+            log.error('hybrid boundary sink threw, isolating', err);
+          }
+        }
+      }
+    } catch (err) {
+      log.error('hybrid detector threw, isolating', err);
+    }
+  }
+
+  // Re-resolve the active pointer AFTER the hybrid sink has run: the
+  // listener may have just called `startBlock` in response to
+  // `prompt_start`, which set `activeBlockId` on the store. That's the
+  // expected wiring for the first block of a fresh session.
   const active = store.getActiveBlockId();
   if (active === null) {
     // Legitimate: shell greeting, motd, idle noise. Drop.
@@ -493,18 +590,6 @@ export function appendToActiveBlock(sessionId: SessionId, bytesB64: string): voi
       } catch (err) {
         log.error('raw observer threw, isolating', err);
       }
-    }
-  }
-
-  // P1-A: feed the hybrid detector before any block mutation. It is a pure
-  // observer (does not own bytes) so we invoke it unconditionally when
-  // installed and ignore any thrown errors — a misbehaving detector must
-  // never break the byte path into the block store.
-  if (handle.hybrid !== null) {
-    try {
-      handle.hybrid.feed(chunk);
-    } catch (err) {
-      log.error('hybrid detector threw, isolating', err);
     }
   }
 

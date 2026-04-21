@@ -331,4 +331,6 @@ State taken at commit `f74c047` (wave-4 close). Full per-gate status with eviden
 
 Legend: [x] landed with evidence; [~] partial (impl landed, verification pending); [ ] not started.
 
-Until all twelve hold [x], P0 does not ship. Current count as of `f74c047`: **11 [x] / 1 [~]** (gate 7).
+P0 shipped to staging at commit `fab7198` (see `SHIP_SIGNOFF.md`) with **11 [x] / 1 [~]** — gate 7 perf green-at-budget absorbed into P1-H wave 2. The wave-4 scorecard (count at `f74c047`) remains the intermediate reference above.
+
+P1 wave 1 landed at `868e482` with 9 spine-complete epics (see `gap-tracking.md` "P1 wave 1 landed"); the P1 done-definition mirrors this P0 checklist (12 gates — see README §12.1 and `p1-roadmap.md` §"Done definition") and stands at **3 [x] / 6 [~] / 3 [ ]** post-wave-1. Wave-2 closes the remainder. The P2 execution-surface spec lives in [p2-roadmap.md](./p2-roadmap.md).

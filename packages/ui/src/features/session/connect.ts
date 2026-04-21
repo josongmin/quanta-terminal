@@ -48,8 +48,50 @@ import {
   finalizeActiveBlock,
   IDLE_COMPLETE_MS,
   installCommandRouter,
+  syncRouterHybridShellIntegration,
 } from '../command/route-output.js'; // FIXME(fsd-layer-skip): session hands pty bytes + exit to command router per documented cross-slice handoff; see also the integration test comment for the inverse direction.
 import { tryGetBlockStore } from '../command/block-store-port.js';
+// Plan 0005 P1 wave 1 — wire the hybrid detector's events to the block-
+// boundary listener so P1-A stops being inert in production. The listener
+// owns the store mutations (rowRange, exitCode, confidence, duration) and
+// the scrollback pin; `connect.ts` is the single place we have the
+// VtEmulator handle AND the session id in the same scope, which is what
+// the listener's port contract needs.
+import {
+  createBoundaryListener,
+  type BoundaryBlockStorePort,
+  type BoundaryListenerHandle,
+  type ScrollbackPinPort,
+} from '../command/block-boundary-listener.js'; // FIXME(fsd-layer-skip): session feature installs the boundary listener for its own scrollback; documented cross-slice handoff like the router wiring above.
+import { useBlockStore } from '../../entities/block/index.js'; // FIXME(fsd-layer-skip): session feature composes block entity with VtEmulator pin API for the boundary listener port (see export-transcript.ts for the precedent).
+import type { BoundaryEvent, HybridBoundaryDetectorOptions } from '../command/hybrid-detector-types.js';
+import type { BlockId, ShellIntegrationStatus } from '../../shared/types/generated/index.js';
+
+/**
+ * Map the session entity's `ShellIntegrationStatus` onto the hybrid
+ * detector's confidence-tier input.
+ *
+ * Generated taxonomy: `'installed' | 'missing' | 'partial'` (see
+ * `shared/types/generated/events.ts`). Detector taxonomy:
+ * `'installed' | 'detected' | 'missing'`. The mismatch is deliberate — the
+ * detector's `'detected'` is the "we saw OSC 133 in the stream so trust it
+ * even if our installer didn't touch this shell" tier, which the session
+ * entity does not currently track. `'partial'` (rc mutated but a reload
+ * hasn't hit) pairs most naturally with `'missing'` for boundary-detection
+ * purposes: we can't yet trust OSC 133 to be authoritative, so the idle
+ * backstop stays armed. When the shell eventually flips to `'installed'`,
+ * the `session_shell_integration_status` handler calls
+ * `syncRouterHybridShellIntegration` with the new value and the gate
+ * re-closes.
+ */
+function mapShellIntegrationStatus(
+  status: ShellIntegrationStatus,
+): HybridBoundaryDetectorOptions['shellIntegration'] {
+  if (status === 'installed') return 'installed';
+  // 'missing' and 'partial' both get 'missing' on the detector side — they
+  // share the fallback semantics (regex + idle carry the confidence).
+  return 'missing';
+}
 // FIXME(fsd-layer-skip): the session feature consults the degraded gate so
 // the `ConnectedSession.write` wrapper honors RFC §20 ("input disabled
 // during degraded state") for every caller — command/submit today, and
@@ -164,11 +206,19 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
         }
       : undefined;
 
+  // Plan 0005 P2-C: opt-in priority-classified backpressure. When the flag
+  // is off (P0/P1 default), the engine wires the single-priority frame-skip
+  // batcher exactly as before. When on, the priority batcher takes over and
+  // emits per-class drop-rate telemetry. Read once at spawn so mid-session
+  // flag flips don't tear down the batcher; settings consumers are expected
+  // to re-spawn the session to pick up a change.
+  const priorityBackpressure = getFeatureFlag('priorityBackpressure');
   const engine: VtEngineHandle = createSessionEngine({
     sessionId: 'pending',
     cols,
     rows,
     ...(flowControl !== undefined ? { flowControl } : {}),
+    ...(priorityBackpressure ? { priorityBackpressure: true } : {}),
   });
 
   // Subscribe FIRST, buffer until we know the session id. The host may emit
@@ -186,6 +236,11 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // dispatch wastes work and future block-of-new-session races could mis-route.
   let ended = false;
   let routerDispose: (() => void) | undefined;
+  // Plan 0005 P1 wave 1 — boundary listener handle. Built after spawn() so
+  // we have the real sessionId + the engine's emulator available for the
+  // scrollback pin port. `undefined` when `flag.blockUx` is off (the router
+  // is not installed either, so there's nothing to listen to).
+  let boundaryListener: BoundaryListenerHandle | undefined;
 
   const subscription = bridge.subscribe((event) => {
     if (closed) return;
@@ -266,12 +321,91 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
   // surface. In P1, re-install happens on flag flip by re-mounting the
   // session (no hot-swap needed).
   if (getFeatureFlag('blockUx')) {
-    routerDispose = installCommandRouter(
-      sessionId,
-      isMockBridge
-        ? {}
-        : { detector: null, idleCompletionMs: IDLE_COMPLETE_MS },
-    ).dispose;
+    // Plan 0005 P1 wave 1 — boundary listener + hybrid wiring.
+    //
+    // Real-shell sessions install both (a) the legacy null-detector byte
+    // path and (b) the hybrid detector. The hybrid detector runs as an
+    // OBSERVER (does not consume bytes) and publishes post-arbitration
+    // boundary events to the listener below, which drives `rowRange`,
+    // `exitCode`, `confidence`, and `durationMs` on the block store.
+    //
+    // Mock bridge sessions skip the hybrid — they have their own
+    // authoritative terminator (MOCK_PROMPT_BYTES) that the legacy detector
+    // already handles; spinning up a second pipeline would just double-emit
+    // with no semantic benefit.
+    if (isMockBridge) {
+      routerDispose = installCommandRouter(sessionId).dispose;
+    } else {
+      // Build the scrollback-pin port from the engine's emulator. The
+      // emulator exposes row-id and pin operations directly; we wrap them
+      // so the listener's port contract is satisfied without leaking the
+      // VtEmulator type into the listener module.
+      const pinPort: ScrollbackPinPort = {
+        getNextRowId(): number {
+          const ring = engine.emulator.getScrollback();
+          return ring.baseRowId + ring.rows.length;
+        },
+        pinScrollbackRow(rowId) {
+          engine.emulator.pinScrollbackRow(rowId);
+        },
+        unpinScrollbackRow(rowId) {
+          engine.emulator.unpinScrollbackRow(rowId);
+        },
+      };
+      // Build the block-store port. The listener needs row-range + duration
+      // actions that aren't on the router's `BlockStoreActions` adapter
+      // (which is intentionally narrow — the router only appends bytes and
+      // closes blocks). Reaching into `useBlockStore` here keeps the port
+      // contract stable and mirrors `export-transcript.ts`'s precedent of
+      // the session feature composing the block entity directly.
+      const blockStorePort: BoundaryBlockStorePort = {
+        startBlock(command, cwd, options) {
+          return useBlockStore.getState().startBlock(command, cwd, options);
+        },
+        completeBlock(id, exitCode, eventId) {
+          useBlockStore.getState().completeBlock(id, exitCode, eventId);
+        },
+        setBlockRowRange(id, rowRange, confidence) {
+          useBlockStore.getState().setBlockRowRange(id, rowRange, confidence);
+        },
+        setBlockDuration(id, durationMs) {
+          useBlockStore.getState().setBlockDuration(id, durationMs);
+        },
+        getActiveBlockId() {
+          return (useBlockStore.getState().activeBlockId as BlockId | null) ?? null;
+        },
+      };
+      boundaryListener = createBoundaryListener(
+        sessionId,
+        blockStorePort,
+        pinPort,
+      );
+      // Capture at install time: the session's shell-integration status
+      // starts as 'missing' and only flips once the auto-install IPC
+      // resolves (or the script is already present). The detector-side
+      // confidence tiers are static after construction but the idle tier
+      // runs conditionally (§R-4 gate in `hybrid-detector.ts`). We re-read
+      // the session entity on every install to pick up any status already
+      // persisted from a prior session reconnect.
+      const initialStatusRaw =
+        useSessionsStore.getState().entities[sessionId]?.shellIntegration ??
+        ('missing' as ShellIntegrationStatus);
+      const initialStatus = mapShellIntegrationStatus(initialStatusRaw);
+      // Forward every post-arbitration event from the hybrid detector into
+      // the listener's pump. The listener handles prompt_start / command_end
+      // semantically; command_start / output_start are reserved hooks.
+      const onHybridBoundary = (event: BoundaryEvent): void => {
+        boundaryListener?.pump([event]);
+      };
+      routerDispose = installCommandRouter(sessionId, {
+        detector: null,
+        idleCompletionMs: IDLE_COMPLETE_MS,
+        hybrid: {
+          shellIntegration: initialStatus,
+          onHybridBoundary,
+        },
+      }).dispose;
+    }
   }
 
   // Seed the entity in the collection. `addSession` is a no-op if the id is
@@ -385,6 +519,16 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
         routerDispose();
         routerDispose = undefined;
       }
+      // Plan 0005 P1 wave 1 — tear down the boundary listener AFTER the
+      // router's dispose. The router disposer may synthesize a final
+      // `completeBlock` via the idle timer's fire-time guard; the listener
+      // only needs to release its scrollback pin once no more events can
+      // reach `pump`. Disposing in this order matches the teardown-safety
+      // rationale the router's own dispose block documents.
+      if (boundaryListener !== undefined) {
+        boundaryListener.dispose();
+        boundaryListener = undefined;
+      }
       try {
         await bridge.close(sessionId);
       } catch (err) {
@@ -485,6 +629,16 @@ export async function connectSession(opts: ConnectOptions): Promise<ConnectedSes
         useSessionsStore.getState().patchSession(sessionId, {
           shellIntegration: event.status,
         });
+        // Plan 0005 P1 wave 1 — re-sync the hybrid detector's idle tier so
+        // an auto-install that resolves AFTER router install correctly
+        // gates out the idle double-close path (§R-4). No-op when the
+        // router has no hybrid (mock bridge) or is not installed. Map the
+        // `'partial'` variant to `'missing'` for detector purposes (see
+        // `mapShellIntegrationStatus` docblock for the taxonomy rationale).
+        syncRouterHybridShellIntegration(
+          sessionId,
+          mapShellIntegrationStatus(event.status),
+        );
       }
       return;
     }

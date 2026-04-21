@@ -17,8 +17,9 @@
  *   - Handle an empty `blocks` list without throwing.
  */
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { JSX } from 'react';
 import { BlockOverlay, projectRowRange, formatDuration, formatCwd } from '../BlockOverlay.js';
 import type { BlockOverlayItem } from '../BlockOverlay.js';
 
@@ -424,5 +425,130 @@ describe('formatCwd', () => {
   });
   it('handles trailing slashes', () => {
     expect(formatCwd('/root/')).toBe('root');
+  });
+});
+
+/**
+ * Plan 0005 P1-C polish — rAF-tracker integration.
+ *
+ * The three tests below exercise the opt-in `useRafTracker` path. They
+ * share a manually-stepped rAF fake so we can assert batching and
+ * deterministic flushes without depending on jsdom's real rAF shim.
+ */
+describe('BlockOverlay — useRafTracker integration', () => {
+  function makeFakeRaf(): {
+    schedule: (cb: () => void) => number;
+    cancel: (id: number) => void;
+    tickAll: () => void;
+    pending: () => number;
+  } {
+    const queue: Array<{ id: number; cb: () => void; cancelled: boolean }> = [];
+    let next = 1;
+    return {
+      schedule: (cb) => {
+        const id = next++;
+        queue.push({ id, cb, cancelled: false });
+        return id;
+      },
+      cancel: (id) => {
+        const e = queue.find((q) => q.id === id);
+        if (e) e.cancelled = true;
+      },
+      tickAll: () => {
+        let safety = 50;
+        while (queue.length > 0 && safety-- > 0) {
+          const h = queue.shift();
+          if (!h || h.cancelled) continue;
+          h.cb();
+        }
+      },
+      pending: () => queue.filter((e) => !e.cancelled).length,
+    };
+  }
+
+  it('renders cards on first paint without needing a rAF tick', () => {
+    const raf = makeFakeRaf();
+    render(
+      <BlockOverlay
+        blocks={[
+          makeItem({
+            id: 'a',
+            rowRange: { startRow: 5, endRowExclusive: 10 },
+          }),
+        ]}
+        baseRowId={0}
+        rowCount={50}
+        cellHeightPx={16}
+        useRafTracker
+        scheduler={raf.schedule}
+        cancelScheduler={raf.cancel}
+      />,
+    );
+    // Initial snapshot is synchronous — the card must already be present.
+    const cards = screen.getAllByTestId('block-overlay-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.style.top).toBe('80px');
+  });
+
+  it('batches rerenders so one frame flushes the final projection', () => {
+    const raf = makeFakeRaf();
+    const Wrapper = ({ baseRowId }: { baseRowId: number }): JSX.Element => (
+      <BlockOverlay
+        blocks={[
+          makeItem({
+            id: 'a',
+            rowRange: { startRow: 5, endRowExclusive: 10 },
+          }),
+        ]}
+        baseRowId={baseRowId}
+        rowCount={50}
+        cellHeightPx={16}
+        useRafTracker
+        scheduler={raf.schedule}
+        cancelScheduler={raf.cancel}
+      />
+    );
+    const { rerender } = render(<Wrapper baseRowId={0} />);
+    rerender(<Wrapper baseRowId={1} />);
+    rerender(<Wrapper baseRowId={2} />);
+    rerender(<Wrapper baseRowId={3} />);
+    // Only one rAF is live — the tracker coalesces the bursts.
+    expect(raf.pending()).toBe(1);
+    // Wrap in act so React flushes the setState that the rAF callback
+    // triggers when new metrics land.
+    act(() => {
+      raf.tickAll();
+    });
+    // After flush the card's top reflects the LATEST baseRowId (3).
+    // (5 - 3) * 16 = 32
+    const card = screen.getByTestId('block-overlay-card');
+    expect(card.style.top).toBe('32px');
+  });
+
+  it('drops evicted blocks from the DOM via the tracker visibility flag', () => {
+    const raf = makeFakeRaf();
+    render(
+      <BlockOverlay
+        blocks={[
+          makeItem({
+            id: 'gone',
+            rowRange: { startRow: 5, endRowExclusive: 10 },
+          }),
+          makeItem({
+            id: 'here',
+            rowRange: { startRow: 150, endRowExclusive: 160 },
+          }),
+        ]}
+        baseRowId={100}
+        rowCount={100}
+        cellHeightPx={16}
+        useRafTracker
+        scheduler={raf.schedule}
+        cancelScheduler={raf.cancel}
+      />,
+    );
+    const cards = screen.getAllByTestId('block-overlay-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.getAttribute('data-block-id')).toBe('here');
   });
 });

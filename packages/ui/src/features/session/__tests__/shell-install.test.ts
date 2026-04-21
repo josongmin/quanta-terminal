@@ -314,4 +314,73 @@ describe('maybeAutoInstallShellIntegration', () => {
     }
     expect(readBackoff(storage, 'zsh')?.failCount).toBe(1);
   });
+
+  // --- force: true bypasses back-off (audit P1-B) ---
+  it('force=true bypasses active back-off and calls the bridge', async () => {
+    const storage = new InMemoryStorage();
+    // Prime storage with a fully-consumed back-off that WOULD normally skip.
+    writeBackoff(storage, 'zsh', {
+      lastAttemptAt: 1000,
+      failCount: MAX_CONSECUTIVE_FAILURES,
+    });
+    const { bridge, calls } = makeBridge({
+      kind: 'installed',
+      rcPath: '/home/me/.zshrc',
+      backupPath: '/bak',
+    });
+    const toast = vi.fn();
+    const out = await maybeAutoInstallShellIntegration('zsh', {
+      bridge,
+      storage,
+      // still well within the 24h window — default path would skip here.
+      now: () => 1000 + BACKOFF_WINDOW_MS - 1,
+      toast,
+      force: true,
+    });
+    expect(out?.kind).toBe('installed');
+    expect(calls).toEqual(['zsh']);
+    // Success path still clears the counter.
+    expect(readBackoff(storage, 'zsh')).toBeNull();
+  });
+
+  it('force=false (default) still honors an active back-off', async () => {
+    // Control for the force test above — same setup, no force, must skip.
+    const storage = new InMemoryStorage();
+    writeBackoff(storage, 'zsh', {
+      lastAttemptAt: 1000,
+      failCount: MAX_CONSECUTIVE_FAILURES,
+    });
+    const { bridge, calls } = makeBridge({ kind: 'installed', rcPath: '', backupPath: '' });
+    const out = await maybeAutoInstallShellIntegration('zsh', {
+      bridge,
+      storage,
+      now: () => 1000 + BACKOFF_WINDOW_MS - 1,
+      toast: () => 0,
+      // force omitted — default is false.
+    });
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('force=true records failures in back-off so repeated forcing eventually cools off', async () => {
+    // The force flag only bypasses the PRE-CALL gate. Post-call bookkeeping
+    // still increments failCount, so a user who clicks "install now" three
+    // times in a row in the face of a hard failure does end up in back-off
+    // once they stop forcing.
+    const storage = new InMemoryStorage();
+    const { bridge } = makeBridge({ kind: 'failed', reason: 'disk full' });
+    for (let i = 1; i <= 3; i += 1) {
+      await maybeAutoInstallShellIntegration('zsh', {
+        bridge,
+        storage,
+        now: () => i * 1000,
+        toast: () => 0,
+        force: true,
+      });
+    }
+    expect(readBackoff(storage, 'zsh')).toEqual({
+      lastAttemptAt: 3000,
+      failCount: 3,
+    });
+  });
 });

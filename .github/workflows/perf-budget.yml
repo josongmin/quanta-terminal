@@ -129,6 +129,15 @@ jobs:
 
       # Regression gate — only meaningful on PRs (on push-to-main we're
       # creating the history, not comparing against it).
+      #
+      # Dynamic threshold (audit P1-H, Linux 3x tolerance):
+      #   The 10-15% per-budget WARN tolerance the runner applies is
+      #   calibrated for macOS M-series. On ubuntu-24.04 shared runners
+      #   the same workload sees 3-4x more noise (see the comment header
+      #   at the top of this file and `perf-baselines.md`). We therefore
+      #   widen the regression-check delta to 0.60 (= 3 * 0.20) on Linux
+      #   and keep 0.20 on macOS / elsewhere. Without this widening the
+      #   regression check would fire on noise alone and mask real signal.
       - name: Compare against main history (PR only)
         if: github.event_name == 'pull_request'
         env:
@@ -138,11 +147,17 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            THRESH=0.60
+          else
+            THRESH=0.20
+          fi
+          echo "Using delta threshold: ${THRESH} (runner.os=${{ runner.os }})"
           node tools/perf-regression-check.mjs \
             --current "artifacts/perf/${PR_HEAD_SHA:0:12}/summary.json" \
             --history-branch main \
             --history-limit 7 \
-            --delta-threshold 0.20
+            --delta-threshold "${THRESH}"
 
       # Always upload — even on failure the JSON report is diagnostic gold.
       - name: Upload perf artefacts

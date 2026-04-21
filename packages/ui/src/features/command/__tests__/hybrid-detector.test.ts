@@ -294,8 +294,16 @@ describe('hybrid-detector — cursor-home source', () => {
 // ----- F. Idle detector -----
 
 describe('hybrid-detector — idle source', () => {
+  // Plan 0005 P1 wave 1 — Audit §R-4: idle is gated off when shell-integration
+  // is installed/detected (OSC 133 D is authoritative on those sessions; an
+  // extra 0.1-confidence idle event would race the authoritative close).
+  // These fallback-path tests pin `shellIntegration: 'missing'` so the idle
+  // tier is enabled and the backstop behaviour surfaces.
   it('emits command_end on tick when idle threshold has elapsed', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('running'));
     clock.advance(500);
     const out = detector.tick(clock.now());
@@ -307,7 +315,10 @@ describe('hybrid-detector — idle source', () => {
   });
 
   it('only emits idle once per quiet window', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('busy'));
     clock.advance(500);
     const a = detector.tick(clock.now());
@@ -318,7 +329,10 @@ describe('hybrid-detector — idle source', () => {
   });
 
   it('re-arms after new bytes arrive', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('first'));
     clock.advance(500);
     detector.tick(clock.now());
@@ -331,10 +345,53 @@ describe('hybrid-detector — idle source', () => {
   });
 
   it('tick before threshold is a no-op', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('x'));
     clock.advance(100);
     expect(detector.tick(clock.now())).toEqual([]);
+  });
+
+  it('does NOT emit when shell-integration is installed (authoritative OSC 133 wins)', () => {
+    // Regression guard for the §R-4 double-close race. The detector must
+    // suppress idle entirely on integrated sessions so OSC 133 D is the
+    // sole close event downstream consumers see.
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'installed',
+      idleTimeoutMs: 400,
+    });
+    detector.feed(ascii('running'));
+    clock.advance(500);
+    expect(detector.tick(clock.now())).toEqual([]);
+  });
+
+  it('does NOT emit when shell-integration is detected (same §R-4 gate)', () => {
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'detected',
+      idleTimeoutMs: 400,
+    });
+    detector.feed(ascii('running'));
+    clock.advance(500);
+    expect(detector.tick(clock.now())).toEqual([]);
+  });
+
+  it('DOES emit idle when explicitly re-enabled on an integrated session via setSignals', () => {
+    // Escape hatch: consumers that specifically want the idle backstop even
+    // on integrated sessions can opt in after construction. This is the
+    // symmetric counterpart to `setSignals({ idle: false })` in the gating
+    // tests below — they share the same port.
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'installed',
+      idleTimeoutMs: 400,
+    });
+    detector.setSignals({ idle: true });
+    detector.feed(ascii('running'));
+    clock.advance(500);
+    const out = detector.tick(clock.now());
+    expect(out).toHaveLength(1);
+    expect(out[0]?.source).toBe('idle');
   });
 });
 
@@ -356,7 +413,13 @@ describe('hybrid-detector — setSignals gating', () => {
   });
 
   it('disabling idle suppresses the tick event', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    // Use `'missing'` so idle is enabled by default (integrated sessions
+    // have idle gated off — see §R-4). Then explicitly disabling must keep
+    // the tick silent.
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.setSignals({ idle: false });
     detector.feed(ascii('x'));
     clock.advance(500);
@@ -413,7 +476,12 @@ describe('hybrid-detector — reset()', () => {
   });
 
   it('clears idle-armed flag so tick can fire again', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    // Idle tier is gated off on integrated sessions (Plan 0005 §R-4). Pin
+    // `'missing'` here so the reset path for the idle lifecycle is exercised.
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('x'));
     clock.advance(500);
     detector.tick(clock.now());
@@ -478,7 +546,13 @@ describe('hybrid-detector — integration scenarios', () => {
   });
 
   it('idle event from prior quiet window surfaces BEFORE bytes from new burst', () => {
-    const { detector, clock } = makeDetector({ idleTimeoutMs: 400 });
+    // Idle tier is enabled only on non-integrated sessions (see §R-4 gate in
+    // `hybrid-detector — idle source`). Use `'missing'` so the backstop can
+    // fire and we can assert the interleaving with a following OSC 133 burst.
+    const { detector, clock } = makeDetector({
+      shellIntegration: 'missing',
+      idleTimeoutMs: 400,
+    });
     detector.feed(ascii('busy'));
     clock.advance(500);
     // New burst arriving after the idle window. The idle event must come

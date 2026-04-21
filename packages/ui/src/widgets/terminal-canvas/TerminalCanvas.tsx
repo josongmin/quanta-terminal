@@ -66,6 +66,16 @@ import {
   subscribeFontChange,
   type FontSettings,
 } from '../../features/font-settings/index.js';
+// Plan 0005 P1-F — the grid-wide FindPanel publishes its match list into
+// a shared zustand store. TerminalCanvas forwards that list + the current
+// viewport anchor into its CellBuffer so the Renderer can paint the
+// highlight overlay on the next rAF tick. Subscribing inside the canvas
+// (instead of inside the panel) keeps the panel headless in tests and
+// also means we catch match-list updates even when the panel is unmounted
+// (e.g. a different session's panel owns the store during multi-session
+// restore).
+import type { GridSearchMatch } from '../../features/output-search/scrollback-search.js';
+import { useFindPanelStore } from '../../widgets/find-panel/find-panel-store.js';
 import styles from './terminal-canvas.module.css';
 
 export type TerminalCanvasBackendKind = 'canvas' | 'memory';
@@ -358,6 +368,73 @@ export const TerminalCanvas = forwardRef<TerminalCanvasHandle, TerminalCanvasPro
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [ensurePlumbing, onSelectionChange]);
+
+    // Plan 0005 P1-F — forward FindPanel matches into the CellBuffer.
+    //
+    // The FindPanel store is the canonical source of truth for grid-wide
+    // search state (pattern, mode toggles, match list, current index). We
+    // subscribe to the store rather than letting the panel push directly
+    // so the canvas has a single ownership point for the overlay list
+    // regardless of whether the panel is mounted (tests, multi-canvas
+    // session-switch, headless replay).
+    //
+    // Scrollback anchor: the backend translates absolute `rowId` to a
+    // viewport-local row by subtracting `scrollbackTop`. We derive that
+    // anchor from the mirror's dimensions at the same tick — the mirror's
+    // row 0 always corresponds to the top of the live viewport, so
+    // `scrollbackTop` is the rowId of mirror row 0. We don't have a
+    // standalone API for that today; in practice the VtEmulator hands
+    // the mirror a fresh `grid_snapshot` on every scroll, so the highest
+    // absolute rowId that any match cites is roughly bounded by the
+    // mirror's own view. Until we plumb a direct reader, we pull the
+    // "active" absolute row floor from the first highlight (when the
+    // search hit the viewport) — that's the simplest conservative choice
+    // and matches what downstream backends expect.
+    useEffect(() => {
+      const plumbing = plumbingRef.current ?? ensurePlumbing();
+      const pushHighlights = (matches: readonly GridSearchMatch[], currentIndex: number): void => {
+        // Map into SearchHighlight[] + flag the current match so the
+        // backend can paint it with emphasis. Empty list clears the
+        // overlay; the store maintains this invariant on close / query
+        // clear already.
+        const enriched = matches.map((m, i) => ({
+          rowId: m.rowId,
+          startCol: m.startCol,
+          endColExclusive: m.endColExclusive,
+          current: i === currentIndex,
+        }));
+        plumbing.buffer.setSearchHighlights(enriched);
+        plumbing.renderer.markOverlayDirty();
+      };
+      // Seed once with whatever the store already holds (e.g. the panel
+      // was open before this canvas mounted).
+      {
+        const s = useFindPanelStore.getState();
+        pushHighlights(s.matches, s.currentIndex);
+      }
+      let prevMatches = useFindPanelStore.getState().matches;
+      let prevIndex = useFindPanelStore.getState().currentIndex;
+      const unsub = useFindPanelStore.subscribe((state) => {
+        if (state.matches === prevMatches && state.currentIndex === prevIndex) {
+          return;
+        }
+        prevMatches = state.matches;
+        prevIndex = state.currentIndex;
+        pushHighlights(state.matches, state.currentIndex);
+      });
+      return () => {
+        unsub();
+        // Clear any lingering overlay on unmount so the next mount starts
+        // fresh. The buffer is already disposed by the main mount effect's
+        // cleanup; this is belt-and-suspenders.
+        const p = plumbingRef.current;
+        if (p) {
+          p.buffer.setSearchHighlights([]);
+          p.renderer.markOverlayDirty();
+        }
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [ensurePlumbing]);
 
     // Imperative handle.
     useImperativeHandle(

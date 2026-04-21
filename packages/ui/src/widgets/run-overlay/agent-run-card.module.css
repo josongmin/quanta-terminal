@@ -1,0 +1,117 @@
+/*
+ * AgentRunCard — chrome for agent-type Runs.
+ *
+ * Visual language:
+ *   - Purple left stripe (var(--q-accent)) vs the shell card's green (var(--q-success)).
+ *   - Distinct icon glyph (sparkle / tool) so the card reads as "AI" at a
+ *     glance in the grid list.
+ *   - Tool name rendered as a pill; arg summary in a monospace metadata row.
+ */
+
+.card {
+  position: relative;
+  display: block;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--q-border-subtle);
+  padding: var(--q-space-4) var(--q-space-2);
+  font-family: var(--q-font-sans);
+  color: var(--q-fg);
+}
+
+.card[data-type='agent'] .stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--q-accent);
+  border-radius: 0 2px 2px 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--q-space-2);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--q-accent);
+}
+
+.toolName {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--q-space-2);
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--q-accent);
+  font-family: var(--q-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.source {
+  color: var(--q-fg-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.confidence {
+  color: var(--q-fg-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.argsRow {
+  margin-top: var(--q-space-1);
+  color: var(--q-fg-muted);
+  font-family: var(--q-font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.body {
+  margin-top: var(--q-space-2);
+  font-family: var(--q-font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  color: var(--q-fg);
+}
+
+.streamingDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--q-accent);
+  margin-right: var(--q-space-1);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1.0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streamingDot { animation: none; }
+}
+
+.statusTag {
+  font-size: 0.75rem;
+  color: var(--q-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.statusTag[data-status='completed'] { color: var(--q-success); }
+.statusTag[data-status='error']     { color: var(--q-danger); }
+.statusTag[data-status='canceled']  { color: var(--q-warning); }

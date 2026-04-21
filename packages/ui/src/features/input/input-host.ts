@@ -11,6 +11,8 @@
  */
 import { createLogger } from '../../shared/lib/logger';
 import { getPlatform as sharedGetPlatform } from '../../shared/lib/platform';
+import type { IntentRouter } from '../intent';
+import { makeIntent } from '../intent';
 
 import type { Focus } from './Focus';
 import type { KeyEncoder } from './KeyEncoder';
@@ -100,6 +102,26 @@ export interface InputHostMountOptions {
     bytes: Uint8Array,
     source: 'keyboard' | 'mouse' | 'paste' | 'focus' | 'ime',
   ) => boolean | Promise<boolean>;
+  /**
+   * Plan 0005 P2-B — optional intent router. When provided AND
+   * `intentLayerEnabled` is true, keystrokes that lift to a meaning-
+   * typed intent (Ctrl+C → interrupt, Ctrl+Z → suspend, non-shortcut
+   * printable single characters → raw-key) route through the router
+   * BEFORE the encoder layer. Any intent the router cannot deliver
+   * (no encoder registered, denied by a gate, etc.) falls back to the
+   * direct byte path so existing P0/P1 behavior is preserved.
+   *
+   * Note: `execute` intents are constructed by the composer submit
+   * path (which owns the text), not here — the keyboard surface only
+   * sees individual keystrokes.
+   */
+  intentRouter?: IntentRouter;
+  /**
+   * When true, the intent-router path is active. Defaults to false so
+   * P0/P1 tests that don't pass the flag see the original behavior
+   * unchanged.
+   */
+  intentLayerEnabled?: boolean;
 }
 
 export interface InputHostHandle {
@@ -295,6 +317,26 @@ export function mount(container: HTMLElement, opts: InputHostMountOptions): Inpu
       dispatchIme({ kind: classifyKeydown(ev.key) });
       ev.preventDefault();
       return;
+    }
+    // P2-B: lift to an intent first when the flag + router are wired.
+    // Only Ctrl+C / Ctrl+Z lift today — the rest of the keyboard surface
+    // still flows through the encoder unchanged so we don't regress the
+    // enormous existing KeyEncoder test matrix. The composer submit
+    // path constructs `execute` intents separately (it owns the text).
+    if (opts.intentLayerEnabled && opts.intentRouter) {
+      const router = opts.intentRouter;
+      if (ev.ctrlKey && !ev.metaKey && !ev.altKey && (ev.key === 'c' || ev.key === 'C')) {
+        void router.dispatch(
+          makeIntent('interrupt', {}, { source: 'user-keystroke' }),
+        );
+        return;
+      }
+      if (ev.ctrlKey && !ev.metaKey && !ev.altKey && (ev.key === 'z' || ev.key === 'Z')) {
+        void router.dispatch(
+          makeIntent('suspend', {}, { source: 'user-keystroke' }),
+        );
+        return;
+      }
     }
     const normalized = normalizeKey(ev, 'keydown');
     const out = opts.keyEncoder.encode(normalized);

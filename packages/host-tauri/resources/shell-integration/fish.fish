@@ -47,11 +47,24 @@ end
 
 # fish_prompt event fires before the prompt is drawn. We emit D (previous
 # command's exit), then cwd, then A (prompt start).
+#
+# CRITICAL ordering note (audit P1-B, fish `$status` race):
+#   `--on-event fish_prompt` handlers run in registration order, and fish does
+#   NOT snapshot `$status` before dispatching them. If the user has a custom
+#   `fish_prompt` function (or another `--on-event fish_prompt` handler) that
+#   fires before ours and runs ANY command — even a `set`, `test`, or
+#   arithmetic expansion — it mutates `$status` before Quanta reads it, and
+#   we'd emit the wrong exit code in OSC 133 D.
+#
+#   Defense: the very first line of this handler MUST be the capture. No
+#   conditional, no function call, no sub-expansion may precede it. We bind
+#   into `__quanta_last_status` (namespaced, unlikely to collide) and every
+#   subsequent OSC emission reads from THAT variable — never from `$status`
+#   directly. The verification test (`fish.fish.test`) asserts the first
+#   non-comment line of the handler is the capture.
 function __quanta_prompt_start --on-event fish_prompt
-    # $status (last exit code) must be captured immediately; any command below
-    # would overwrite it.
-    set -l exit_code $status
-    __quanta_osc "133;D;$exit_code"
+    set -l __quanta_last_status $status
+    __quanta_osc "133;D;$__quanta_last_status"
     __quanta_emit_cwd
     __quanta_osc "133;A"
 end

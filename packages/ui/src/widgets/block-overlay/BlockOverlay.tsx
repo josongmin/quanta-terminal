@@ -46,6 +46,7 @@ import { memo, useMemo, type CSSProperties, type JSX } from 'react';
 import type { BlockRowRange, BlockConfidence, BlockStatus } from '../../entities/block/index.js';
 import { cx } from '../../shared/lib/cx.js';
 import styles from './block-overlay.module.css';
+import { useRowRangeTracker } from './useRowRangeTracker.js';
 
 /**
  * Slim view of a block for overlay rendering. Matches the read shape the
@@ -90,6 +91,27 @@ export interface BlockOverlayProps {
    *  provided, cards whose bottom edge would exceed this get clipped to
    *  the boundary (height floor 1 cell so the header always shows). */
   readonly maxHeightPx?: number;
+  /**
+   * Plan 0005 P1-C polish — opt-in rAF batching for projection. When
+   * `true`, the overlay defers recomputes to at-most-one-per-frame via
+   * `useRowRangeTracker`, re-using prior CardMetric references so memoized
+   * children skip their render path. Off by default so the original
+   * synchronous semantics stay intact for the existing test suite.
+   */
+  readonly useRafTracker?: boolean;
+  /**
+   * Test-only hook forwarded to `useRowRangeTracker`. Ignored when
+   * `useRafTracker` is false.
+   */
+  readonly scheduler?: (cb: () => void) => number;
+  /** Test-only hook forwarded to `useRowRangeTracker`. */
+  readonly cancelScheduler?: (id: number) => void;
+  /**
+   * External bump counter; when it changes, the tracker schedules a
+   * recompute. Hosts wire this to scroll / resize observers. Ignored when
+   * `useRafTracker` is false.
+   */
+  readonly tickVersion?: number;
 }
 
 /**
@@ -240,12 +262,44 @@ export function BlockOverlay(props: BlockOverlayProps): JSX.Element {
     className,
     style,
     maxHeightPx,
+    useRafTracker = false,
+    scheduler,
+    cancelScheduler,
+    tickVersion = 0,
   } = props;
 
-  // Precompute the projected cards once per render. Cards with null
-  // projection (evicted) are filtered here so the DOM exactly matches the
-  // visible set — simplifies E2E snapshots.
-  const projected = useMemo(() => {
+  // Always call the tracker to keep hook order stable; the result is only
+  // consumed when `useRafTracker` is true. The synchronous path runs
+  // `useMemo` on the same inputs and remains the default so existing tests
+  // that rely on immediate projection (no rAF tick) keep working.
+  const trackerInputs = useMemo(
+    () => ({
+      blocks: blocks.map((b) => ({ id: b.id, rowRange: b.rowRange })),
+      baseRowId,
+      rowCount,
+      cellHeightPx,
+      topOffsetPx,
+      tickVersion,
+      ...(scheduler ? { scheduler } : {}),
+      ...(cancelScheduler ? { cancelScheduler } : {}),
+    }),
+    [
+      blocks,
+      baseRowId,
+      rowCount,
+      cellHeightPx,
+      topOffsetPx,
+      tickVersion,
+      scheduler,
+      cancelScheduler,
+    ],
+  );
+  const { cardMetrics } = useRowRangeTracker(trackerInputs);
+
+  // Synchronous projection path (default). Cards with null projection
+  // (evicted) are filtered so the DOM exactly matches the visible set —
+  // simplifies E2E snapshots.
+  const syncProjected = useMemo(() => {
     const out: Array<{
       item: BlockOverlayItem;
       top: number;
@@ -264,6 +318,27 @@ export function BlockOverlay(props: BlockOverlayProps): JSX.Element {
     }
     return out;
   }, [blocks, baseRowId, rowCount, cellHeightPx, topOffsetPx]);
+
+  // When the tracker is wired, join its metrics back onto the items. A
+  // metric with `visible: false` is dropped; same behaviour as the sync
+  // path's null-rect filter.
+  const projected = useMemo(() => {
+    if (!useRafTracker) return syncProjected;
+    const byId = new Map<string, BlockOverlayItem>();
+    for (const b of blocks) byId.set(b.id, b);
+    const out: Array<{
+      item: BlockOverlayItem;
+      top: number;
+      height: number;
+    }> = [];
+    for (const m of cardMetrics) {
+      if (!m.visible) continue;
+      const item = byId.get(m.id);
+      if (item === undefined) continue;
+      out.push({ item, top: m.topPx, height: m.heightPx });
+    }
+    return out;
+  }, [useRafTracker, syncProjected, cardMetrics, blocks]);
 
   return (
     <div

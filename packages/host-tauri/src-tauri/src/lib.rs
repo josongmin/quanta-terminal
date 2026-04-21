@@ -143,6 +143,7 @@ pub fn run() {
             shell_integration::quanta_uninstall_shell_integration,
             shell_install::quanta_shell_install_auto,
             shell_install::quanta_shell_install_status,
+            shell_install::quanta_shell_install_uninstall,
         ])
         .setup(move |app| {
             tracing::info!("Quanta host (Tauri) booted; window manager attached.");

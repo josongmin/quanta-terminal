@@ -147,6 +147,41 @@ describe('<FindPanel />', () => {
     expect(screen.getByTestId('find-panel-count').textContent).toBe('invalid regex');
   });
 
+  it('Cmd+F via keymap toggles the store and Esc closes it (Plan 0005 P1-F wave 1)', async () => {
+    // Uses the same `useKeymap` wiring TerminalPage uses. We render a tiny
+    // host that declares `mod+f → useFindPanelStore.toggle` so the test
+    // proves the integration contract without pulling the whole
+    // TerminalPage (which has a large dependency graph). `userEvent` sends
+    // real keyboard events through the DOM so the keymap's window listener
+    // fires and the store flips.
+    vi.useRealTimers();
+    const { useKeymap } = await import('../../../shared/lib/keymap.js');
+    const userEvent = (await import('@testing-library/user-event')).default;
+    function Host() {
+      useKeymap(
+        'mod+f',
+        (e) => {
+          e.preventDefault();
+          useFindPanelStore.getState().toggle();
+        },
+        { allowInEditable: true },
+      );
+      return <FindPanel getEmulator={() => null} debounceMs={0} />;
+    }
+    const isMac =
+      typeof navigator !== 'undefined' && /mac/iu.test(navigator.platform ?? '');
+    const user = userEvent.setup();
+    render(<Host />);
+    expect(screen.queryByTestId('find-panel')).toBeNull();
+    await user.keyboard(isMac ? '{Meta>}f{/Meta}' : '{Control>}f{/Control}');
+    expect(screen.getByTestId('find-panel')).toBeInTheDocument();
+    expect(useFindPanelStore.getState().open).toBe(true);
+    // Focus lands on the input — Escape must close.
+    await user.keyboard('{Escape}');
+    expect(useFindPanelStore.getState().open).toBe(false);
+    vi.useFakeTimers();
+  });
+
   it('store: equal (rowId, startCol) preserves currentIndex', () => {
     const { setMatches, setCurrentIndex } = useFindPanelStore.getState();
     const first: GridSearchMatch[] = [

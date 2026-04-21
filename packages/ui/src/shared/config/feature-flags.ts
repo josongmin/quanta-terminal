@@ -58,6 +58,37 @@ export interface FeatureFlags {
    * settings UI or via `QUANTA_FLAG_SESSION_RESTORE=on` at bundle time.
    */
   readonly sessionRestore: boolean;
+  /**
+   * Plan 0005 P2-B intent layer. When true, the composer routes user
+   * actions through `features/intent` before byte encoding so AI/safety
+   * gates and alias rewriters can hook the pipeline. Off by default
+   * while the pipeline is still under review; the P0/P1 byte paths are
+   * untouched when the flag is false.
+   */
+  readonly intentLayer: boolean;
+  /**
+   * Plan 0005 P2-C priority-classified output backpressure. When true, the
+   * session connect wires `createPriorityFrameSkipBatcher` (control /
+   * visible / scrollback / verbose lanes) instead of the default
+   * single-priority frame-skip batcher. Default off while the classifier
+   * rolls out; flip from the settings UI once the drop-rate telemetry
+   * validates the classifier choices.
+   */
+  readonly priorityBackpressure: boolean;
+  /**
+   * Plan 0005 P2-A run entity. When true, the command-boundary detector
+   * emits into the Run entity store so shell / task / agent / replay runs
+   * share a single lifecycle model. Off by default while the Block→Run
+   * bridge is under review; P0/P1 byte paths are unaffected.
+   */
+  readonly runEntity: boolean;
+  /**
+   * Plan 0005 P2-E agent tool-call run surface. When true, AI-authored
+   * runs (Run.type === 'agent') render via `AgentRunCard` with a distinct
+   * chrome so the user can tell shell output from agent tool output at a
+   * glance. Off by default — gated on the agent-run pipeline landing.
+   */
+  readonly agentRunSurface: boolean;
   /** Reserved future flags. */
   readonly [k: string]: boolean;
 }
@@ -74,6 +105,23 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   // at bundle time; future P1-E dogfood graduates to default-on in Tauri and
   // off in the browser (no filesystem journal there today).
   sessionRestore: false,
+  // Plan 0005 P2-B — default-off. P0/P1 byte paths are unchanged when
+  // this flag is false; turning it on wires the composer through the
+  // intent router so the safety gate + alias rewriter can fire.
+  intentLayer: false,
+  // Plan 0005 P2-C — default-off. The single-priority frame-skip batcher
+  // stays the default wiring; flipping this on rewires `features/session`
+  // to `createPriorityFrameSkipBatcher` and turns on the per-class
+  // drop-rate telemetry.
+  priorityBackpressure: false,
+  // Plan 0005 P2-A — default-off. When false, the Run entity module is
+  // inert: `installRunLifecycleAdapter` returns a no-op disposer and
+  // `emitBoundaryEvent` is a no-op. Blocks still carry a `runId: null`.
+  runEntity: false,
+  // Plan 0005 P2-E — default-off. Renders `AgentRunCard` for
+  // `Run.type === 'agent'` runs when on. Cards only render if upstream
+  // mounts gate on this flag; the runner registry is always available.
+  agentRunSurface: false,
 };
 
 /** Storage key — a single JSON blob for forward compatibility. */

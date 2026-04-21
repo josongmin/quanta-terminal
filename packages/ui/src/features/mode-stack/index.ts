@@ -53,3 +53,11 @@ export type {
 } from './drivers/nested-shell-driver.js';
 
 export { useAltScreenModeFromStack } from './use-alt-screen-mode-shim.js';
+
+export { installModeStack } from './install.js';
+export type {
+  InstallModeStackOptions,
+  InstalledDrivers,
+  ModeStackDriverFlag,
+  ModeStackInstallHandle,
+} from './install.js';

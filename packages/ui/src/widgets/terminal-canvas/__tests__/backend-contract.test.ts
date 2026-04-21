@@ -158,6 +158,20 @@ function parityCases(label: string, makeBackend: () => BackendContract): void {
       expect(true).toBe(true);
     });
 
+    it('applySearchHighlights accepts a list and a scrollback anchor (Plan 0005 P1-F)', () => {
+      // Seed the grid so off-screen / viewport translation has a real
+      // dimension context to work against (MemoryBackend uses `gridRows`;
+      // the Canvas2D path uses `overlayLayer` but accepts empty gracefully).
+      backend.applyGridSnapshot([asciiRow('hello', 10), asciiRow('world', 10)], null, {});
+      backend.applySearchHighlights(
+        [{ rowId: 5, startCol: 0, endColExclusive: 5, current: true }],
+        5,
+      );
+      // Empty list must also be accepted — that's how the overlay clears.
+      backend.applySearchHighlights([], 5);
+      expect(true).toBe(true);
+    });
+
     it('unmount is idempotent', () => {
       backend.unmount();
       expect(() => backend.unmount()).not.toThrow();
@@ -186,6 +200,8 @@ class FakeDelegateBackend implements BackendContract {
   applyMetrics: BackendContract['applyMetrics'] = (m, d) => this.inner.applyMetrics(m, d);
   requestDamageFlush: BackendContract['requestDamageFlush'] = () =>
     this.inner.requestDamageFlush();
+  applySearchHighlights: BackendContract['applySearchHighlights'] = (h, top) =>
+    this.inner.applySearchHighlights(h, top);
   measureText: BackendContract['measureText'] = (t, a) => this.inner.measureText(t, a);
   mountOverlay: BackendContract['mountOverlay'] = (a, t) => this.inner.mountOverlay(a, t);
   updateOverlay: BackendContract['updateOverlay'] = (h, t) =>

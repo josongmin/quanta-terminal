@@ -20,6 +20,7 @@ import type { ConnectedSession } from '../../features/session/index.js';
 import type { SessionId } from '../../shared/types/generated/index.js';
 import { BlockOverlay } from './BlockOverlay.js';
 import type { BlockOverlayItem } from './BlockOverlay.js';
+import { EvictionBanner } from './EvictionBanner.js';
 
 export interface BlockOverlayHostProps {
   readonly sessionId: SessionId | null;
@@ -31,6 +32,11 @@ export interface BlockOverlayHostProps {
 interface ScrollbackWindow {
   readonly baseRowId: number;
   readonly rowCount: number;
+  /** Polished pass surface: pin-blocked eviction counter + head-pin count so
+   *  the eviction banner can render without a second subscribe path. */
+  readonly pinBlockedEvictions: number;
+  readonly pinnedRowCount: number;
+  readonly cols: number;
 }
 
 function readScrollbackWindow(
@@ -39,16 +45,64 @@ function readScrollbackWindow(
   // Defensive: some session shapes in tests don't expose an engine handle.
   // Fall back to a null window (baseRowId 0, rowCount 0) so the overlay
   // renders no cards but stays mounted for the caller's observation.
-  if (session === undefined) return { baseRowId: 0, rowCount: 0 };
+  if (session === undefined) {
+    return {
+      baseRowId: 0,
+      rowCount: 0,
+      pinBlockedEvictions: 0,
+      pinnedRowCount: 0,
+      cols: 0,
+    };
+  }
   const emulator = session.engine?.emulator;
   if (!emulator || typeof emulator.getScrollback !== 'function') {
-    return { baseRowId: 0, rowCount: 0 };
+    return {
+      baseRowId: 0,
+      rowCount: 0,
+      pinBlockedEvictions: 0,
+      pinnedRowCount: 0,
+      cols: 0,
+    };
   }
   try {
     const ring = emulator.getScrollback();
-    return { baseRowId: ring.baseRowId, rowCount: ring.rows.length };
+    // Count pinned rows at the HEAD of the ring — that's what blocks
+    // eviction. A pin further down the ring has zero effect on capacity
+    // (the ring just chops rows above it). We walk from index 0 until
+    // the first unpinned row so N reflects the real "cannot evict until
+    // these clear" count. Defensive against sparse rows / test mocks that
+    // return plain `new Array(N)` (holes read as `undefined`).
+    let pinnedHead = 0;
+    const rows = ring.rows;
+    if (Array.isArray(rows)) {
+      for (let i = 0; i < rows.length; i += 1) {
+        const r = rows[i];
+        if (r !== undefined && r !== null && r.pinned === true) {
+          pinnedHead += 1;
+        } else {
+          break;
+        }
+      }
+    }
+    const cols =
+      typeof emulator.getDimensions === 'function'
+        ? emulator.getDimensions().cols
+        : 0;
+    return {
+      baseRowId: ring.baseRowId ?? 0,
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      pinBlockedEvictions: ring.pinBlockedEvictions ?? 0,
+      pinnedRowCount: pinnedHead,
+      cols,
+    };
   } catch {
-    return { baseRowId: 0, rowCount: 0 };
+    return {
+      baseRowId: 0,
+      rowCount: 0,
+      pinBlockedEvictions: 0,
+      pinnedRowCount: 0,
+      cols: 0,
+    };
   }
 }
 
@@ -83,14 +137,25 @@ function subscribeRaf(callback: () => void): () => void {
 const windowCache = new Map<string, ScrollbackWindow>();
 
 function scrollbackSnapshot(sessionId: SessionId | null): ScrollbackWindow {
-  if (sessionId === null) return { baseRowId: 0, rowCount: 0 };
+  if (sessionId === null) {
+    return {
+      baseRowId: 0,
+      rowCount: 0,
+      pinBlockedEvictions: 0,
+      pinnedRowCount: 0,
+      cols: 0,
+    };
+  }
   const conn = getSessionConnection(sessionId);
   const next = readScrollbackWindow(conn);
   const cached = windowCache.get(sessionId);
   if (
     cached !== undefined &&
     cached.baseRowId === next.baseRowId &&
-    cached.rowCount === next.rowCount
+    cached.rowCount === next.rowCount &&
+    cached.pinBlockedEvictions === next.pinBlockedEvictions &&
+    cached.pinnedRowCount === next.pinnedRowCount &&
+    cached.cols === next.cols
   ) {
     return cached;
   }
@@ -151,18 +216,37 @@ export function BlockOverlayHost(props: BlockOverlayHostProps): JSX.Element | nu
 
   const cellHeightPx = overrideCellHeight ?? DEFAULT_METRICS.cellHeightCssPx;
 
-  // When there are no items, return null so the overlay doesn't leak an
-  // empty positioned div into the DOM. Tests that key off the root
-  // testid will see null (documented behaviour).
-  if (items.length === 0) return null;
+  // Approximate freeable bytes when the pinned head rows get released.
+  // `BYTES_PER_CELL` is a conservative estimate of a cloned scrollback row's
+  // cell footprint — the real cost varies with V8 hidden-class layout,
+  // SGR breadth, and grapheme payload, but within a 2-3x factor of this.
+  // The banner underestimates rather than overestimates so the copy reads
+  // "Unpinning will free ≈ X MB" honestly.
+  const BYTES_PER_CELL = 48;
+  const freeableBytes =
+    window.pinnedRowCount * Math.max(1, window.cols) * BYTES_PER_CELL;
+
+  // When there are no items AND no pin pressure, return null so the
+  // overlay doesn't leak an empty positioned div into the DOM. The
+  // eviction banner is load-bearing when pins have blocked — we keep the
+  // overlay mounted so the banner has somewhere to render even if no
+  // block cards are visible.
+  if (items.length === 0 && window.pinBlockedEvictions === 0) return null;
 
   return (
-    <BlockOverlay
-      blocks={items}
-      baseRowId={window.baseRowId}
-      rowCount={window.rowCount}
-      cellHeightPx={cellHeightPx}
-    />
+    <>
+      <BlockOverlay
+        blocks={items}
+        baseRowId={window.baseRowId}
+        rowCount={window.rowCount}
+        cellHeightPx={cellHeightPx}
+      />
+      <EvictionBanner
+        pinBlockedEvictions={window.pinBlockedEvictions}
+        pinnedRowCount={window.pinnedRowCount}
+        freeableBytes={freeableBytes}
+      />
+    </>
   );
 }
 

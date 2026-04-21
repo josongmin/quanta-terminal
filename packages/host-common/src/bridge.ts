@@ -136,6 +136,23 @@ export interface ShellInstallStatus {
 }
 
 /**
+ * Inverse of [`HostBridge.shellInstallAuto`]: strip the auto-install snippet
+ * that previous calls to `shellInstallAuto` appended to the user's rc file.
+ * Distinct from {@link HostBridge.uninstallShellIntegration} — that call
+ * removes the *wizard's* inline guarded block; this one removes the
+ * `# quanta shell integration (auto-installed)` + `source` line left by
+ * the opt-out auto-install path. Idempotent: a second call when the
+ * snippet is already gone returns `kind: 'not_installed'` and does NOT
+ * mutate.
+ */
+export type ShellInstallUninstallOutcome =
+  | { readonly kind: 'removed'; readonly rcPath: string }
+  | { readonly kind: 'not_installed' }
+  | { readonly kind: 'file_missing' }
+  | { readonly kind: 'skipped_unsupported_shell' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+/**
  * Inverse of {@link InstallShellIntegrationOptions}. Same two-phase
  * semantics — `confirm: false` returns the region that would be removed
  * without mutating, `confirm: true` actually strips the guarded block.
@@ -266,6 +283,16 @@ export interface ShellIntegrationBridge {
    * hand-installed the snippet since the last attempt.
    */
   shellInstallStatus?(shell: string): Promise<ShellInstallStatus>;
+  /**
+   * Remove the auto-install snippet `shellInstallAuto` previously appended.
+   * Idempotent and atomic (tempfile + rename on the Rust side). Distinct
+   * from {@link uninstallShellIntegration} which targets the wizard's
+   * guarded block.
+   *
+   * OPTIONAL: hosts that cannot write to disk (mock bridge, VS Code
+   * webview) may omit. Callers null-check before invoking.
+   */
+  shellInstallUninstall?(shell: string): Promise<ShellInstallUninstallOutcome>;
 }
 
 /** File system + git metadata access. */
