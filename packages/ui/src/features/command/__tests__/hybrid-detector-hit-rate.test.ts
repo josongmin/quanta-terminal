@@ -236,3 +236,106 @@ describe('hybrid-detector — OSC 133 hit-rate corpus (P1-A ship gate 5)', () =>
     ]);
   });
 });
+
+/**
+ * Plan 0005 P1-A / W2 — heuristic-regex corpus (ship gate 3: ≥ 90 %).
+ *
+ * When shell integration is NOT installed, the detector falls back to the
+ * heuristic regex tier (confidence 0.6). This corpus pins the accuracy of
+ * that fallback across realistic prompt variations: plain bash `$ `, zsh
+ * `% `, root `# `, themed prompts with git-branch + cwd, and multi-space
+ * padding. Each cycle emits `prompt_start` from the heuristic source; hit
+ * rate must be ≥ 90 % per the P1 done-definition.
+ */
+describe('hybrid-detector — heuristic corpus (P1-A ship gate 3)', () => {
+  interface HeuristicCycle {
+    readonly label: string;
+    readonly prompt: string;
+    readonly command: string;
+    readonly output: string;
+  }
+
+  function buildHeuristicCorpus(): readonly HeuristicCycle[] {
+    const cycles: HeuristicCycle[] = [];
+    // 10 distinct prompt shapes × 5 command variations = 50 cycles.
+    const prompts = [
+      '$ ',
+      '% ',
+      '# ',
+      '~ $ ',
+      '~/src $ ',
+      '~/src (main) $ ',
+      'user@host:~$ ',
+      '[user@host ~]$ ',
+      '(venv) ~/project $ ',
+      '➜  ~/project git:(main) ',
+    ];
+    const commands = ['ls', 'pwd', 'echo hi', 'cd /tmp', 'date'];
+    const outputs = ['file1\r\nfile2\r\n', '/tmp\r\n', 'hi\r\n', '', 'Tue Apr\r\n'];
+    for (let i = 0; i < 50; i += 1) {
+      cycles.push({
+        label: `${prompts[i % prompts.length]}${commands[i % commands.length]}`!,
+        prompt: prompts[i % prompts.length]!,
+        command: commands[i % commands.length]!,
+        output: outputs[i % outputs.length]!,
+      });
+    }
+    return cycles;
+  }
+
+  it('detects ≥ 90 % of no-OSC-133 prompts via the heuristic regex tier', () => {
+    const corpus = buildHeuristicCorpus();
+    expect(corpus).toHaveLength(50);
+
+    let hits = 0;
+    const misses: Array<{ index: number; label: string }> = [];
+
+    corpus.forEach((cycle, idx) => {
+      const detector = createHybridBoundaryDetector({
+        shellIntegration: 'missing',
+        suppressionWindowMs: 10,
+        now: () => 1,
+      });
+      // Seed a prior line-end so the regex matches at column 0 after LF.
+      detector.feed(ascii('\n'));
+      const out = detector.feed(ascii(cycle.prompt));
+      const matched = out.some(
+        (e) => e.source === 'heuristic_regex' && e.kind === 'prompt_start',
+      );
+      if (matched) hits += 1;
+      else misses.push({ index: idx, label: cycle.label });
+    });
+
+    if (hits / corpus.length < 0.9) {
+      // eslint-disable-next-line no-console
+      console.log('heuristic corpus misses:', JSON.stringify(misses, null, 2));
+    }
+    expect(hits / corpus.length).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it('preserves confidence=0.6 for heuristic hits on `missing` integration', () => {
+    const detector = createHybridBoundaryDetector({
+      shellIntegration: 'missing',
+      suppressionWindowMs: 10,
+      now: () => 1,
+    });
+    detector.feed(ascii('\n'));
+    const out = detector.feed(ascii('$ '));
+    const match = out.find((e) => e.source === 'heuristic_regex');
+    expect(match?.confidence).toBeCloseTo(0.6, 5);
+  });
+
+  it('boosts confidence to 0.8 when shell integration is detected', () => {
+    // Integration-detected sessions still fall through to regex when OSC 133
+    // is absent mid-stream; the boosted confidence survives.
+    const detector = createHybridBoundaryDetector({
+      shellIntegration: 'detected',
+      suppressionWindowMs: 10,
+      now: () => 1,
+    });
+    detector.feed(ascii('\n'));
+    const out = detector.feed(ascii('$ '));
+    const match = out.find((e) => e.source === 'heuristic_regex');
+    expect(match?.confidence).toBeCloseTo(0.8, 5);
+  });
+});
