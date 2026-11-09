@@ -2,22 +2,24 @@
 
 # Quanta Terminal
 
+<p align="center"><a href="#engineering-highlights">Engineering</a> · <a href="#architecture">Architecture</a> · <a href="#development">Get started</a> · <a href="#contracts-worth-reading">Reference</a></p>
+
 A terminal-first architecture with a Rust core and TypeScript interface. It preserves PTY behavior while supporting standalone and IDE-embedded hosts. AI integration is optional rather than the center of the terminal execution model.
 
 [Product spec](docs/product-spec.md) · [Architecture](docs/technical-architecture.md) · [Testing](TESTING.md) · [Release guide](docs/RELEASE.md)
 
-
 ## Engineering highlights
 
-| Mechanism | Engineering purpose |
-| :--- | :--- |
-| **PTY and terminal state ownership** | Rust crates own PTY execution, output processing, VT state, session lifecycle, and terminal contracts. |
-| **Host-independent integration** | Desktop and editor hosts adapt a shared engine instead of making the UI the execution authority. |
-| **Event and replay contracts** | Dedicated event, protocol, lifecycle, and replay components make session reconstruction an explicit architecture concern. |
-| **Mechanical boundary checks** | The workspace includes checks for FSD layering, event topics, rendering/input paths, protocol compatibility, and performance budgets. |
+| Mechanism | Engineering purpose | Source |
+| :--- | :--- | :--- |
+| **PTY and terminal state ownership** | Rust crates own PTY execution, output processing, VT state, session lifecycle, and terminal contracts. | [PTY crate](crates/quanta-pty/) |
+| **Host-independent integration** | Desktop and editor hosts adapt a shared engine instead of making the UI the execution authority. | [Host contracts](packages/host-common/) |
+| **Event and replay contracts** | Dedicated event, protocol, lifecycle, and replay components make session reconstruction an explicit architecture concern. | [Event crate](crates/quanta-events/) |
+| **Mechanical boundary checks** | The workspace includes checks for FSD layering, event topics, rendering/input paths, protocol compatibility, and performance budgets. | [Render-path check](tools/check-one-render-path/) |
 
+## Architecture
 
-## Architecture at a glance
+<a id="architecture-at-a-glance"></a>
 
 ```mermaid
 flowchart LR
@@ -27,8 +29,6 @@ flowchart LR
     C --> H["Tauri / editor hosts"]
     H --> U["Shared terminal UI"]
 ```
-
-## Architecture
 
 | Area | Responsibility |
 | --- | --- |
@@ -83,3 +83,5 @@ Version tags select the release workflow. Signing, notarization, updater manifes
 - [Event replay and reduction](docs/adr/0011-event-replay-and-reducer-semantics.md)
 - [Repository architecture](docs/adr/0014-repository-structure.md)
 - [Benchmark protocol](docs/benchmark-protocol.md) and [comparison matrix](docs/terminal-benchmark-matrix.md)
+
+<p align="center"><sub><a href="https://github.com/josongmin">Project map</a> · <a href="#engineering-highlights">Back to overview</a></sub></p>
