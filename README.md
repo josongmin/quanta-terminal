@@ -1,66 +1,61 @@
 # Quanta Terminal
 
-Terminal-first, IDE-embedded, PTY-faithful terminal architecture for a Rust core and TypeScript frontend. AI is optional and intentionally non-central.
+A terminal-first architecture with a Rust core and TypeScript interface. It preserves PTY behavior while supporting standalone and IDE-embedded hosts. AI integration is optional rather than the center of the terminal execution model.
 
-## Top-Level Documents
+[Product spec](docs/product-spec.md) · [Architecture](docs/technical-architecture.md) · [Testing](TESTING.md) · [Release guide](docs/RELEASE.md)
 
-- [Product Spec](./docs/product-spec.md)
-- [Technical Architecture](./docs/technical-architecture.md)
-- [Benchmark Protocol](./docs/benchmark-protocol.md)
-- [Terminal Benchmark Matrix](./docs/terminal-benchmark-matrix.md)
-- [Warp Benchmark Notes](./docs/warp-benchmark.md)
+## Architecture
 
-## Architecture Decision Records
+| Area | Responsibility |
+| --- | --- |
+| Rust core | PTY, output processing, blocks, sessions, lifecycle, events, and protocol |
+| Security | Sensitive-data detection, redaction, and execution-boundary policy |
+| TypeScript UI | Terminal/workspace interface and deterministic event reduction |
+| Host adapters | Shared host behavior and Tauri desktop composition |
+| Operational tooling | Replay, protocol fixtures, structural checks, and performance budgets |
 
-ADRs pin down the parts of the system where implementers would otherwise drift into incompatible interpretations.
+Source ownership is split across [crates](crates), [packages/ui](packages/ui), [packages/host-common](packages/host-common), and [packages/host-tauri](packages/host-tauri). The frontend follows feature-sliced boundaries; the backend follows ports/adapters boundaries.
 
-- [ADR 0001 — Host Modes and Deployment Targets](./docs/adr/0001-host-modes.md)
-- [ADR 0002 — Execution Boundary Contract](./docs/adr/0002-execution-boundary-contract.md)
-- [ADR 0003 — Session Metadata Truth Model](./docs/adr/0003-session-metadata-truth-model.md)
-- [ADR 0004 — Sidecar Lifecycle Contract](./docs/adr/0004-sidecar-lifecycle-contract.md)
-- [ADR 0005 — Storage and Retention](./docs/adr/0005-storage-and-retention.md)
-- [ADR 0006 — Secret and Sensitive Data Policy](./docs/adr/0006-secret-and-sensitive-data-policy.md)
-- [ADR 0007 — Diagnostic Parser Rollout Plan](./docs/adr/0007-parser-rollout-plan.md)
-- [ADR 0008 — Raw / TUI Mode Semantics](./docs/adr/0008-raw-tui-mode-semantics.md)
-- [ADR 0009 — Input Routing Operational Policy](./docs/adr/0009-input-routing-policy.md)
-- [ADR 0010 — Degraded Mode UI Contract](./docs/adr/0010-degraded-mode-ui-contract.md)
-- [ADR 0011 — Event Replay, Reducer Determinism, and Resume](./docs/adr/0011-event-replay-and-reducer-semantics.md)
-- [ADR 0012 — Risk Classification Composition Rules](./docs/adr/0012-risk-classification-composition.md)
-- [ADR 0013 — History Search and Relevance](./docs/adr/0013-history-search-and-relevance.md)
-- [ADR 0014 — Repository Structure (Backend Hexagonal + Frontend FSD)](./docs/adr/0014-repository-structure.md)
+## Development
 
-## Reading Order
-
-If you are onboarding as an implementation agent:
-
-1. `product-spec.md` — what the product is and why.
-2. `technical-architecture.md` — how it is built.
-3. ADRs in order — the contracts that keep two implementers from building two different products.
-4. [`TESTING.md`](./TESTING.md) — the three test layers (Rust unit / Rust integration over the real socket / vitest + schema parity) and how to run them locally. Start here once you have an environment set up.
-5. `benchmark-protocol.md` — how we decide whether it works.
-
-## Testing
-
-See [`TESTING.md`](./TESTING.md). Quick reference:
-
-- `cargo test --workspace` — Rust unit + integration.
-- `pnpm -r test` — TypeScript + the Rust-↔-TS schema parity test (`packages/host-common/src/__tests__/schema-parity.test.ts`).
-- `cargo run -p check-adr-compliance` — mechanical one-line-per-ADR audit.
-- `cargo run -q -p check-hex-imports -- --root .` — hexagonal import rules.
-- `node tools/check-fsd-layers.mjs` — FSD layer rules.
-
-## Packaging a production Tauri bundle
-
-End users of the shipped desktop app do not need `quanta-core` on `PATH`; the binary is bundled via Tauri 2's `externalBin` (see `tauri.conf.json`).
+Use Node.js 20.10+, pnpm 9.12.0, the repository Rust toolchain, and platform dependencies for Tauri.
 
 ```sh
-pnpm package-sidecar && pnpm --filter @quanta/host-tauri tauri build
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-Details and the runtime resolver priority (env var → bundled resource → PATH) live in [`TESTING.md`](./TESTING.md#building-a-production-tauri-bundle-with-the-quanta-core-sidecar).
+The root development command targets the Tauri host package. Core/service and real-socket test setup are documented in [TESTING.md](TESTING.md).
 
-## Releasing
+```sh
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm check:layering
+```
 
-Tagging `vX.Y.Z` triggers [`.github/workflows/release.yml`](./.github/workflows/release.yml), which builds the multi-platform bundle, signs/notarizes per-platform, and publishes a GitHub release plus a signed update manifest (consumed by the Tauri updater plugin wired in `packages/host-tauri/src-tauri/tauri.conf.json`). A nightly build ([`.github/workflows/nightly.yml`](./.github/workflows/nightly.yml)) runs the same matrix unsigned against `main` so platform regressions surface before a tag.
+Rust integration and PTY/socket tests are separate from TypeScript workspace tests. Performance budgets require the configured environment; a local timing signal is not a cross-platform latency guarantee.
 
-The full secrets checklist, local dry-run procedure, and troubleshooting live in [`docs/RELEASE.md`](./docs/RELEASE.md). Bundle icons are rasterized from [`assets/icon.svg`](./assets/icon.svg) by [`scripts/generate-icons.sh`](./scripts/generate-icons.sh) (`just generate-icons` / `pnpm generate-icons`); the current mark is a placeholder.
+## Package the desktop application
+
+```sh
+pnpm package-sidecar
+pnpm --filter @quanta/host-tauri tauri build
+```
+
+The packaged application bundles `quanta-core` through Tauri's `externalBin`; end users do not need a separate binary on `PATH`. Environment override, bundled-resource, and `PATH` resolution behavior is described by the testing/release documentation.
+
+Version tags select the release workflow. Signing, notarization, updater manifests, and platform credentials require their own configuration. Nightly bundles and source builds are not equivalent to a signed release.
+
+## Contracts worth reading
+
+- [Host modes](docs/adr/0001-host-modes.md)
+- [Execution boundary](docs/adr/0002-execution-boundary-contract.md)
+- [Session metadata](docs/adr/0003-session-metadata-truth-model.md)
+- [Sidecar lifecycle](docs/adr/0004-sidecar-lifecycle-contract.md)
+- [Storage and retention](docs/adr/0005-storage-and-retention.md)
+- [Sensitive data](docs/adr/0006-secret-and-sensitive-data-policy.md)
+- [Raw/TUI semantics](docs/adr/0008-raw-tui-mode-semantics.md)
+- [Event replay and reduction](docs/adr/0011-event-replay-and-reducer-semantics.md)
+- [Repository architecture](docs/adr/0014-repository-structure.md)
+- [Benchmark protocol](docs/benchmark-protocol.md) and [comparison matrix](docs/terminal-benchmark-matrix.md)
