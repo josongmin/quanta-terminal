@@ -1,8 +1,32 @@
+<p align="center"><img src="readme-banner.svg" alt="Quanta Terminal — PTY-owned execution with shared desktop and editor surfaces." width="100%"></p>
+
 # Quanta Terminal
 
 A terminal-first architecture with a Rust core and TypeScript interface. It preserves PTY behavior while supporting standalone and IDE-embedded hosts. AI integration is optional rather than the center of the terminal execution model.
 
 [Product spec](docs/product-spec.md) · [Architecture](docs/technical-architecture.md) · [Testing](TESTING.md) · [Release guide](docs/RELEASE.md)
+
+
+## Engineering highlights
+
+| Mechanism | Engineering purpose |
+| :--- | :--- |
+| **PTY and terminal state ownership** | Rust crates own PTY execution, output processing, VT state, session lifecycle, and terminal contracts. |
+| **Host-independent integration** | Desktop and editor hosts adapt a shared engine instead of making the UI the execution authority. |
+| **Event and replay contracts** | Dedicated event, protocol, lifecycle, and replay components make session reconstruction an explicit architecture concern. |
+| **Mechanical boundary checks** | The workspace includes checks for FSD layering, event topics, rendering/input paths, protocol compatibility, and performance budgets. |
+
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    P["PTY and subprocess"] --> V["Output processing and VT state"]
+    V --> S["Session, lifecycle, events"]
+    S --> C["Protocol and sidecar boundary"]
+    C --> H["Tauri / editor hosts"]
+    H --> U["Shared terminal UI"]
+```
 
 ## Architecture
 
